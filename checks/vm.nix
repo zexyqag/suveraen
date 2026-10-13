@@ -1,8 +1,9 @@
 # Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and
-# pointed at the repository, secrets encrypted at rest and only SSH and web ports open. The
-# watcher's ntfy only takes known publishers and keeps its account API, stats and attachments
-# closed; the server's alerts reach a phone account; Gatus raises an alert when the server's
-# heartbeat stops; and the server falls back to a second channel when the watcher is gone.
+# pointed at the repository, secrets encrypted at rest and only SSH and web ports open. Hosts and
+# pods resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
+# takes known publishers and keeps its account API, stats and attachments closed; the server's
+# alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
+# server falls back to a second channel when the watcher is gone.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -128,6 +129,9 @@ pkgs.testers.runNixOSTest {
         # The VM has no internet; k3s's own images come from the release tarball.
         services.k3s.images = [ config.services.k3s.package.airgap-images ];
 
+        # A name only the node's own resolver knows, to show pods resolve through it.
+        services.unbound.settings.server.local-data = [ ''"probe.test. A 192.0.2.53"'' ];
+
         # Stands in for the second alert channel, which would live on another machine.
         services.ntfy-sh = {
           enable = true;
@@ -221,6 +225,25 @@ pkgs.testers.runNixOSTest {
         port = server.succeed("kubectl -n kube-system get service probe -o jsonpath='{.spec.ports[0].nodePort}'").strip()
         server.wait_until_succeeds(f"nc -z -w 5 127.0.0.1 {port}")
         watcher.fail(f"nc -z -w 5 server {port}")
+
+    with subtest("Hosts and pods resolve names through the node's own resolver"):
+        for node in [server, watcher]:
+            node.succeed("grep -qx 'nameserver 127.0.0.1' /etc/resolv.conf")
+            node.fail("grep '^nameserver' /etc/resolv.conf | grep -vx -e 'nameserver 127.0.0.1' -e 'nameserver ::1'")
+        server.succeed("getent hosts probe.test | grep -F 192.0.2.53")
+        busybox = server.succeed("k3s crictl images -o json | jq -r '.images[].repoTags[]' | grep busybox | head -n1").strip()
+        server.succeed(
+            f"kubectl run dns-probe --image={busybox} --image-pull-policy=Never --restart=Never --command -- nslookup probe.test."
+        )
+        server.wait_until_succeeds(
+            "kubectl get pod dns-probe -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
+        )
+        server.succeed("kubectl logs dns-probe | grep -F 192.0.2.53")
+
+    with subtest("Clocks follow NTS servers"):
+        for node in [server, watcher]:
+            node.succeed("systemctl is-active chronyd")
+            node.succeed("grep -q ' nts' $(systemctl show chronyd -p ExecStart --value | grep -o '/nix/store/[^ ;]*chrony.conf')")
 
     with subtest("ntfy only takes messages from known publishers"):
         server.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d spam http://alerts.test/ops) = 403")

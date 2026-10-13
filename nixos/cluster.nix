@@ -10,6 +10,18 @@ let
   fluxComponents = pkgs.runCommand "flux-components.yaml" { } ''
     ${lib.getExe pkgs.fluxcd} install --export > $out
   '';
+
+  podCIDRs = [
+    "10.42.0.0/16"
+    "fd42::/56"
+  ];
+  serviceCIDRs = [
+    "10.43.0.0/16"
+    "fd43::/112"
+  ];
+
+  # Pods reach the node's own resolver at this link-local address, the same on every node.
+  resolver = "169.254.53.53";
 in
 {
   options.suveraen.cluster = {
@@ -65,10 +77,12 @@ in
         "--secrets-encryption"
         "--flannel-backend=wireguard-native"
         "--flannel-ipv6-masq"
-        "--cluster-cidr=10.42.0.0/16,fd42::/56"
-        "--service-cidr=10.43.0.0/16,fd43::/112"
+        "--cluster-cidr=${lib.concatStringsSep "," podCIDRs}"
+        "--service-cidr=${lib.concatStringsSep "," serviceCIDRs}"
         # NodePorts are forwarded before the host firewall sees them; keep them off public addresses.
         "--kube-proxy-arg=nodeport-addresses=127.0.0.0/8,::1/128"
+        # Without it k3s gives pods 8.8.8.8 when the host's resolver is on loopback.
+        "--resolv-conf=${pkgs.writeText "resolv.conf" "nameserver ${resolver}\n"}"
       ];
       manifests = {
         flux-components.source = fluxComponents;
@@ -129,6 +143,20 @@ in
           --from-file=age.agekey=${lib.escapeShellArg cfg.sopsAgeKeyFile} \
           --dry-run=client -o yaml | kubectl apply -f -
       '';
+    };
+
+    systemd.network.netdevs."20-resolver".netdevConfig = {
+      Kind = "dummy";
+      Name = "resolver";
+    };
+    systemd.network.networks."20-resolver" = {
+      matchConfig.Name = "resolver";
+      address = [ "${resolver}/32" ];
+      linkConfig.RequiredForOnline = "no";
+    };
+    services.unbound.settings.server = {
+      interface = [ resolver ];
+      access-control = map (cidr: "${cidr} allow") podCIDRs;
     };
 
     # Rook mounts Ceph block devices and file systems from the host kernel.
