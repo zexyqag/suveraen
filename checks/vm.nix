@@ -1,25 +1,15 @@
-# Boots the modules in VMs: sign-on through nginx with certificates from a test ACME server,
-# an alert reaching ntfy, and a backup to another machine restored again.
+# Boots the node layer in VMs: the k3s server comes up dual-stack with Flux installed and
+# pointed at the repository, secrets are encrypted at rest, only SSH and web ports are open,
+# and a failing check reaches ntfy.
 { pkgs, module }:
 let
-  domain = "example.test";
-  idm = "idm.${domain}";
-
-  keys = pkgs.runCommand "test-keys" { nativeBuildInputs = [ pkgs.openssh ]; } ''
-    mkdir $out
-    ssh-keygen -q -t ed25519 -N "" -C backup-client -f $out/client
-    ssh-keygen -q -t ed25519 -N "" -C backup-host -f $out/host
-  '';
-  readPub = name: builtins.readFile "${keys}/${name}.pub";
+  repository = "https://example.invalid/suveraen.git";
+  path = "./clusters/test";
 in
 pkgs.testers.runNixOSTest {
   name = "suveraen";
 
   nodes = {
-    acme = {
-      imports = [ "${pkgs.path}/nixos/tests/common/acme/server" ];
-    };
-
     ntfy = {
       services.ntfy-sh = {
         enable = true;
@@ -29,123 +19,104 @@ pkgs.testers.runNixOSTest {
         };
       };
       networking.firewall.allowedTCPPorts = [ 80 ];
-    };
-
-    backup = {
-      services.borgbackup.repos.server = {
-        authorizedKeys = [ (readPub "client") ];
-        path = "/var/lib/borgbackup/server";
-      };
-      environment.etc."ssh/test_host_key" = {
-        source = "${keys}/host";
-        mode = "0600";
-      };
-      services.openssh = {
-        enable = true;
-        hostKeys = [
-          {
-            path = "/etc/ssh/test_host_key";
-            type = "ed25519";
-          }
-        ];
-      };
+      environment.systemPackages = [ pkgs.netcat ];
     };
 
     server =
-      { lib, nodes, ... }:
+      { config, lib, ... }:
       {
         imports = [ module ];
 
         virtualisation = {
           memorySize = 2048;
-          emptyDiskImages = [ 1024 ];
-          # The test creates this pool itself; on a real host disko does.
-          fileSystems."/srv" = {
-            device = "tank/srv";
-            fsType = "zfs";
-            options = [ "noauto" ];
-          };
+          diskSize = 4096;
+          cores = 2;
         };
 
         # No LUKS or boot-time SSH in the VM: it boots from its own plain disk.
         boot.initrd.luks.devices = lib.mkForce { };
         boot.initrd.network.enable = lib.mkForce false;
 
-        networking.hostId = "0400bdef";
-        networking.hosts."127.0.0.1" = [ idm ];
-        security.acme.defaults.server = "https://${nodes.acme.test-support.acme.caDomain}/dir";
-        security.pki.certificateFiles = [ nodes.acme.test-support.acme.caCert ];
-
-        environment.etc."backup-key" = {
-          source = "${keys}/client";
-          mode = "0600";
+        # The test network has no IPv6 router; give the node an address and a route.
+        networking.interfaces.eth1.ipv6 = {
+          addresses = [
+            {
+              address = "fd00::2";
+              prefixLength = 64;
+            }
+          ];
+          routes = [
+            {
+              address = "::";
+              prefixLength = 0;
+              via = "fd00::1";
+            }
+          ];
         };
 
+        # The VM has no internet; k3s's own images come from the release tarball.
+        services.k3s.images = [ config.services.k3s.package.airgap-images ];
+
+        networking.hostId = "0400bdef";
+        system.stateVersion = "26.05";
+
         suveraen = {
-          inherit domain;
-          adminKeys = [ (readPub "client") ];
+          adminKeys = [
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN9QsUU2i+9+MwdvtxOsPVD6L24UHYJXVJRI2oe+9oHP example"
+          ];
+          storage.systemDisks = [
+            "/dev/disk/by-id/test-0"
+            "/dev/disk/by-id/test-1"
+          ];
           # "en*" would also match eth1, the test network, through its alternative names.
           network.interface = "eth0";
-          storage = {
-            systemDisks = [
-              "/dev/disk/by-id/test-0"
-              "/dev/disk/by-id/test-1"
+          cluster = {
+            inherit repository path;
+            nodeIP = [
+              config.networking.primaryIPAddress
+              "fd00::2"
             ];
-            bulkDisks = [
-              "/dev/disk/by-id/test-2"
-              "/dev/disk/by-id/test-3"
-            ];
-          };
-          identity.enable = true;
-          backup = {
-            enable = true;
-            repo = "borg@backup:.";
-            knownHosts = "backup ${readPub "host"}";
-            passphraseFile = toString (pkgs.writeText "passphrase" "test passphrase");
-            sshKeyFile = "/etc/backup-key";
-            paths = [ "/srv" ];
+            sopsAgeKeyFile = toString (pkgs.writeText "age-key" "AGE-SECRET-KEY-TEST");
           };
           alerts.ntfyUrlFile = toString (pkgs.writeText "ntfy-url" "http://ntfy/alerts");
         };
-
-        system.stateVersion = "26.05";
       };
   };
 
   testScript = ''
     start_all()
 
-    acme.wait_for_unit("pebble.service")
     ntfy.wait_for_unit("ntfy-sh.service")
-    backup.wait_for_unit("sshd.service")
-    server.wait_for_unit("multi-user.target")
+    server.wait_for_unit("k3s.service")
 
-    with subtest("Kanidm answers through nginx with a certificate from the ACME server"):
-        server.wait_for_unit("kanidm.service")
-        server.wait_until_succeeds("curl -fsS https://${idm}/status | grep true", timeout=300)
-        server.succeed("curl -fsS https://${idm}/ui/login")
+    with subtest("The node is Ready and dual-stack"):
+        server.wait_until_succeeds(
+            "kubectl get node server -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' | grep True",
+            timeout=600,
+        )
+        server.succeed("kubectl get node server -o jsonpath='{.spec.podCIDRs}' | grep fd42")
 
-    with subtest("Unknown names get no answer"):
-        server.fail("curl -fsS --resolve other.${domain}:443:127.0.0.1 https://other.${domain}/")
+    with subtest("Secrets are encrypted at rest"):
+        server.succeed("k3s secrets-encrypt status | grep 'Encryption Status: Enabled'")
+
+    with subtest("Flux is installed and follows the repository"):
+        server.wait_until_succeeds("kubectl -n flux-system get deployment source-controller", timeout=300)
+        server.wait_until_succeeds(
+            "kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.url}' | grep -F '${repository}'"
+        )
+        server.succeed(
+            "kubectl -n flux-system get kustomization cluster -o jsonpath='{.spec.path}' | grep -F '${path}'"
+        )
+        server.wait_until_succeeds("kubectl -n flux-system get secret sops-age", timeout=300)
+
+    with subtest("Only SSH and web ports are open from outside"):
+        ntfy.succeed("nc -z -w 5 server 22")
+        ntfy.fail("nc -z -w 5 server 6443")
+        ntfy.fail("nc -z -w 5 server 10250")
 
     with subtest("A failing check sends an alert"):
-        # The VM has no ZFS pools yet, so the health check fails.
+        # The VM has no ZFS pools, so the health check fails.
         server.fail("systemctl start zfs-health.service")
         ntfy.wait_until_succeeds("curl -fsS 'http://localhost/alerts/json?poll=1' | grep zfs-health")
-
-    with subtest("Backup from a snapshot and restore"):
-        server.succeed(
-            "zpool create -O mountpoint=none tank /dev/vdb",
-            "zfs create -o mountpoint=legacy tank/srv",
-            "mount /srv",
-            "echo precious > /srv/file",
-        )
-        server.succeed("systemctl start borgbackup-job-suveraen.service")
-        server.fail("zfs list -t snapshot tank/srv@backup")
-        server.succeed(
-            "rm /srv/file",
-            "cd / && borg-job-suveraen extract ::$(borg-job-suveraen list --short --last 1) tmp/snapshot/srv/file",
-            "grep precious /tmp/snapshot/srv/file",
-        )
   '';
 }

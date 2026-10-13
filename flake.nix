@@ -1,5 +1,5 @@
 {
-  description = "Self-hosted FLOSS services for a small community, as NixOS modules";
+  description = "Self-hosted FLOSS services for a small community, on Kubernetes over NixOS";
 
   inputs = {
     nixpkgs.url = "https://channels.nixos.org/nixos-26.05/nixexprs.tar.xz";
@@ -19,7 +19,7 @@
       nixosModules.default = {
         imports = [
           disko.nixosModules.disko
-          ./modules
+          ./nixos
         ];
       };
 

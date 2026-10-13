@@ -5,5 +5,5 @@
 !/README.md
 !/flake.nix
 !/flake.lock
-!/modules/
+!/nixos/
 !/checks/

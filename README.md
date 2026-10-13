@@ -1,22 +1,22 @@
 # suveraen
 
-Free and open-source services for a small community, self-hosted on NixOS: files and documents, photos, chat, passwords and more, federated where that applies. Everything is public, including the configuration of the servers it runs on, so all of it can be scrutinized.
+Free and open-source services for a small community, self-hosted: files and documents, photos, chat, passwords and more, federated where that applies. Everything is public, including the configuration of the servers it runs on, so all of it can be scrutinized.
 
-**Status:** the foundation is in place (disks, boot, accounts, backups, alerts, updates). Services come next.
+It runs on Kubernetes (k3s) over NixOS, built to start on one server and grow to several with failover.
+
+**Status:** the server layer is in place. The cluster's own services (storage, databases, certificates, accounts) come next, then the apps.
 
 ## Layout
 
-- `modules/`: NixOS modules, configured under `suveraen.*`.
-  - `storage.nix`: two mirrored, encrypted SSDs (ZFS) for the system, plus an optional mirrored, encrypted pair of bulk disks for files and photos. Hourly local snapshots, scrubs and health checks.
+- `nixos/`: the server layer, NixOS modules configured under `suveraen.*`.
+  - `storage.nix`: two mirrored, encrypted SSDs (ZFS) for the system and local volumes. Other disks are left for the cluster's storage. Hourly snapshots, scrubs, health checks.
   - `unlock.nix`: an SSH server during boot that takes the disk passphrase.
-  - `network.nix`: IPv4 from DHCP, static IPv6.
-  - `web.nix`: nginx with Let's Encrypt certificates.
-  - `identity.nix`: [Kanidm](https://kanidm.com), one account for every service.
-  - `backup.nix`: nightly encrypted [Borg](https://www.borgbackup.org) backups to another machine, taken from snapshots.
+  - `network.nix`: static or DHCP IPv4, static IPv6.
+  - `cluster.nix`: a k3s server with embedded etcd, secrets encrypted at rest, WireGuard between nodes, dual-stack networking. It installs [Flux](https://fluxcd.io), which keeps the cluster in sync with this repository.
   - `alerts.nix`: failed jobs and disk or RAID problems are posted to an [ntfy](https://ntfy.sh) topic.
-  - `upgrade.nix`: hosts follow this repository nightly and never reboot by themselves.
-- `checks/example.nix`: builds everything with stand-in values; CI runs it on every push.
-- `.github/workflows/update.yml`: updates `flake.lock` daily once the check passes.
+  - `upgrade.nix`: servers follow this repository nightly and never reboot by themselves.
+- `checks/`: `example.nix` builds a server with stand-in values; `vm.nix` boots one in a VM and tests it. CI runs both on every push.
+- `.github/workflows/update.yml`: updates `flake.lock` daily once the checks pass.
 
 ## Use
 
@@ -37,7 +37,7 @@ Add the flake as an input and import `nixosModules.default`:
 }
 ```
 
-`checks/example.nix` shows every setting a host needs.
+`checks/example.nix` shows every setting a server needs.
 
 ## License
 

@@ -2,14 +2,13 @@
 let
   cfg = config.suveraen.storage;
   zfs = config.boot.zfs.package;
-  hasBulk = cfg.bulkDisks != [ ];
 
   # disko reads the passphrase from here while formatting; nixos-anywhere puts it there.
-  luks = name: allowDiscards: pool: {
+  luks = name: pool: {
     type = "luks";
     inherit name;
     passwordFile = "/tmp/disk.key";
-    settings = lib.optionalAttrs allowDiscards { allowDiscards = true; };
+    settings.allowDiscards = true;
     content = {
       type = "zfs";
       inherit pool;
@@ -36,20 +35,8 @@ let
         };
         crypt = {
           size = "100%";
-          content = luks "crypt-system${toString i}" true "rpool";
+          content = luks "crypt-system${toString i}" "rpool";
         };
-      };
-    };
-  };
-
-  bulkDisk = i: device: {
-    type = "disk";
-    inherit device;
-    content = {
-      type = "gpt";
-      partitions.crypt = {
-        size = "100%";
-        content = luks "crypt-bulk${toString i}" false "tank";
       };
     };
   };
@@ -100,13 +87,17 @@ in
         "/dev/disk/by-id/nvme-SAMSUNG_A"
         "/dev/disk/by-id/nvme-SAMSUNG_B"
       ];
-      description = "The two disks mirrored for boot, the system and databases (pool `rpool`, mounted at /, /nix and /var). They are wiped on install.";
+      description = ''
+        The two disks mirrored for boot, the system and databases (pool `rpool`, mounted at /, /nix and /var).
+        They are wiped on install. Other disks are left alone for the cluster's storage (Ceph).
+      '';
     };
 
-    bulkDisks = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
-      default = [ ];
-      description = "Two disks mirrored for files and photos (pool `tank`, mounted at /srv), or none. They are wiped on install.";
+    arcMax = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 4 * 1024 * 1024 * 1024;
+      defaultText = lib.literalExpression "4 * 1024 * 1024 * 1024";
+      description = "Upper limit in bytes for ZFS's memory cache, leaving the rest to Ceph and the cluster's workloads.";
     };
   };
 
@@ -116,27 +107,14 @@ in
         assertion = lib.length cfg.systemDisks == 2;
         message = "suveraen.storage.systemDisks needs exactly two disks.";
       }
-      {
-        assertion = lib.elem (lib.length cfg.bulkDisks) [
-          0
-          2
-        ];
-        message = "suveraen.storage.bulkDisks needs two disks, or none.";
-      }
     ];
 
     disko.devices = {
-      disk =
-        lib.listToAttrs (
-          lib.zipListsWith lib.nameValuePair (diskNames "system" cfg.systemDisks) (
-            lib.imap0 systemDisk cfg.systemDisks
-          )
+      disk = lib.listToAttrs (
+        lib.zipListsWith lib.nameValuePair (diskNames "system" cfg.systemDisks) (
+          lib.imap0 systemDisk cfg.systemDisks
         )
-        // lib.listToAttrs (
-          lib.zipListsWith lib.nameValuePair (diskNames "bulk" cfg.bulkDisks) (
-            lib.imap0 bulkDisk cfg.bulkDisks
-          )
-        );
+      );
 
       # Metadata at the end, so firmware sees each half as a plain ESP.
       mdadm.boot = {
@@ -151,17 +129,10 @@ in
         };
       };
 
-      zpool = {
-        rpool = pool {
-          root = mounted "/" { };
-          nix = mounted "/nix" { };
-          var = mounted "/var" { };
-        };
-      }
-      // lib.optionalAttrs hasBulk {
-        tank = pool {
-          srv = mounted "/srv" { recordsize = "1M"; };
-        };
+      zpool.rpool = pool {
+        root = mounted "/" { };
+        nix = mounted "/nix" { };
+        var = mounted "/var" { };
       };
     };
 
@@ -175,6 +146,7 @@ in
     };
 
     boot.supportedFilesystems.zfs = true;
+    boot.kernelParams = [ "zfs.zfs_arc_max=${toString cfg.arcMax}" ];
     boot.zfs.forceImportRoot = false;
     # The pool sits on LUKS, and unlocking over SSH takes longer than the import's own wait.
     boot.initrd.systemd.services.zfs-import-rpool = {
@@ -196,17 +168,9 @@ in
         autosnap = true;
         autoprune = true;
       };
-      datasets = {
-        "rpool/var" = {
-          useTemplate = [ "local" ];
-          recursive = true;
-        };
-      }
-      // lib.optionalAttrs hasBulk {
-        "tank/srv" = {
-          useTemplate = [ "local" ];
-          recursive = true;
-        };
+      datasets."rpool/var" = {
+        useTemplate = [ "local" ];
+        recursive = true;
       };
     };
 

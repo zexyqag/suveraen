@@ -4,12 +4,6 @@ let
 in
 {
   options.suveraen = {
-    domain = lib.mkOption {
-      type = lib.types.str;
-      example = "example.org";
-      description = "Base domain. Services live on its subdomains.";
-    };
-
     adminKeys = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       description = "SSH public keys that may log in as root and unlock the disks at boot.";

@@ -4,9 +4,18 @@ let
 
   uplink = {
     matchConfig.Name = cfg.interface;
-    networkConfig.DHCP = "ipv4";
-    address = lib.optional (cfg.ipv6 != null) cfg.ipv6;
-    routes = lib.optional (cfg.ipv6Gateway != null) { Gateway = cfg.ipv6Gateway; };
+    networkConfig.DHCP = if cfg.ipv4 == null then "ipv4" else "no";
+    address = lib.filter (a: a != null) [
+      cfg.ipv4
+      cfg.ipv6
+    ];
+    routes =
+      lib.optional (cfg.ipv4Gateway != null) {
+        Gateway = cfg.ipv4Gateway;
+        # Hosts like Hetzner's put the gateway outside the address's own subnet.
+        GatewayOnLink = true;
+      }
+      ++ lib.optional (cfg.ipv6Gateway != null) { Gateway = cfg.ipv6Gateway; };
   };
 in
 {
@@ -14,7 +23,21 @@ in
     interface = lib.mkOption {
       type = lib.types.str;
       default = "en*";
-      description = "Name (glob) of the uplink interface. IPv4 comes from DHCP.";
+      description = "Name (glob) of the uplink interface.";
+    };
+
+    ipv4 = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "203.0.113.10/32";
+      description = "Static IPv4 address with prefix length; null takes one from DHCP.";
+    };
+
+    ipv4Gateway = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "203.0.113.1";
+      description = "IPv4 default gateway for a static address.";
     };
 
     ipv6 = lib.mkOption {
@@ -34,6 +57,10 @@ in
 
   config = {
     assertions = [
+      {
+        assertion = (cfg.ipv4 == null) == (cfg.ipv4Gateway == null);
+        message = "suveraen.network.ipv4 and ipv4Gateway go together.";
+      }
       {
         assertion = (cfg.ipv6 == null) == (cfg.ipv6Gateway == null);
         message = "suveraen.network.ipv6 and ipv6Gateway go together.";

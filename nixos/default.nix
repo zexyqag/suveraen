@@ -4,9 +4,7 @@
     ./storage.nix
     ./unlock.nix
     ./network.nix
-    ./web.nix
-    ./identity.nix
-    ./backup.nix
+    ./cluster.nix
     ./alerts.nix
     ./upgrade.nix
   ];
