@@ -205,6 +205,8 @@ pkgs.testers.runNixOSTest {
       staleDays = toString (nodes.server.suveraen.upgrade.staleAfterDays + 1);
     in
     ''
+      import json
+
       start_all()
 
       watcher.wait_for_unit("ntfy-sh.service")
@@ -272,6 +274,11 @@ pkgs.testers.runNixOSTest {
           assert "forbidden" in out, out
           # Flux's own pods are created, so they meet the standard too.
           server.wait_until_succeeds("test $(kubectl -n flux-system get pods --no-headers | wc -l) -ge 4", timeout=120)
+
+      with subtest("Pods get a process limit and the default seccomp filter"):
+          kubelet = json.loads(server.succeed("kubectl get --raw /api/v1/nodes/server/proxy/configz"))["kubeletconfig"]
+          assert kubelet["podPidsLimit"] == ${toString nodes.server.services.k3s.extraKubeletConfig.podPidsLimit}, kubelet
+          assert kubelet["seccompDefault"], kubelet
 
       with subtest("Flux and the server only deploy commits signed by a release signer"):
           server.succeed("kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.verify.mode}' | grep -x HEAD")

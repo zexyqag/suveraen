@@ -112,19 +112,28 @@ in
       nodeIP = lib.concatStringsSep "," cfg.nodeIP;
       # Ingress is managed through Flux like everything else.
       disable = [ "traefik" ];
-      # These must match on every server and can't change once the cluster exists.
       extraFlags = [
+        # These must match on every server and can't change once the cluster exists.
         "--secrets-encryption"
         "--flannel-backend=wireguard-native"
         "--flannel-ipv6-masq"
         "--cluster-cidr=${lib.concatStringsSep "," podCIDRs}"
         "--service-cidr=${lib.concatStringsSep "," serviceCIDRs}"
+
         # NodePorts are forwarded before the host firewall sees them; keep them off public addresses.
         "--kube-proxy-arg=nodeport-addresses=127.0.0.0/8,::1/128"
         "--kube-apiserver-arg=admission-control-config-file=${admissionConfig}"
         # Without it k3s gives pods 8.8.8.8 when the host's resolver is on loopback.
         "--resolv-conf=${pkgs.writeText "resolv.conf" "nameserver ${resolver}\n"}"
+        # Flux deploys everything; k3s's own chart installer would be one more way to cluster-wide rights.
+        "--disable-helm-controller"
       ];
+      extraKubeletConfig = {
+        # A fork bomb in one pod can't use up the node's process IDs.
+        podPidsLimit = 4096;
+        # Pods that don't name a seccomp profile get the runtime's default filter.
+        seccompDefault = true;
+      };
       manifests = {
         flux-components.source = fluxComponents;
         flux-source.content = {
