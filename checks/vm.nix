@@ -229,7 +229,8 @@ pkgs.testers.runNixOSTest {
           server.wait_until_succeeds(
               "kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.url}' | grep -F '${repository}'"
           )
-          server.succeed(
+          # k3s applies its manifests one by one; the Kustomization may come a little after the GitRepository.
+          server.wait_until_succeeds(
               "kubectl -n flux-system get kustomization cluster -o jsonpath='{.spec.path}' | grep -F '${path}'"
           )
           server.wait_until_succeeds("kubectl -n flux-system get secret sops-age", timeout=300)
