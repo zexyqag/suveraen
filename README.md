@@ -13,8 +13,8 @@ It runs on Kubernetes (k3s) over NixOS, built to start on one server and grow to
   - `unlock.nix`: on encrypted machines, an SSH server during boot that takes the disk passphrase.
   - `network.nix`: static or DHCP IPv4, static IPv6.
   - `cluster.nix`: a k3s server with embedded etcd, secrets encrypted at rest, WireGuard between nodes, dual-stack networking. It installs [Flux](https://fluxcd.io), which keeps the cluster in sync with this repository.
-  - `watcher.nix`: the watcher. [ntfy](https://ntfy.sh) for alerts (only known accounts, instant on Android and iPhone) and [Gatus](https://gatus.io), which checks the public services and raises an alert when a server stops reporting in.
-  - `alerts.nix`: failed jobs and disk or RAID problems are posted to the watcher's ntfy; servers report in to Gatus every few minutes.
+  - `watcher.nix`: the watcher. [ntfy](https://ntfy.sh) for alerts (only known accounts, instant on Android and iPhone, no account API or attachments) and [Gatus](https://gatus.io), which checks the public services and raises an alert when a server stops reporting in.
+  - `alerts.nix`: failed jobs and disk or RAID problems are posted to the watcher's ntfy on a secret topic, with a second channel for when the watcher can't be reached; servers report in to Gatus every few minutes.
   - `upgrade.nix`: machines follow this repository nightly. Unencrypted ones reboot by themselves when needed; encrypted ones send an alert instead.
 - `checks/`: `server.nix` and `watcher.nix` build each kind of machine with stand-in values; `vm.nix` boots both in VMs and tests them together. CI runs them on every push.
 - `.github/workflows/update.yml`: updates `flake.lock` daily once the checks pass.

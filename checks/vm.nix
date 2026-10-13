@@ -1,7 +1,8 @@
 # Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and
 # pointed at the repository, secrets encrypted at rest and only SSH and web ports open. The
-# watcher's ntfy only takes known publishers, the server's alerts reach a phone account, and
-# Gatus raises an alert when the server's heartbeat stops.
+# watcher's ntfy only takes known publishers and keeps its account API, stats and attachments
+# closed; the server's alerts reach a phone account; Gatus raises an alert when the server's
+# heartbeat stops; and the server falls back to a second channel when the watcher is gone.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -11,7 +12,7 @@ let
   # ntfy tokens are "tk_" plus 29 characters.
   publisherToken = "tk_suveraentestpublisher00000000";
   gatusToken = "tk_suveraentestgatus000000000000";
-  heartbeatToken = "heartbeat-test-token";
+  heartbeatToken = "heartbeattesttoken";
   phonePassword = "phone-test-password";
 
   secrets = pkgs.runCommand "watcher-test-secrets" { nativeBuildInputs = [ pkgs.ntfy-sh ]; } ''
@@ -19,12 +20,12 @@ let
     hash() { printf '%s\n%s\n' "$1" "$1" | ntfy user hash | grep -o '\$2a\$.*'; }
     cat > $out/ntfy.env <<EOF
     NTFY_AUTH_USERS='phone:$(hash ${phonePassword}):user,publisher:$(hash unused):user,gatus:$(hash unused):user'
-    NTFY_AUTH_ACCESS='phone:ops:ro,publisher:ops:wo,gatus:ops:wo'
     NTFY_AUTH_TOKENS='publisher:${publisherToken},gatus:${gatusToken}'
     EOF
     cat > $out/gatus.env <<EOF
+    NTFY_TOPIC=ops
     NTFY_TOKEN=${gatusToken}
-    HEARTBEAT_TOKEN=${heartbeatToken}
+    HEARTBEAT_TOKEN_SERVER=${heartbeatToken}
     EOF
     printf '%s' ${publisherToken} > $out/publisher-token
     printf '%s' ${heartbeatToken} > $out/heartbeat-token
@@ -33,6 +34,7 @@ let
   # "en*" would also match eth1, the test network, through its alternative names.
   uplink = "eth0";
   phone = "-u phone:${phonePassword}";
+  ops = "curl -fsS ${phone} 'http://127.0.0.1:2586/ops/json?poll=1'";
 in
 pkgs.testers.runNixOSTest {
   name = "suveraen";
@@ -67,13 +69,14 @@ pkgs.testers.runNixOSTest {
             enable = true;
             ntfyHost = "alerts.test";
             statusHost = "status.test";
+            readers = [ "phone" ];
             ntfyEnvironmentFile = "${secrets}/ntfy.env";
             gatusEnvironmentFile = "${secrets}/gatus.env";
             servers = [ "server" ];
             heartbeatTimeout = "30s";
           };
           alerts = {
-            url = "http://127.0.0.1:2586/ops";
+            urlFile = toString (pkgs.writeText "alerts-url" "http://127.0.0.1:2586/ops");
             tokenFile = "${secrets}/publisher-token";
             smart = false;
           };
@@ -124,6 +127,16 @@ pkgs.testers.runNixOSTest {
         # The VM has no internet; k3s's own images come from the release tarball.
         services.k3s.images = [ config.services.k3s.package.airgap-images ];
 
+        # Stands in for the second alert channel, which would live on another machine.
+        services.ntfy-sh = {
+          enable = true;
+          environmentFile = "${secrets}/ntfy.env";
+          settings = {
+            base-url = "http://fallback.test";
+            listen-http = "127.0.0.1:2587";
+          };
+        };
+
         networking.hostId = "0400bdef";
         system.stateVersion = "26.05";
         environment.systemPackages = [ pkgs.netcat ];
@@ -145,8 +158,13 @@ pkgs.testers.runNixOSTest {
             sopsAgeKeyFile = toString (pkgs.writeText "age-key" "AGE-SECRET-KEY-TEST");
           };
           alerts = {
-            url = "http://alerts.test/ops";
+            urlFile = toString (pkgs.writeText "alerts-url" "http://alerts.test/ops");
             tokenFile = "${secrets}/publisher-token";
+            fallback = {
+              urlFile = toString (pkgs.writeText "fallback-url" "http://127.0.0.1:2587/fallback");
+              tokenFile = "${secrets}/publisher-token";
+            };
+            retrySeconds = 5;
             heartbeat = {
               url = "http://status.test/api/v1/endpoints/servers_server/external";
               tokenFile = "${secrets}/heartbeat-token";
@@ -162,6 +180,8 @@ pkgs.testers.runNixOSTest {
 
     watcher.wait_for_unit("ntfy-sh.service")
     watcher.wait_for_unit("gatus.service")
+    # Gatus silently drops an alerting provider it considers invalid.
+    watcher.wait_until_succeeds("journalctl -u gatus | grep -F 'configuredProviders=[ntfy]'")
     watcher.wait_for_unit("nginx.service")
     server.wait_for_unit("k3s.service")
 
@@ -201,11 +221,19 @@ pkgs.testers.runNixOSTest {
         server.succeed("test $(curl -s -o /dev/null -w '%{http_code}' ${phone} -d spam http://alerts.test/ops) = 403")
         server.fail("curl -fsS 'http://alerts.test/ops/json?poll=1'")
 
+    with subtest("ntfy's account API and stats are closed"):
+        for p in ["/v1/account", "/v1/account/token", "/v1/stats"]:
+            server.succeed(f"test $(curl -s -o /dev/null -w '%{{http_code}}' ${phone} http://alerts.test{p}) = 404")
+
     with subtest("A failing check on the server reaches the phone"):
         # The VM has no ZFS pools, so the health check fails.
         server.fail("systemctl start zfs-health.service")
+        watcher.wait_until_succeeds("${ops} | grep 'server: zfs-health'")
+
+    with subtest("Long alerts arrive as plain text, not as an attachment"):
+        server.succeed("suveraen-alert big \"$(head -c 20000 /dev/zero | tr '\\0' x)\"")
         watcher.wait_until_succeeds(
-            "curl -fsS ${phone} 'http://127.0.0.1:2586/ops/json?poll=1' | grep 'server: zfs-health'"
+            "${ops} | jq -e 'select(.title == \"server: big\") | (has(\"attachment\") | not) and (.message | length) <= 3800'"
         )
 
     with subtest("The watcher raises an alert when the server goes quiet"):
@@ -215,9 +243,17 @@ pkgs.testers.runNixOSTest {
             timeout=120,
         )
         # Gatus may have alerted before the first heartbeat; only a new alert counts.
-        count = "curl -fsS ${phone} 'http://127.0.0.1:2586/ops/json?poll=1' | grep -c 'triggered.*No heartbeat from server' || true"
+        count = "${ops} | grep -c 'triggered.*No heartbeat from server' || true"
         before = int(watcher.succeed(count).strip())
         server.succeed("systemctl stop heartbeat.timer")
         watcher.wait_until_succeeds(f"test $({count}) -gt {before}", timeout=300)
+
+    with subtest("The server falls back to its second channel when the watcher is gone"):
+        watcher.succeed("systemctl stop nginx")
+        server.succeed("systemctl start heartbeat.timer")
+        server.wait_until_succeeds(
+            "curl -fsS 'http://127.0.0.1:2587/fallback/json?poll=1' | grep 'server: heartbeat.service failed'",
+            timeout=300,
+        )
   '';
 }

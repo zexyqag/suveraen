@@ -8,6 +8,9 @@ let
   ntfyPort = 2586;
   gatusPort = 8080;
 
+  tokenVariable =
+    server: "HEARTBEAT_TOKEN_" + lib.toUpper (lib.replaceStrings [ "-" ] [ "_" ] server);
+
   ntfyAlert =
     description: extra:
     {
@@ -33,35 +36,40 @@ in
       description = "Host name of the Gatus status page and its heartbeat API.";
     };
 
-    topic = lib.mkOption {
-      type = lib.types.str;
-      default = "ops";
-      description = "ntfy topic that Gatus posts its alerts to.";
+    readers = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      example = [ "marty" ];
+      description = "ntfy accounts (phones) that may read alerts. Everything not granted here is denied.";
     };
 
     ntfyEnvironmentFile = lib.mkOption {
       type = lib.types.str;
       description = ''
-        Environment file declaring ntfy's users, their access and the publishing tokens
-        (NTFY_AUTH_USERS, NTFY_AUTH_ACCESS, NTFY_AUTH_TOKENS). Everything else is denied.
+        Environment file declaring ntfy's accounts: NTFY_AUTH_USERS with a bcrypt hash (`ntfy user hash`) for every reader
+        plus `publisher` (servers) and `gatus`, and NTFY_AUTH_TOKENS with a token for `publisher` and `gatus`.
+        It must not set NTFY_AUTH_ACCESS, which would replace the access rules declared here.
       '';
     };
 
     gatusEnvironmentFile = lib.mkOption {
       type = lib.types.str;
-      description = "Environment file with NTFY_TOKEN (Gatus publishing to ntfy) and HEARTBEAT_TOKEN (servers reporting in).";
+      description = ''
+        Environment file with NTFY_TOPIC (the secret alert topic), NTFY_TOKEN (the `gatus` account's ntfy token) and
+        one HEARTBEAT_TOKEN_<NAME> per server, the name upper-cased with `-` as `_`. Values must be plain letters and
+        digits (ntfy tokens keep their `tk_`); Gatus substitutes them into its YAML.
+      '';
     };
 
     servers = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
+      type = lib.types.listOf (lib.types.strMatching "[a-z0-9-]+");
       default = [ ];
-      description = "Hosts that report a heartbeat. Each gets the external endpoint `servers_<name>`.";
+      description = "Hosts that report a heartbeat, each with its own token. Each gets the external endpoint `servers_<name>`.";
     };
 
     heartbeatTimeout = lib.mkOption {
       type = lib.types.str;
       default = "15m";
-      description = "Silence after which a server counts as down.";
+      description = "Silence after which a server counts as down; about three times the servers' reporting interval.";
     };
 
     checks = lib.mkOption {
@@ -87,9 +95,26 @@ in
         listen-http = "127.0.0.1:${toString ntfyPort}";
         behind-proxy = true;
         auth-default-access = "deny-all";
-        # iPhones only get instant notifications through ntfy.sh's push relay; it receives a content-free poll request.
+        # Wildcards keep the topic name, which must stay secret, out of the public configuration.
+        auth-access =
+          map (reader: "${reader}:*:ro") cfg.readers
+          ++ map (publisher: "${publisher}:*:wo") [
+            "publisher"
+            "gatus"
+          ];
+        # iPhones only get instant notifications through ntfy.sh's push relay. It receives the message ID and a
+        # hash of the topic URL, never the content; the phone then fetches the message from here.
         upstream-base-url = "https://ntfy.sh";
+        # Phones fetch and catch up from this cache; the default 12 hours is too short for a phone left off over a weekend.
+        cache-duration = "72h";
+        # Alerts are short text. Attachments would be downloadable without logging in, and the phone apps don't need the web app.
+        attachment-cache-dir = lib.mkForce "";
+        web-root = "disable";
       };
+    };
+    systemd.services.ntfy-sh.serviceConfig = {
+      Restart = "on-failure";
+      RestartSec = 5;
     };
 
     services.gatus = {
@@ -106,17 +131,22 @@ in
         };
         alerting.ntfy = {
           url = "http://127.0.0.1:${toString ntfyPort}";
-          inherit (cfg) topic;
+          topic = "\${NTFY_TOPIC}";
           token = "\${NTFY_TOKEN}";
-          priority = 5;
+          priority = 4;
         };
         external-endpoints = map (server: {
           name = server;
           group = "servers";
-          token = "\${HEARTBEAT_TOKEN}";
+          token = "\${${tokenVariable server}}";
           heartbeat.interval = cfg.heartbeatTimeout;
-          # A missed heartbeat already means the whole interval was silent.
-          alerts = [ (ntfyAlert "No heartbeat from ${server}" { failure-threshold = 1; }) ];
+          # A missed heartbeat already means the whole interval was silent, and one report means it's back.
+          alerts = [
+            (ntfyAlert "No heartbeat from ${server}" {
+              failure-threshold = 1;
+              success-threshold = 1;
+            })
+          ];
         }) cfg.servers;
         # Gatus refuses to start without a regular endpoint; ntfy's own health is a useful one.
         endpoints = [
@@ -171,6 +201,9 @@ in
               proxy_send_timeout 3m;
             '';
           };
+          # The account API mints tokens that outlive the declared ones, and the stats count alerts. Phones need neither.
+          locations."/v1/account".return = "404";
+          locations."= /v1/stats".return = "404";
         };
         ${cfg.statusHost} = {
           forceSSL = true;
@@ -181,6 +214,13 @@ in
     };
 
     security.acme.acceptTerms = true;
+
+    # Gatus going down silences every check, and failed renewals end in expired certificates.
+    suveraen.alerts.units = [
+      "gatus"
+      "acme-order-renew-${cfg.ntfyHost}"
+      "acme-order-renew-${cfg.statusHost}"
+    ];
 
     networking.firewall.allowedTCPPorts = [
       80

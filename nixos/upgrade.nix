@@ -25,12 +25,13 @@ in
         "--refresh"
         "-L"
       ];
-      dates = "04:00";
+      # Rebooting hosts (the watcher) go first, so they are back before the others' alerts arrive.
+      dates = if canReboot then "02:30" else "04:00";
       randomizedDelaySec = "30min";
       allowReboot = canReboot;
       rebootWindow = lib.mkIf canReboot {
-        lower = "04:00";
-        upper = "06:00";
+        lower = "02:30";
+        upper = "03:45";
       };
     };
 

@@ -1,5 +1,9 @@
 # Builds a watcher with stand-in values; nothing here points at a real machine.
+{ modulesPath, ... }:
 {
+  # Hetzner Cloud VMs need the virtio disk and PCI drivers at boot.
+  imports = [ (modulesPath + "/profiles/qemu-guest.nix") ];
+
   nixpkgs.hostPlatform = "x86_64-linux";
   networking.hostName = "example-watcher";
   networking.hostId = "5c1e0a7d";
@@ -12,6 +16,7 @@
     storage = {
       systemDisks = [ "/dev/sda" ];
       encrypted = false;
+      reserve = "2G";
       arcMax = 256 * 1024 * 1024;
     };
     network = {
@@ -22,6 +27,7 @@
       enable = true;
       ntfyHost = "alerts.example.org";
       statusHost = "status.example.org";
+      readers = [ "example" ];
       ntfyEnvironmentFile = "/run/secrets/ntfy-env";
       gatusEnvironmentFile = "/run/secrets/gatus-env";
       servers = [ "example" ];
@@ -33,7 +39,7 @@
       ];
     };
     alerts = {
-      url = "http://127.0.0.1:2586/ops";
+      urlFile = "/run/secrets/alerts-url";
       tokenFile = "/run/secrets/alerts-token";
       smart = false;
     };

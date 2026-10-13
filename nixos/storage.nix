@@ -78,7 +78,7 @@ let
         type = "zfs_fs";
         options = {
           mountpoint = "none";
-          refreservation = "10G";
+          refreservation = cfg.reserve;
         };
       };
     };
@@ -116,6 +116,12 @@ in
         Put the system pool on LUKS. The passphrase is typed over SSH at every boot, so such hosts never reboot by themselves.
         Hosts that must come back unattended, like the watcher, go without.
       '';
+    };
+
+    reserve = lib.mkOption {
+      type = lib.types.str;
+      default = "10G";
+      description = "Space held back in the pool, so files can still be deleted when it is otherwise full.";
     };
 
     arcMax = lib.mkOption {

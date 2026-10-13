@@ -30,8 +30,12 @@
       sopsAgeKeyFile = "/run/secrets/flux-age-key";
     };
     alerts = {
-      url = "https://alerts.example.org/ops";
+      urlFile = "/run/secrets/alerts-url";
       tokenFile = "/run/secrets/alerts-token";
+      fallback = {
+        urlFile = "/run/secrets/fallback-alerts-url";
+        tokenFile = "/run/secrets/fallback-alerts-token";
+      };
       heartbeat = {
         url = "https://status.example.org/api/v1/endpoints/servers_example/external";
         tokenFile = "/run/secrets/heartbeat-token";
