@@ -8,21 +8,30 @@ on:
 permissions:
   contents: read
 
+# Lock updates are new changes like any other: they go to the branch the watcher runs first, never to the
+# release branch.
+env:
+  BRANCH: staging
+
 jobs:
   # Fetching and building upstream code runs without write access; only the small job below can push.
   update:
     runs-on: ubuntu-latest
     outputs:
       lock: ${{ steps.lock.outputs.lock }}
+      base: ${{ steps.lock.outputs.base }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.BRANCH }}
           persist-credentials: false
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       - run: nix flake update
       - run: nix flake check -L
       - id: lock
-        run: git diff --quiet flake.lock || echo "lock=$(base64 -w0 flake.lock)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git diff --quiet flake.lock || echo "lock=$(base64 -w0 flake.lock)" >> "$GITHUB_OUTPUT"
 
   push:
     needs: update
@@ -32,7 +41,10 @@ jobs:
       contents: write
       actions: write
     steps:
+      # The commit that was checked above; if the branch has moved since, the push is refused.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.update.outputs.base }}
       - env:
           LOCK: ${{ needs.update.outputs.lock }}
           GH_TOKEN: ${{ github.token }}
@@ -41,6 +53,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "flake.lock: update inputs"
-          git push
+          git push origin "HEAD:refs/heads/$BRANCH"
           # Pushes with this token start no workflows, and a release needs the checks' result for this commit.
-          gh workflow run check.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"
+          gh workflow run check.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"

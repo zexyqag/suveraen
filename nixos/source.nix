@@ -2,11 +2,11 @@
 let
   cfg = config.suveraen.source;
 
-  # Nix names SSH key types differently from OpenSSH.
+  # Nix names SSH key types differently from OpenSSH. Plain ECDSA is left out: Nix's name for it maps to no type
+  # OpenSSH accepts, so such a signer could never be verified.
   nixKeyType = {
     "ssh-ed25519" = "ssh-ed25519";
     "sk-ssh-ed25519@openssh.com" = "ssh-ed25519-sk";
-    "ecdsa-sha2-nistp256" = "ssh-ecdsa";
     "sk-ecdsa-sha2-nistp256@openssh.com" = "ssh-ecdsa-sk";
     "ssh-rsa" = "ssh-rsa";
   };
@@ -41,7 +41,7 @@ in
 
     signers = lib.mkOption {
       type = lib.types.listOf (
-        lib.types.strMatching "(${lib.concatStringsSep "|" (lib.attrNames nixKeyType)}) [A-Za-z0-9+/=]+( .*)?"
+        lib.types.strMatching "(${lib.concatStringsSep "|" (lib.attrNames nixKeyType)}) [A-Za-z0-9+/=]+( [[:print:]]*)?"
       );
       default = [ ];
       example = [ "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAA... release" ];

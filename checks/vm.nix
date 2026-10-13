@@ -4,7 +4,7 @@
 # takes known publishers and keeps its account API, stats and attachments closed; the server's
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
 # server falls back to a second channel when the watcher is gone. The server and its Flux only take
-# commits signed by a release signer.
+# commits signed by a release signer, and the server never goes back to an older one.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -197,9 +197,10 @@ pkgs.testers.runNixOSTest {
     { nodes, ... }:
     let
       # The server's own upgrade reference, pointed at a repository inside the VM.
-      releaseFlake =
-        builtins.replaceStrings [ repository ] [ "file:///srv/release" ]
-          nodes.server.system.autoUpgrade.flake;
+      # The server's own upgrade reference and resolve step, pointed at a repository inside the VM.
+      inVM = builtins.replaceStrings [ repository ] [ "file:///srv/release" ];
+      releaseFlake = pkgs.lib.escapeShellArg (inVM nodes.server.suveraen.source.flake);
+      resolve = inVM nodes.server.systemd.services.nixos-upgrade.preStart;
     in
     ''
       start_all()
@@ -235,23 +236,37 @@ pkgs.testers.runNixOSTest {
 
       with subtest("Flux and the server only deploy commits signed by a release signer"):
           server.succeed("kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.verify.mode}' | grep -x HEAD")
+          secret = server.succeed(
+              "kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.verify.secretRef.name}'"
+          ).strip()
           server.wait_until_succeeds(
-              "kubectl -n flux-system get secret release-signers -o jsonpath='{.data.signer-0\\.sshpub}'"
+              f"kubectl -n flux-system get secret {secret} -o jsonpath='{{.data.signer-0\\.sshpub}}'"
               " | base64 -d | grep -x '${pkgs.lib.concatStringsSep " " (pkgs.lib.take 2 (pkgs.lib.splitString " " signer))}'",
               timeout=120,
           )
           release_flake = """${releaseFlake}"""
+          resolve = """${resolve}"""
+          record = "cp /run/suveraen-upgrade/revcount /var/lib/suveraen-upgrade/revcount"
           server.succeed(
               "install -m 600 ${keys.snakeOilEd25519PrivateKey} /root/signer"
-            " && install -m 600 ${keys.snakeOilPrivateKey} /root/other && ssh-keygen -y -f /root/other > /root/other.pub"
+              " && install -m 600 ${keys.snakeOilPrivateKey} /root/other && ssh-keygen -y -f /root/other > /root/other.pub"
+              " && mkdir -p /run/suveraen-upgrade /var/lib/suveraen-upgrade"
               " && git init -q -b main /srv/release && cd /srv/release"
               " && git config user.name test && git config user.email test@example.org && git config gpg.format ssh"
               " && echo '{ outputs = _: { release = \"signed\"; }; }' > flake.nix && git add flake.nix"
               " && git -c user.signingkey=/root/signer commit -qS -m signed"
           )
           server.succeed(f"nix eval --raw {release_flake}#release | grep -x signed")
+          server.succeed(f"{resolve} && grep -q '&rev=' /run/suveraen-upgrade/flake && {record}")
+          # A newer signed release is taken; resetting the branch back to the older one isn't.
+          server.succeed("cd /srv/release && git -c user.signingkey=/root/signer commit -q --allow-empty -S -m second")
+          server.succeed(f"{resolve} && {record}")
+          server.succeed("cd /srv/release && git reset -q --hard HEAD~1")
+          server.fail(resolve)
+          server.succeed("cd /srv/release && git reset -q --hard ORIG_HEAD")
           server.succeed("cd /srv/release && git commit -q --allow-empty -m unsigned")
           server.fail(f"nix eval --raw {release_flake}#release")
+          server.fail(resolve)
           server.succeed("cd /srv/release && git -c user.signingkey=/root/other commit -q --allow-empty -S -m other")
           server.fail(f"nix eval --raw {release_flake}#release")
 

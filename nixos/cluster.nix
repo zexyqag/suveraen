@@ -21,6 +21,11 @@ let
     "fd43::/112"
   ];
 
+  # Named after its keys, so a changed list replaces the Secret instead of leaving removed keys in it.
+  signersSecret = "release-signers-${
+    builtins.substring 0 12 (builtins.hashString "sha256" (builtins.toJSON source.keys))
+  }";
+
   # Pods reach the node's own resolver at this link-local address, the same on every node.
   resolver = "169.254.53.53";
 in
@@ -98,7 +103,7 @@ in
           // lib.optionalAttrs (source.signers != [ ]) {
             verify = {
               mode = "HEAD";
-              secretRef.name = "release-signers";
+              secretRef.name = signersSecret;
             };
           };
         };
@@ -107,7 +112,7 @@ in
             apiVersion = "v1";
             kind = "Secret";
             metadata = {
-              name = "release-signers";
+              name = signersSecret;
               namespace = "flux-system";
             };
             # Public keys, so the world-readable store is fine. Flux wants just "type key" per entry.

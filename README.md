@@ -19,13 +19,15 @@ It runs on Kubernetes (k3s) over NixOS, built to start on one server and grow to
   - `alerts.nix`: failed jobs and disk or RAID problems are posted to the watcher's ntfy on a secret topic, with a second channel for when the watcher can't be reached; servers report in to Gatus every few minutes.
   - `source.nix`: the repository and branch a machine and its cluster follow, and the release signers: with signers set, Nix on the machine and Flux in the cluster refuse a branch head that none of them signed.
   - `upgrade.nix`: machines switch to their configuration from that branch nightly. Unencrypted ones reboot by themselves when needed; encrypted ones send an alert instead.
-- `release/approve.sh`: `nix run .#approve` shows what changed on `staging` since the last release, and once you confirm, signs it and publishes it to `main`.
+- `release/approve.sh`: `approve` shows what changed on `staging` since the last release, and once you confirm, signs it and publishes it to `main`.
 - `checks/`: `server.nix` and `watcher.nix` build each kind of machine with stand-in values; `vm.nix` boots both in VMs and tests them together; `approve.nix` runs the release command against a scratch repository. CI runs them on every push.
 - `.github/workflows/update.yml`: updates `flake.lock` daily once the checks pass. The checks run with a read-only token; only a separate small job can push. Actions are pinned to commit hashes.
 
 ## Releases
 
-Changes land on `staging`, which the watcher runs first. The servers and the cluster only deploy `main`, and `main` only moves through releases signed with a key listed in `release/signers`.
+Changes land on `staging`, which the watcher runs first. The servers and the cluster only deploy `main`, and `main` only moves through releases signed with a key listed in `release/signers`. A server also refuses a release older than the one it runs.
+
+To release, work in a clone of the repository with git's `user.signingkey` set to your SSH signing key (a security key works). The very first time, run `nix run .#approve -- --first-release`. After each release, approve prints the command for the next one: it runs approve from the last signed release, whose signature Nix checks first, so your working tree never decides what gets signed.
 
 ## Use
 

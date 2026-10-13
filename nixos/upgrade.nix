@@ -1,9 +1,40 @@
-{ config, lib, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   inherit (config.suveraen.source) flake;
   alert = lib.getExe config.suveraen.alerts.command;
   # An encrypted host would sit at the passphrase prompt after rebooting.
   canReboot = !config.suveraen.storage.encrypted;
+  state = "/var/lib/suveraen-upgrade";
+
+  # Resolves the branch head, which Nix only accepts with a valid signature when there are signers, and refuses a
+  # head older than the release this host already runs: an old signed release is still signed, so resetting the
+  # branch to one would otherwise roll the host back.
+  resolve = pkgs.writeShellApplication {
+    name = "suveraen-upgrade-resolve";
+    runtimeInputs = [
+      config.nix.package
+      pkgs.jq
+      pkgs.gitMinimal
+      config.programs.ssh.package
+    ];
+    text = ''
+      meta=$(nix flake metadata --json --refresh "$1")
+      rev=$(jq -er .revision <<<"$meta")
+      count=$(jq -er .revCount <<<"$meta")
+      deployed=$(cat ${state}/revcount 2>/dev/null || echo 0)
+      if [ "$count" -lt "$deployed" ]; then
+        echo "Refusing $rev: it is older than the deployed release ($count commits, deployed $deployed)." >&2
+        exit 1
+      fi
+      echo "$count" >/run/suveraen-upgrade/revcount
+      echo "$1&rev=$rev" >/run/suveraen-upgrade/flake
+    '';
+  };
 in
 {
   # Every night the host switches to its configuration (named after its hostname) from suveraen.source.
@@ -12,8 +43,8 @@ in
   config = lib.mkIf (flake != null) {
     system.autoUpgrade = {
       enable = true;
-      # The service puts it into a shell script unquoted.
-      flake = lib.escapeShellArg flake;
+      # The service's script reads this unquoted, so it builds exactly the revision the resolve step checked.
+      flake = ''"$(< /run/suveraen-upgrade/flake)"'';
       flags = [
         "-L"
       ];
@@ -25,6 +56,15 @@ in
         lower = "02:30";
         upper = "03:45";
       };
+    };
+
+    systemd.services.nixos-upgrade = {
+      serviceConfig = {
+        RuntimeDirectory = "suveraen-upgrade";
+        StateDirectory = "suveraen-upgrade";
+      };
+      preStart = "${lib.getExe resolve} ${lib.escapeShellArg flake}";
+      postStart = "cp /run/suveraen-upgrade/revcount ${state}/revcount";
     };
 
     systemd.services.reboot-check = lib.mkIf (!canReboot) {
@@ -41,7 +81,7 @@ in
       '';
     };
 
-    # A head commit without a valid signature makes the upgrade fail, which alerts.
+    # An unsigned or older branch head makes the upgrade fail, which alerts.
     suveraen.alerts.units = [ "nixos-upgrade" ];
   };
 }
