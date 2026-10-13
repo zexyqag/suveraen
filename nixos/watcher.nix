@@ -187,6 +187,8 @@ in
       recommendedOptimisation = true;
       recommendedGzipSettings = true;
       recommendedProxySettings = true;
+      # Phones' and visitors' addresses aren't kept: no access log, and error logs only for two weeks.
+      commonHttpConfig = "access_log off;";
       virtualHosts = {
         # Requests for names we don't serve get no answer and no certificate.
         "_" = {
@@ -219,6 +221,8 @@ in
         };
       };
     };
+
+    services.logrotate.settings.nginx.rotate = 2;
 
     security.acme.acceptTerms = true;
 

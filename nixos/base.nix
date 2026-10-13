@@ -48,6 +48,10 @@ in
 
     zramSwap.enable = true;
     time.timeZone = lib.mkDefault "UTC";
-    services.journald.extraConfig = "SystemMaxUse=2G";
+    # Logs hold visitors' and attackers' addresses; two weeks is enough to look into a problem.
+    services.journald.extraConfig = ''
+      SystemMaxUse=2G
+      MaxRetentionSec=14day
+    '';
   };
 }

@@ -404,6 +404,10 @@ pkgs.testers.runNixOSTest {
           server.succeed("systemctl start release-age.service")
           server.wait_until_succeeds("${ops} | grep -F 'server: stale configuration'")
 
+      with subtest("The watcher keeps no record of who reads alerts"):
+          # The phone account has read alerts through nginx above.
+          watcher.fail("test -s /var/log/nginx/access.log")
+
       with subtest("The watcher raises an alert when the server goes quiet"):
           watcher.wait_until_succeeds(
               "curl -fsS http://127.0.0.1:8080/api/v1/endpoints/statuses"
