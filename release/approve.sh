@@ -21,8 +21,10 @@ die() {
 clean() { LC_ALL=C tr -d '\000-\010\013-\037\177'; }
 signers_of() { git show "$1:$signers_file" 2>/dev/null | awk 'NF && $1 !~ /^#/ { print $1, $2 }'; }
 allowed_of() { signers_of "$1" | awk '{ print "release", $1, $2 }' >"$2"; }
+# Commands below feed grep -q from a variable: in a pipe, grep stopping early can kill the writer, and pipefail
+# then turns a match into a failure.
 signed_by() {
-  git cat-file commit "$1" | grep -q '^gpgsig -----BEGIN SSH SIGNATURE-----' &&
+  grep -q '^gpgsig -----BEGIN SSH SIGNATURE-----' <<<"$(git cat-file commit "$1")" &&
     git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$2" verify-commit "$1" >/dev/null 2>&1
 }
 tree() { git rev-parse "$1^{tree}"; }
@@ -56,7 +58,7 @@ if $first; then
 else
   [ -n "$anchor" ] || die "This clone has no record of a release. For the very first one, run approve --first-release.
 To continue from another machine, record the last release you made there: git update-ref refs/approve/last <commit>."
-  git rev-list --first-parent "$release" | grep -qx "$anchor" ||
+  grep -qx "$anchor" <<<"$(git rev-list --first-parent "$release")" ||
     die "$release_branch doesn't continue from the last release this clone made ($anchor). It was rewound or replaced: stop and find out who moved it."
   for commit in $(git rev-list --first-parent --reverse "$anchor..$release"); do
     allowed_of "$commit^1" "$state/check"
