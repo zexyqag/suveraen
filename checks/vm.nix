@@ -40,12 +40,15 @@ pkgs.testers.runNixOSTest {
         source = "${keys}/host";
         mode = "0600";
       };
-      services.openssh.hostKeys = [
-        {
-          path = "/etc/ssh/test_host_key";
-          type = "ed25519";
-        }
-      ];
+      services.openssh = {
+        enable = true;
+        hostKeys = [
+          {
+            path = "/etc/ssh/test_host_key";
+            type = "ed25519";
+          }
+        ];
+      };
     };
 
     server =
@@ -81,6 +84,8 @@ pkgs.testers.runNixOSTest {
         suveraen = {
           inherit domain;
           adminKeys = [ (readPub "client") ];
+          # "en*" would also match eth1, the test network, through its alternative names.
+          network.interface = "eth0";
           storage = {
             systemDisks = [
               "/dev/disk/by-id/test-0"

@@ -55,8 +55,12 @@ in
     systemd.services.kanidm = {
       wants = [ "acme-${fqdn}.service" ];
       after = [ "acme-${fqdn}.service" ];
-      # Kanidm re-reads its certificate on SIGHUP.
-      serviceConfig.ExecReload = "${pkgs.coreutils}/bin/kill -HUP $MAINPID";
+      serviceConfig = {
+        # Kanidm re-reads its certificate on SIGHUP.
+        ExecReload = "${pkgs.coreutils}/bin/kill -HUP $MAINPID";
+        Restart = "on-failure";
+        RestartSec = 10;
+      };
     };
 
     services.nginx.virtualHosts.${fqdn} = {
