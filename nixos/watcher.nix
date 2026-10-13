@@ -134,6 +134,13 @@ in
           topic = "\${NTFY_TOPIC}";
           token = "\${NTFY_TOKEN}";
           priority = 4;
+          # A server gone silent matters more than a flapping check.
+          overrides = [
+            {
+              group = "servers";
+              priority = 5;
+            }
+          ];
         };
         external-endpoints = map (server: {
           name = server;
@@ -142,7 +149,7 @@ in
           heartbeat.interval = cfg.heartbeatTimeout;
           # A missed heartbeat already means the whole interval was silent, and one report means it's back.
           alerts = [
-            (ntfyAlert "No heartbeat from ${server}" {
+            (ntfyAlert "No heartbeat from ${server}, or its alerts aren't getting through" {
               failure-threshold = 1;
               success-threshold = 1;
             })

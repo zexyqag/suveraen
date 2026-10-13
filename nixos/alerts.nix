@@ -6,6 +6,7 @@
 }:
 let
   cfg = config.suveraen.alerts;
+  undelivered = "/var/lib/suveraen-alert/undelivered";
 
   # Feeds curl the token on stdin so it never shows up in the process list.
   authorized =
@@ -34,7 +35,8 @@ let
           --data-binary "$message" "$(< "$1")"
       }
 
-      send ${
+      # Remember an alert that got nowhere, so the heartbeat can tell the watcher the alert path is broken.
+      if send ${
         lib.escapeShellArgs [
           cfg.urlFile
           cfg.tokenFile
@@ -47,7 +49,13 @@ let
                cfg.fallback.tokenFile
              ]
            }"
-      }
+      }; then
+        rm -f ${undelivered}
+      else
+        mkdir -p "$(dirname ${undelivered})"
+        date > ${undelivered}
+        exit 1
+      fi
     '';
   };
 
@@ -191,8 +199,13 @@ in
         };
         script = ''
           misses=/run/heartbeat/misses
+          if [ -e ${undelivered} ]; then
+            report="success=false&error=alerts+not+delivered"
+          else
+            report="success=true"
+          fi
           if ${authorized cfg.heartbeat.tokenFile} -fsS --connect-timeout 10 --max-time 30 -X POST \
-            ${lib.escapeShellArg "${cfg.heartbeat.url}?success=true"}; then
+            ${lib.escapeShellArg cfg.heartbeat.url}"?$report"; then
             echo 0 > "$misses"
           else
             n=$(( $(cat "$misses" 2>/dev/null || echo 0) + 1 ))

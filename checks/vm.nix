@@ -234,7 +234,7 @@ pkgs.testers.runNixOSTest {
     with subtest("A failing check on the server reaches the phone"):
         # The VM has no ZFS pools, so the health check fails.
         server.fail("systemctl start zfs-health.service")
-        server.wait_until_succeeds("${ops} | grep 'server: zfs-health'")
+        server.wait_until_succeeds("${ops} | grep 'server: ZFS pool unhealthy'")
 
     with subtest("Long alerts arrive as plain text, not as an attachment"):
         server.succeed("suveraen-alert big \"$(head -c 20000 /dev/zero | tr '\\0' x)\"")

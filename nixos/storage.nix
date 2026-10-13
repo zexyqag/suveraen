@@ -212,6 +212,7 @@ in
         status=$(${zfs}/sbin/zpool status -x)
         if [ "$status" != "all pools are healthy" ]; then
           echo "$status"
+          ${lib.getExe config.suveraen.alerts.command} "ZFS pool unhealthy" "$status" 5
           exit 1
         fi
       '';
@@ -221,9 +222,7 @@ in
       timerConfig.OnCalendar = "hourly";
     };
 
-    suveraen.alerts.units = [
-      "zfs-health"
-      "zfs-scrub"
-    ];
+    # zfs-health alerts by itself, at top priority.
+    suveraen.alerts.units = [ "zfs-scrub" ];
   };
 }
