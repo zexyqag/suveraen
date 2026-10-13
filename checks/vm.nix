@@ -346,6 +346,20 @@ pkgs.testers.runNixOSTest {
           )
           server.succeed("kubectl -n probe logs dns-probe-host | grep -F 192.0.2.53")
 
+      with subtest("Pods reach only the API server, the kubelet and the resolver on the host"):
+          server.succeed(
+              f"kubectl -n probe run host-ports --image={busybox} --image-pull-policy=Never --restart=Never --command -- sh -c"
+              " 'for port in 6443 10250 2379; do timeout 10 nc -w 3 ${nodes.server.networking.primaryIPAddress} $port </dev/null"
+              " && echo open $port || echo closed $port; done'"
+          )
+          server.wait_until_succeeds(
+              "kubectl -n probe get pod host-ports -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
+          )
+          ports = server.succeed("kubectl -n probe logs host-ports")
+          # etcd answers on the node's address, but only to the API server.
+          for line in ["open 6443", "open 10250", "closed 2379"]:
+              assert line in ports, ports
+
       with subtest("Clocks follow NTS servers"):
           for node in [server, watcher]:
               node.succeed("systemctl is-active chronyd")

@@ -234,12 +234,18 @@ in
     environment.systemPackages = [ pkgs.kubectl ];
     environment.variables.KUBECONFIG = "/etc/rancher/k3s/k3s.yaml";
 
-    # Pods reach the host (API server, kubelet) through these; the public side stays closed.
-    networking.firewall.trustedInterfaces = [
-      "cni0"
-      "flannel-wg"
-      "flannel-wg-v6"
-    ];
+    # Pods may reach the API server, the kubelet and the node's resolver on the host, and nothing else there.
+    networking.firewall.extraInputRules =
+      let
+        v4 = lib.filter (cidr: !lib.hasInfix ":" cidr) podCIDRs;
+        v6 = lib.filter (lib.hasInfix ":") podCIDRs;
+        set = cidrs: "{ ${lib.concatStringsSep ", " cidrs} }";
+      in
+      ''
+        ip saddr ${set v4} tcp dport { 6443, 10250 } accept
+        ip6 saddr ${set v6} tcp dport { 6443, 10250 } accept
+        ip saddr ${set v4} ip daddr ${resolver} meta l4proto { tcp, udp } th dport 53 accept
+      '';
     networking.firewall.allowedTCPPorts = [
       80
       443
