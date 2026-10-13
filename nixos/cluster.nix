@@ -8,8 +8,21 @@ let
   cfg = config.suveraen.cluster;
   source = config.suveraen.source;
 
+  # Flux's install grants create rights on its own kinds to the built-in admin and edit roles, while its
+  # controllers apply with cluster-admin rights; anyone with admin or edit in a namespace could then take over the
+  # cluster. Drop those grants, and lock the controllers down so that a Flux object only gets the rights of the
+  # service account it names, with no references into other namespaces or to remote bases.
   fluxComponents = pkgs.runCommand "flux-components.yaml" { } ''
-    ${lib.getExe pkgs.fluxcd} install --export > $out
+    ${lib.getExe pkgs.fluxcd} install --export | ${lib.getExe pkgs.yq-go} '
+      (select(.kind == "ClusterRole").metadata.labels) |=
+        with_entries(select(.key | test("^rbac.authorization.k8s.io/aggregate-to-") | not))
+      | (select(.kind == "Deployment" and .metadata.name == "kustomize-controller").spec.template.spec.containers[0].args) +=
+        ["--no-cross-namespace-refs=true", "--no-remote-bases=true", "--default-service-account=default"]
+      | (select(.kind == "Deployment" and .metadata.name == "helm-controller").spec.template.spec.containers[0].args) +=
+        ["--no-cross-namespace-refs=true", "--default-service-account=default"]
+      | (select(.kind == "Deployment" and .metadata.name == "notification-controller").spec.template.spec.containers[0].args) +=
+        ["--no-cross-namespace-refs=true"]
+    ' > $out
   '';
 
   podCIDRs = [
@@ -136,6 +149,9 @@ in
             };
             inherit (cfg) path;
             prune = true;
+            # The platform itself is applied with Flux's own cluster-wide account; everything else gets only what
+            # its own service account allows.
+            serviceAccountName = "kustomize-controller";
           }
           // lib.optionalAttrs (cfg.sopsAgeKeyFile != null) {
             decryption = {

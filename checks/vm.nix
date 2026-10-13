@@ -1,5 +1,6 @@
 # Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and
-# pointed at the repository, secrets encrypted at rest and only SSH and web ports open. Hosts and
+# pointed at the repository, out of reach of namespace admins, secrets encrypted at rest and only
+# SSH and web ports open. Hosts and
 # pods resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
 # takes known publishers and keeps its account API, stats and attachments closed; the server's
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
@@ -196,7 +197,6 @@ pkgs.testers.runNixOSTest {
   testScript =
     { nodes, ... }:
     let
-      # The server's own upgrade reference, pointed at a repository inside the VM.
       # The server's own upgrade reference and resolve step, pointed at a repository inside the VM.
       inVM = builtins.replaceStrings [ repository ] [ "file:///srv/release" ];
       releaseFlake = pkgs.lib.escapeShellArg (inVM nodes.server.suveraen.source.flake);
@@ -234,6 +234,29 @@ pkgs.testers.runNixOSTest {
               "kubectl -n flux-system get kustomization cluster -o jsonpath='{.spec.path}' | grep -F '${path}'"
           )
           server.wait_until_succeeds("kubectl -n flux-system get secret sops-age", timeout=300)
+
+      with subtest("Rights in a namespace don't extend to Flux, and Flux acts there only with that namespace's own account"):
+          for controller in ["kustomize-controller", "helm-controller", "notification-controller"]:
+              server.succeed(
+                  f"kubectl -n flux-system get deployment {controller} -o jsonpath='{{.spec.template.spec.containers[0].args}}'"
+                  " | grep -F -- --no-cross-namespace-refs=true"
+              )
+          for controller in ["kustomize-controller", "helm-controller"]:
+              server.succeed(
+                  f"kubectl -n flux-system get deployment {controller} -o jsonpath='{{.spec.template.spec.containers[0].args}}'"
+                  " | grep -F -- --default-service-account=default"
+              )
+          server.succeed("kubectl -n flux-system get kustomization cluster -o jsonpath='{.spec.serviceAccountName}' | grep -x kustomize-controller")
+          server.succeed(
+              "kubectl create namespace member && kubectl -n member create serviceaccount member"
+              " && kubectl -n member create rolebinding member --clusterrole=admin --serviceaccount=member:member"
+          )
+          member = "-n member --as=system:serviceaccount:member:member"
+          server.wait_until_succeeds(f"kubectl auth can-i create deployments {member}")
+          kinds = server.succeed("kubectl get crd -o name | grep -F .toolkit.fluxcd.io | cut -d/ -f2").split()
+          assert len(kinds) >= 4, kinds
+          for kind in kinds:
+              server.fail(f"kubectl auth can-i create {kind} {member}")
 
       with subtest("Flux and the server only deploy commits signed by a release signer"):
           server.succeed("kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.verify.mode}' | grep -x HEAD")
