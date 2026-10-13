@@ -34,7 +34,8 @@ let
   # "en*" would also match eth1, the test network, through its alternative names.
   uplink = "eth0";
   phone = "-u phone:${phonePassword}";
-  ops = "curl -fsS ${phone} 'http://127.0.0.1:2586/ops/json?poll=1'";
+  # Phones read through the public host name and nginx, as the apps do.
+  ops = "curl -fsS ${phone} 'http://alerts.test/ops/json?poll=1'";
 in
 pkgs.testers.runNixOSTest {
   name = "suveraen";
@@ -139,7 +140,10 @@ pkgs.testers.runNixOSTest {
 
         networking.hostId = "0400bdef";
         system.stateVersion = "26.05";
-        environment.systemPackages = [ pkgs.netcat ];
+        environment.systemPackages = [
+          pkgs.netcat
+          pkgs.jq
+        ];
 
         suveraen = {
           adminKeys = [ adminKey ];
@@ -183,6 +187,8 @@ pkgs.testers.runNixOSTest {
     # Gatus silently drops an alerting provider it considers invalid.
     watcher.wait_until_succeeds("journalctl -u gatus | grep -F 'configuredProviders=[ntfy]'")
     watcher.wait_for_unit("nginx.service")
+    watcher.wait_until_succeeds("curl -fsS http://127.0.0.1:8080/health")
+    watcher.wait_until_succeeds("curl -fsS http://127.0.0.1:2586/v1/health")
     server.wait_for_unit("k3s.service")
 
     with subtest("The node is Ready and dual-stack"):
@@ -228,11 +234,11 @@ pkgs.testers.runNixOSTest {
     with subtest("A failing check on the server reaches the phone"):
         # The VM has no ZFS pools, so the health check fails.
         server.fail("systemctl start zfs-health.service")
-        watcher.wait_until_succeeds("${ops} | grep 'server: zfs-health'")
+        server.wait_until_succeeds("${ops} | grep 'server: zfs-health'")
 
     with subtest("Long alerts arrive as plain text, not as an attachment"):
         server.succeed("suveraen-alert big \"$(head -c 20000 /dev/zero | tr '\\0' x)\"")
-        watcher.wait_until_succeeds(
+        server.wait_until_succeeds(
             "${ops} | jq -e 'select(.title == \"server: big\") | (has(\"attachment\") | not) and (.message | length) <= 3800'"
         )
 
@@ -243,14 +249,18 @@ pkgs.testers.runNixOSTest {
             timeout=120,
         )
         # Gatus may have alerted before the first heartbeat; only a new alert counts.
-        count = "${ops} | grep -c 'triggered.*No heartbeat from server' || true"
-        before = int(watcher.succeed(count).strip())
+        count = "${ops} | grep -c '{}.*No heartbeat from server' || true"
+        before = int(server.succeed(count.format("triggered")).strip())
         server.succeed("systemctl stop heartbeat.timer")
-        watcher.wait_until_succeeds(f"test $({count}) -gt {before}", timeout=300)
+        server.wait_until_succeeds(f"test $({count.format('triggered')}) -gt {before}", timeout=300)
+
+    with subtest("The watcher says so when the server reports in again"):
+        resolved = int(server.succeed(count.format("resolved")).strip())
+        server.succeed("systemctl start heartbeat.timer")
+        server.wait_until_succeeds(f"test $({count.format('resolved')}) -gt {resolved}", timeout=300)
 
     with subtest("The server falls back to its second channel when the watcher is gone"):
         watcher.succeed("systemctl stop nginx")
-        server.succeed("systemctl start heartbeat.timer")
         server.wait_until_succeeds(
             "curl -fsS 'http://127.0.0.1:2587/fallback/json?poll=1' | grep 'server: heartbeat.service failed'",
             timeout=300,
