@@ -2,17 +2,36 @@
 let
   cfg = config.suveraen.storage;
   zfs = config.boot.zfs.package;
+  mirrored = lib.length cfg.systemDisks == 2;
+
+  member = {
+    type = "zfs";
+    pool = "rpool";
+  };
 
   # disko reads the passphrase from here while formatting; nixos-anywhere puts it there.
-  luks = name: pool: {
+  luks = i: {
     type = "luks";
-    inherit name;
+    name = "crypt-system${toString i}";
     passwordFile = "/tmp/disk.key";
     settings.allowDiscards = true;
-    content = {
-      type = "zfs";
-      inherit pool;
-    };
+    content = member;
+  };
+
+  esp =
+    if mirrored then
+      {
+        type = "mdraid";
+        name = "boot";
+      }
+    else
+      bootFilesystem;
+
+  bootFilesystem = {
+    type = "filesystem";
+    format = "vfat";
+    mountpoint = "/boot";
+    mountOptions = [ "umask=0077" ];
   };
 
   systemDisk = i: device: {
@@ -28,14 +47,11 @@ let
         esp = {
           size = "1G";
           type = "EF00";
-          content = {
-            type = "mdraid";
-            name = "boot";
-          };
+          content = esp;
         };
-        crypt = {
+        system = {
           size = "100%";
-          content = luks "crypt-system${toString i}" "rpool";
+          content = if cfg.encrypted then luks i else member;
         };
       };
     };
@@ -43,7 +59,7 @@ let
 
   pool = datasets: {
     type = "zpool";
-    mode = "mirror";
+    mode = if mirrored then "mirror" else "";
     options = {
       ashift = "12";
       autotrim = "on";
@@ -88,8 +104,17 @@ in
         "/dev/disk/by-id/nvme-SAMSUNG_B"
       ];
       description = ''
-        The two disks mirrored for boot, the system and databases (pool `rpool`, mounted at /, /nix and /var).
+        One disk, or two mirrored, for boot, the system and databases (pool `rpool`, mounted at /, /nix and /var).
         They are wiped on install. Other disks are left alone for the cluster's storage (Ceph).
+      '';
+    };
+
+    encrypted = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Put the system pool on LUKS. The passphrase is typed over SSH at every boot, so such hosts never reboot by themselves.
+        Hosts that must come back unattended, like the watcher, go without.
       '';
     };
 
@@ -104,8 +129,11 @@ in
   config = {
     assertions = [
       {
-        assertion = lib.length cfg.systemDisks == 2;
-        message = "suveraen.storage.systemDisks needs exactly two disks.";
+        assertion = lib.elem (lib.length cfg.systemDisks) [
+          1
+          2
+        ];
+        message = "suveraen.storage.systemDisks needs one or two disks.";
       }
     ];
 
@@ -117,15 +145,12 @@ in
       );
 
       # Metadata at the end, so firmware sees each half as a plain ESP.
-      mdadm.boot = {
-        type = "mdadm";
-        level = 1;
-        metadata = "1.0";
-        content = {
-          type = "filesystem";
-          format = "vfat";
-          mountpoint = "/boot";
-          mountOptions = [ "umask=0077" ];
+      mdadm = lib.optionalAttrs mirrored {
+        boot = {
+          type = "mdadm";
+          level = 1;
+          metadata = "1.0";
+          content = bootFilesystem;
         };
       };
 
@@ -148,8 +173,8 @@ in
     boot.supportedFilesystems.zfs = true;
     boot.kernelParams = [ "zfs.zfs_arc_max=${toString cfg.arcMax}" ];
     boot.zfs.forceImportRoot = false;
-    # The pool sits on LUKS, and unlocking over SSH takes longer than the import's own wait.
-    boot.initrd.systemd.services.zfs-import-rpool = {
+    # Unlocking over SSH takes longer than the import's own wait for the LUKS devices.
+    boot.initrd.systemd.services.zfs-import-rpool = lib.mkIf cfg.encrypted {
       after = [ "cryptsetup.target" ];
       wants = [ "cryptsetup.target" ];
     };

@@ -13,6 +13,8 @@ let
 in
 {
   options.suveraen.cluster = {
+    enable = lib.mkEnableOption "a k3s server with Flux";
+
     repository = lib.mkOption {
       type = lib.types.str;
       example = "https://github.com/owner/suveraen";
@@ -47,7 +49,7 @@ in
     };
   };
 
-  config = {
+  config = lib.mkIf cfg.enable {
     services.k3s = {
       enable = true;
       # k3s only supports upgrading one minor version at a time.

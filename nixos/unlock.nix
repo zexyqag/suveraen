@@ -20,7 +20,7 @@ in
     };
   };
 
-  config = {
+  config = lib.mkIf config.suveraen.storage.encrypted {
     boot.initrd.network = {
       enable = true;
       ssh = {

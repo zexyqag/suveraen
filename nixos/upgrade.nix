@@ -2,6 +2,8 @@
 let
   cfg = config.suveraen.upgrade;
   alert = lib.getExe config.suveraen.alerts.command;
+  # An encrypted host would sit at the passphrase prompt after rebooting.
+  canReboot = !config.suveraen.storage.encrypted;
 in
 {
   options.suveraen.upgrade.flake = lib.mkOption {
@@ -10,8 +12,8 @@ in
     example = "github:owner/repo";
     description = ''
       Flake the host follows: every night it switches to that flake's configuration for its hostname.
-      It never reboots by itself, since the disks then wait for the passphrase; it sends an alert when a reboot is due.
-      null leaves updates to manual deploys.
+      Unencrypted hosts reboot by themselves when a new kernel needs it; encrypted ones send an alert instead,
+      since their disks then wait for the passphrase. null leaves updates to manual deploys.
     '';
   };
 
@@ -25,9 +27,14 @@ in
       ];
       dates = "04:00";
       randomizedDelaySec = "30min";
+      allowReboot = canReboot;
+      rebootWindow = lib.mkIf canReboot {
+        lower = "04:00";
+        upper = "06:00";
+      };
     };
 
-    systemd.services.reboot-check = {
+    systemd.services.reboot-check = lib.mkIf (!canReboot) {
       description = "Alert when the running kernel is older than the installed one";
       wantedBy = [ "nixos-upgrade.service" ];
       after = [ "nixos-upgrade.service" ];

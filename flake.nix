@@ -15,6 +15,16 @@
       nixpkgs,
       disko,
     }:
+    let
+      build =
+        host:
+        (nixpkgs.lib.nixosSystem {
+          modules = [
+            self.nixosModules.default
+            host
+          ];
+        }).config.system.build.toplevel;
+    in
     {
       nixosModules.default = {
         imports = [
@@ -24,13 +34,8 @@
       };
 
       checks.x86_64-linux = {
-        example =
-          (nixpkgs.lib.nixosSystem {
-            modules = [
-              self.nixosModules.default
-              ./checks/example.nix
-            ];
-          }).config.system.build.toplevel;
+        server = build ./checks/server.nix;
+        watcher = build ./checks/watcher.nix;
 
         vm = import ./checks/vm.nix {
           pkgs = nixpkgs.legacyPackages.x86_64-linux;

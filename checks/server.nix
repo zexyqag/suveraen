@@ -20,6 +20,7 @@
       ipv6Gateway = "fe80::1";
     };
     cluster = {
+      enable = true;
       repository = "https://example.org/suveraen.git";
       path = "./clusters/example";
       nodeIP = [
@@ -28,7 +29,14 @@
       ];
       sopsAgeKeyFile = "/run/secrets/flux-age-key";
     };
-    alerts.ntfyUrlFile = "/run/secrets/ntfy-url";
+    alerts = {
+      url = "https://alerts.example.org/ops";
+      tokenFile = "/run/secrets/alerts-token";
+      heartbeat = {
+        url = "https://status.example.org/api/v1/endpoints/servers_example/external";
+        tokenFile = "/run/secrets/heartbeat-token";
+      };
+    };
     upgrade.flake = "github:example/example";
   };
 }
