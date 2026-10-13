@@ -14,7 +14,11 @@ let
     type = "luks";
     name = "crypt-system${toString i}";
     passwordFile = "/tmp/disk.key";
-    settings.allowDiscards = true;
+    settings = {
+      allowDiscards = true;
+      # A wrong passphrase at boot asks again instead of giving up after three, which would need a hard reset.
+      crypttabExtraOpts = [ "tries=0" ];
+    };
     content = member;
   };
 

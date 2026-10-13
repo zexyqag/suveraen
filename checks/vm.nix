@@ -5,7 +5,8 @@
 # takes known publishers and keeps its account API, stats and attachments closed; the server's
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
 # server falls back to a second channel when the watcher is gone. The server and its Flux only take
-# commits signed by a release signer, and the server never goes back to an older one.
+# commits signed by a release signer, the server never goes back to an older one, and it alerts
+# when its configuration gets old.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -107,8 +108,7 @@ pkgs.testers.runNixOSTest {
           cores = 2;
         };
 
-        # No LUKS or boot-time SSH in the VM: it boots from its own plain disk.
-        boot.initrd.luks.devices = lib.mkForce { };
+        # The VM boots from its own plain disk, so there's nothing to unlock at boot.
         boot.initrd.network.enable = lib.mkForce false;
 
         # The test network has no IPv6 router; give the node an address and a route.
@@ -201,6 +201,8 @@ pkgs.testers.runNixOSTest {
       inVM = builtins.replaceStrings [ repository ] [ "file:///srv/release" ];
       releaseFlake = pkgs.lib.escapeShellArg (inVM nodes.server.suveraen.source.flake);
       resolve = inVM nodes.server.systemd.services.nixos-upgrade.preStart;
+      inherit (nodes.server.systemd.services.nixos-upgrade) postStart;
+      staleDays = toString (nodes.server.suveraen.upgrade.staleAfterDays + 1);
     in
     ''
       start_all()
@@ -270,7 +272,7 @@ pkgs.testers.runNixOSTest {
           )
           release_flake = """${releaseFlake}"""
           resolve = """${resolve}"""
-          record = "cp /run/suveraen-upgrade/revcount /var/lib/suveraen-upgrade/revcount"
+          record = """${postStart}"""
           server.succeed(
               "install -m 600 ${keys.snakeOilEd25519PrivateKey} /root/signer"
               " && install -m 600 ${keys.snakeOilPrivateKey} /root/other && ssh-keygen -y -f /root/other > /root/other.pub"
@@ -354,6 +356,15 @@ pkgs.testers.runNixOSTest {
           server.wait_until_succeeds(
               "${ops} | jq -e 'select(.title == \"server: big\") | (has(\"attachment\") | not) and (.message | length) <= 3800'"
           )
+
+      with subtest("A host running an old configuration says so"):
+          server.succeed("systemctl start release-age.service")
+          server.fail("${ops} | grep -F 'server: stale configuration'")
+          server.succeed(
+              "echo $(( $(date +%s) - ${staleDays} * 86400 )) > /var/lib/suveraen-upgrade/lastmodified"
+          )
+          server.succeed("systemctl start release-age.service")
+          server.wait_until_succeeds("${ops} | grep -F 'server: stale configuration'")
 
       with subtest("The watcher raises an alert when the server goes quiet"):
           watcher.wait_until_succeeds(

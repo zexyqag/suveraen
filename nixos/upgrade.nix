@@ -6,6 +6,7 @@
 }:
 let
   inherit (config.suveraen.source) flake;
+  cfg = config.suveraen.upgrade;
   alert = lib.getExe config.suveraen.alerts.command;
   # An encrypted host would sit at the passphrase prompt after rebooting.
   canReboot = !config.suveraen.storage.encrypted;
@@ -26,17 +27,28 @@ let
       meta=$(nix flake metadata --json --refresh "$1")
       rev=$(jq -er .revision <<<"$meta")
       count=$(jq -er .revCount <<<"$meta")
+      modified=$(jq -er .lastModified <<<"$meta")
       deployed=$(cat ${state}/revcount 2>/dev/null || echo 0)
       if [ "$count" -lt "$deployed" ]; then
         echo "Refusing $rev: it is older than the deployed release ($count commits, deployed $deployed)." >&2
         exit 1
       fi
       echo "$count" >/run/suveraen-upgrade/revcount
+      echo "$modified" >/run/suveraen-upgrade/lastmodified
       echo "$1&rev=$rev" >/run/suveraen-upgrade/flake
     '';
   };
 in
 {
+  options.suveraen.upgrade.staleAfterDays = lib.mkOption {
+    type = lib.types.ints.positive;
+    default = 14;
+    description = ''
+      Alert once a day when the configuration this host runs was committed longer ago than this. It catches releases
+      that stopped coming as well as a branch someone keeps frozen.
+    '';
+  };
+
   # Every night the host switches to its configuration (named after its hostname) from suveraen.source.
   # Unencrypted hosts reboot by themselves when a new kernel needs it; encrypted ones send an alert instead,
   # since their disks then wait for the passphrase.
@@ -64,7 +76,22 @@ in
         StateDirectory = "suveraen-upgrade";
       };
       preStart = "${lib.getExe resolve} ${lib.escapeShellArg flake}";
-      postStart = "cp /run/suveraen-upgrade/revcount ${state}/revcount";
+      postStart = "cp /run/suveraen-upgrade/revcount /run/suveraen-upgrade/lastmodified ${state}/";
+    };
+
+    systemd.services.release-age = {
+      description = "Alert when this host's configuration is old";
+      startAt = "12:00";
+      serviceConfig.Type = "oneshot";
+      script = ''
+        # Nothing to compare before the first upgrade.
+        [ -e ${state}/lastmodified ] || exit 0
+        modified=$(< ${state}/lastmodified)
+        days=$(( ($(date +%s) - modified) / 86400 ))
+        if [ "$days" -ge ${toString cfg.staleAfterDays} ]; then
+          ${alert} "stale configuration" "The configuration this host runs dates from $(date -ud "@$modified" +%F), $days days ago."
+        fi
+      '';
     };
 
     systemd.services.reboot-check = lib.mkIf (!canReboot) {
@@ -82,6 +109,9 @@ in
     };
 
     # An unsigned or older branch head makes the upgrade fail, which alerts.
-    suveraen.alerts.units = [ "nixos-upgrade" ];
+    suveraen.alerts.units = [
+      "nixos-upgrade"
+      "release-age"
+    ];
   };
 }

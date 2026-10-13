@@ -65,6 +65,11 @@
           inherit pkgs;
           module = self.nixosModules.default;
         };
+
+        unlock = import ./checks/unlock.nix {
+          inherit pkgs;
+          module = self.nixosModules.default;
+        };
       };
     };
 }

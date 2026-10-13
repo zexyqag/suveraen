@@ -10,6 +10,15 @@ in
       description = "Port of the SSH server that runs during boot to take the disk passphrase.";
     };
 
+    keys = lib.mkOption {
+      type = lib.types.listOf (lib.types.strMatching "[a-z0-9@.-]+ [A-Za-z0-9+/=]+( [[:print:]]*)?");
+      default = [ ];
+      description = ''
+        SSH public keys that may only answer the passphrase prompt at boot, for someone who should be able to unlock
+        the disks without getting into the running system. Plain keys, without options of their own.
+      '';
+    };
+
     hostKey = lib.mkOption {
       type = lib.types.str;
       default = "/etc/secrets/initrd/ssh_host_ed25519_key";
@@ -27,7 +36,7 @@ in
         enable = true;
         inherit (cfg) port;
         hostKeys = [ cfg.hostKey ];
-        authorizedKeys = config.suveraen.adminKeys;
+        authorizedKeys = config.suveraen.adminKeys ++ map (key: "restrict,pty ${key}") cfg.keys;
       };
     };
 
