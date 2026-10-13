@@ -59,6 +59,7 @@ pkgs.testers.runNixOSTest {
 
         networking.hostId = "0400bdef";
         system.stateVersion = "26.05";
+        environment.systemPackages = [ pkgs.netcat ];
 
         suveraen = {
           adminKeys = [
@@ -94,7 +95,7 @@ pkgs.testers.runNixOSTest {
             "kubectl get node server -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' | grep True",
             timeout=600,
         )
-        server.succeed("kubectl get node server -o jsonpath='{.spec.podCIDRs}' | grep fd42")
+        server.wait_until_succeeds("kubectl get node server -o jsonpath='{.spec.podCIDRs}' | grep fd42", timeout=120)
 
     with subtest("Secrets are encrypted at rest"):
         server.succeed("k3s secrets-encrypt status | grep 'Encryption Status: Enabled'")
@@ -113,6 +114,12 @@ pkgs.testers.runNixOSTest {
         ntfy.succeed("nc -z -w 5 server 22")
         ntfy.fail("nc -z -w 5 server 6443")
         ntfy.fail("nc -z -w 5 server 10250")
+        # NodePorts are forwarded before the host firewall sees them, so they only answer on loopback.
+        server.succeed("kubectl -n kube-system rollout status deployment coredns --timeout=300s")
+        server.succeed("kubectl -n kube-system expose deployment coredns --name=probe --type=NodePort --port=53 --protocol=TCP")
+        port = server.succeed("kubectl -n kube-system get service probe -o jsonpath='{.spec.ports[0].nodePort}'").strip()
+        server.wait_until_succeeds(f"nc -z -w 5 127.0.0.1 {port}")
+        ntfy.fail(f"nc -z -w 5 server {port}")
 
     with subtest("A failing check sends an alert"):
         # The VM has no ZFS pools, so the health check fails.

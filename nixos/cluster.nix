@@ -65,6 +65,8 @@ in
         "--flannel-ipv6-masq"
         "--cluster-cidr=10.42.0.0/16,fd42::/56"
         "--service-cidr=10.43.0.0/16,fd43::/112"
+        # NodePorts are forwarded before the host firewall sees them; keep them off public addresses.
+        "--kube-proxy-arg=nodeport-addresses=127.0.0.0/8,::1/128"
       ];
       manifests = {
         flux-components.source = fluxComponents;
