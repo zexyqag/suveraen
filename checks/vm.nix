@@ -3,7 +3,8 @@
 # pods resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
 # takes known publishers and keeps its account API, stats and attachments closed; the server's
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
-# server falls back to a second channel when the watcher is gone.
+# server falls back to a second channel when the watcher is gone. The server and its Flux only take
+# commits signed by a release signer.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -31,6 +32,10 @@ let
     printf '%s' ${publisherToken} > $out/publisher-token
     printf '%s' ${heartbeatToken} > $out/heartbeat-token
   '';
+
+  # nixpkgs' well-known test keys: the ed25519 one signs releases, the other one isn't a signer.
+  keys = import "${pkgs.path}/nixos/tests/ssh-keys.nix" pkgs;
+  signer = keys.snakeOilEd25519PublicKey;
 
   # "en*" would also match eth1, the test network, through its alternative names.
   uplink = "eth0";
@@ -147,6 +152,7 @@ pkgs.testers.runNixOSTest {
         environment.systemPackages = [
           pkgs.netcat
           pkgs.jq
+          pkgs.git
         ];
 
         suveraen = {
@@ -156,9 +162,13 @@ pkgs.testers.runNixOSTest {
             "/dev/disk/by-id/test-1"
           ];
           network.interface = uplink;
+          source = {
+            inherit repository;
+            signers = [ signer ];
+          };
           cluster = {
             enable = true;
-            inherit repository path;
+            inherit path;
             nodeIP = [
               config.networking.primaryIPAddress
               "fd00::2"
@@ -183,121 +193,151 @@ pkgs.testers.runNixOSTest {
       };
   };
 
-  testScript = ''
-    start_all()
+  testScript =
+    { nodes, ... }:
+    let
+      # The server's own upgrade reference, pointed at a repository inside the VM.
+      releaseFlake =
+        builtins.replaceStrings [ repository ] [ "file:///srv/release" ]
+          nodes.server.system.autoUpgrade.flake;
+    in
+    ''
+      start_all()
 
-    watcher.wait_for_unit("ntfy-sh.service")
-    watcher.wait_for_unit("gatus.service")
-    # Gatus silently drops an alerting provider it considers invalid.
-    watcher.wait_until_succeeds("journalctl -u gatus | grep -F 'configuredProviders=[ntfy]'")
-    watcher.wait_for_unit("nginx.service")
-    watcher.wait_until_succeeds("curl -fsS http://127.0.0.1:8080/health")
-    watcher.wait_until_succeeds("curl -fsS http://127.0.0.1:2586/v1/health")
-    server.wait_for_unit("k3s.service")
+      watcher.wait_for_unit("ntfy-sh.service")
+      watcher.wait_for_unit("gatus.service")
+      # Gatus silently drops an alerting provider it considers invalid.
+      watcher.wait_until_succeeds("journalctl -u gatus | grep -F 'configuredProviders=[ntfy]'")
+      watcher.wait_for_unit("nginx.service")
+      watcher.wait_until_succeeds("curl -fsS http://127.0.0.1:8080/health")
+      watcher.wait_until_succeeds("curl -fsS http://127.0.0.1:2586/v1/health")
+      server.wait_for_unit("k3s.service")
 
-    with subtest("The node is Ready and dual-stack"):
-        server.wait_until_succeeds(
-            "kubectl get node server -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' | grep True",
-            timeout=600,
-        )
-        server.wait_until_succeeds("kubectl get node server -o jsonpath='{.spec.podCIDRs}' | grep fd42", timeout=120)
+      with subtest("The node is Ready and dual-stack"):
+          server.wait_until_succeeds(
+              "kubectl get node server -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' | grep True",
+              timeout=600,
+          )
+          server.wait_until_succeeds("kubectl get node server -o jsonpath='{.spec.podCIDRs}' | grep fd42", timeout=120)
 
-    with subtest("Secrets are encrypted at rest"):
-        server.succeed("k3s secrets-encrypt status | grep 'Encryption Status: Enabled'")
+      with subtest("Secrets are encrypted at rest"):
+          server.succeed("k3s secrets-encrypt status | grep 'Encryption Status: Enabled'")
 
-    with subtest("Flux is installed and follows the repository"):
-        server.wait_until_succeeds("kubectl -n flux-system get deployment source-controller", timeout=300)
-        server.wait_until_succeeds(
-            "kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.url}' | grep -F '${repository}'"
-        )
-        server.succeed(
-            "kubectl -n flux-system get kustomization cluster -o jsonpath='{.spec.path}' | grep -F '${path}'"
-        )
-        server.wait_until_succeeds("kubectl -n flux-system get secret sops-age", timeout=300)
+      with subtest("Flux is installed and follows the repository"):
+          server.wait_until_succeeds("kubectl -n flux-system get deployment source-controller", timeout=300)
+          server.wait_until_succeeds(
+              "kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.url}' | grep -F '${repository}'"
+          )
+          server.succeed(
+              "kubectl -n flux-system get kustomization cluster -o jsonpath='{.spec.path}' | grep -F '${path}'"
+          )
+          server.wait_until_succeeds("kubectl -n flux-system get secret sops-age", timeout=300)
 
-    with subtest("Only SSH and web ports are open from outside"):
-        watcher.succeed("nc -z -w 5 server 22")
-        watcher.fail("nc -z -w 5 server 6443")
-        watcher.fail("nc -z -w 5 server 10250")
-        # NodePorts are forwarded before the host firewall sees them, so they only answer on loopback.
-        server.succeed("kubectl -n kube-system rollout status deployment coredns --timeout=300s")
-        server.succeed("kubectl -n kube-system expose deployment coredns --name=probe --type=NodePort --port=53 --protocol=TCP")
-        port = server.succeed("kubectl -n kube-system get service probe -o jsonpath='{.spec.ports[0].nodePort}'").strip()
-        server.wait_until_succeeds(f"nc -z -w 5 127.0.0.1 {port}")
-        watcher.fail(f"nc -z -w 5 server {port}")
+      with subtest("Flux and the server only deploy commits signed by a release signer"):
+          server.succeed("kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.verify.mode}' | grep -x HEAD")
+          server.wait_until_succeeds(
+              "kubectl -n flux-system get secret release-signers -o jsonpath='{.data.signer-0\\.sshpub}'"
+              " | base64 -d | grep -x '${pkgs.lib.concatStringsSep " " (pkgs.lib.take 2 (pkgs.lib.splitString " " signer))}'",
+              timeout=120,
+          )
+          release_flake = """${releaseFlake}"""
+          server.succeed(
+              "install -m 600 ${keys.snakeOilEd25519PrivateKey} /root/signer"
+            " && install -m 600 ${keys.snakeOilPrivateKey} /root/other"
+              " && git init -q -b main /srv/release && cd /srv/release"
+              " && git config user.name test && git config user.email test@example.org && git config gpg.format ssh"
+              " && echo '{ outputs = _: { release = \"signed\"; }; }' > flake.nix && git add flake.nix"
+              " && git -c user.signingkey=/root/signer commit -qS -m signed"
+          )
+          server.succeed(f"nix eval --raw {release_flake}#release | grep -x signed")
+          server.succeed("cd /srv/release && git commit -q --allow-empty -m unsigned")
+          server.fail(f"nix eval --raw {release_flake}#release")
+          server.succeed("cd /srv/release && git -c user.signingkey=/root/other commit -q --allow-empty -S -m other")
+          server.fail(f"nix eval --raw {release_flake}#release")
 
-    with subtest("Hosts and pods resolve names through the node's own resolver"):
-        for node in [server, watcher]:
-            node.succeed("grep -qx 'nameserver 127.0.0.1' /etc/resolv.conf")
-            node.fail("grep '^nameserver' /etc/resolv.conf | grep -vx -e 'nameserver 127.0.0.1' -e 'nameserver ::1'")
-        server.succeed("getent hosts probe.test | grep -F 192.0.2.53")
-        busybox = server.succeed("k3s crictl images -o json | jq -r '.images[].repoTags[]' | grep busybox | head -n1").strip()
-        server.succeed(
-            f"kubectl run dns-probe --image={busybox} --image-pull-policy=Never --restart=Never --command -- nslookup probe.test."
-        )
-        server.wait_until_succeeds(
-            "kubectl get pod dns-probe -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
-        )
-        server.succeed("kubectl logs dns-probe | grep -F 192.0.2.53")
-        server.succeed(
-            f"kubectl run dns-probe-host --image={busybox} --image-pull-policy=Never --restart=Never"
-            """ --overrides='{"spec":{"hostNetwork":true}}' --command -- nslookup probe.test."""
-        )
-        server.wait_until_succeeds(
-            "kubectl get pod dns-probe-host -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
-        )
-        server.succeed("kubectl logs dns-probe-host | grep -F 192.0.2.53")
+      with subtest("Only SSH and web ports are open from outside"):
+          watcher.succeed("nc -z -w 5 server 22")
+          watcher.fail("nc -z -w 5 server 6443")
+          watcher.fail("nc -z -w 5 server 10250")
+          # NodePorts are forwarded before the host firewall sees them, so they only answer on loopback.
+          server.succeed("kubectl -n kube-system rollout status deployment coredns --timeout=300s")
+          server.succeed("kubectl -n kube-system expose deployment coredns --name=probe --type=NodePort --port=53 --protocol=TCP")
+          port = server.succeed("kubectl -n kube-system get service probe -o jsonpath='{.spec.ports[0].nodePort}'").strip()
+          server.wait_until_succeeds(f"nc -z -w 5 127.0.0.1 {port}")
+          watcher.fail(f"nc -z -w 5 server {port}")
 
-    with subtest("Clocks follow NTS servers"):
-        for node in [server, watcher]:
-            node.succeed("systemctl is-active chronyd")
-            node.succeed(
-                "conf=$(systemctl show chronyd -p ExecStart --value | grep -o '/nix/store/[^ ;]*chrony.conf')"
-                " && grep -Eq '^server .* nts$' $conf && ! grep '^server ' $conf | grep -vq ' nts$'"
-            )
+      with subtest("Hosts and pods resolve names through the node's own resolver"):
+          for node in [server, watcher]:
+              node.succeed("grep -qx 'nameserver 127.0.0.1' /etc/resolv.conf")
+              node.fail("grep '^nameserver' /etc/resolv.conf | grep -vx -e 'nameserver 127.0.0.1' -e 'nameserver ::1'")
+          server.succeed("getent hosts probe.test | grep -F 192.0.2.53")
+          busybox = server.succeed("k3s crictl images -o json | jq -r '.images[].repoTags[]' | grep busybox | head -n1").strip()
+          server.succeed(
+              f"kubectl run dns-probe --image={busybox} --image-pull-policy=Never --restart=Never --command -- nslookup probe.test."
+          )
+          server.wait_until_succeeds(
+              "kubectl get pod dns-probe -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
+          )
+          server.succeed("kubectl logs dns-probe | grep -F 192.0.2.53")
+          server.succeed(
+              f"kubectl run dns-probe-host --image={busybox} --image-pull-policy=Never --restart=Never"
+              """ --overrides='{"spec":{"hostNetwork":true}}' --command -- nslookup probe.test."""
+          )
+          server.wait_until_succeeds(
+              "kubectl get pod dns-probe-host -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
+          )
+          server.succeed("kubectl logs dns-probe-host | grep -F 192.0.2.53")
 
-    with subtest("ntfy only takes messages from known publishers"):
-        server.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d spam http://alerts.test/ops) = 403")
-        server.succeed("test $(curl -s -o /dev/null -w '%{http_code}' ${phone} -d spam http://alerts.test/ops) = 403")
-        server.fail("curl -fsS 'http://alerts.test/ops/json?poll=1'")
+      with subtest("Clocks follow NTS servers"):
+          for node in [server, watcher]:
+              node.succeed("systemctl is-active chronyd")
+              node.succeed(
+                  "conf=$(systemctl show chronyd -p ExecStart --value | grep -o '/nix/store/[^ ;]*chrony.conf')"
+                  " && grep -Eq '^server .* nts$' $conf && ! grep '^server ' $conf | grep -vq ' nts$'"
+              )
 
-    with subtest("ntfy's account API and stats are closed"):
-        for p in ["/v1/account", "/v1/account/token", "/v1/stats"]:
-            server.succeed(f"test $(curl -s -o /dev/null -w '%{{http_code}}' ${phone} http://alerts.test{p}) = 404")
+      with subtest("ntfy only takes messages from known publishers"):
+          server.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d spam http://alerts.test/ops) = 403")
+          server.succeed("test $(curl -s -o /dev/null -w '%{http_code}' ${phone} -d spam http://alerts.test/ops) = 403")
+          server.fail("curl -fsS 'http://alerts.test/ops/json?poll=1'")
 
-    with subtest("A failing check on the server reaches the phone"):
-        # The VM has no ZFS pools, so the health check fails.
-        server.fail("systemctl start zfs-health.service")
-        server.wait_until_succeeds("${ops} | grep 'server: ZFS pool unhealthy'")
+      with subtest("ntfy's account API and stats are closed"):
+          for p in ["/v1/account", "/v1/account/token", "/v1/stats"]:
+              server.succeed(f"test $(curl -s -o /dev/null -w '%{{http_code}}' ${phone} http://alerts.test{p}) = 404")
 
-    with subtest("Long alerts arrive as plain text, not as an attachment"):
-        server.succeed("suveraen-alert big \"$(head -c 20000 /dev/zero | tr '\\0' x)\"")
-        server.wait_until_succeeds(
-            "${ops} | jq -e 'select(.title == \"server: big\") | (has(\"attachment\") | not) and (.message | length) <= 3800'"
-        )
+      with subtest("A failing check on the server reaches the phone"):
+          # The VM has no ZFS pools, so the health check fails.
+          server.fail("systemctl start zfs-health.service")
+          server.wait_until_succeeds("${ops} | grep 'server: ZFS pool unhealthy'")
 
-    with subtest("The watcher raises an alert when the server goes quiet"):
-        watcher.wait_until_succeeds(
-            "curl -fsS http://127.0.0.1:8080/api/v1/endpoints/statuses"
-            " | jq -e '.[] | select(.key == \"servers_server\") | .results | any(.success)'",
-            timeout=120,
-        )
-        # Gatus may have alerted before the first heartbeat; only a new alert counts.
-        count = "${ops} | grep -c '{}.*No heartbeat from server' || true"
-        before = int(server.succeed(count.format("triggered")).strip())
-        server.succeed("systemctl stop heartbeat.timer")
-        server.wait_until_succeeds(f"test $({count.format('triggered')}) -gt {before}", timeout=300)
+      with subtest("Long alerts arrive as plain text, not as an attachment"):
+          server.succeed("suveraen-alert big \"$(head -c 20000 /dev/zero | tr '\\0' x)\"")
+          server.wait_until_succeeds(
+              "${ops} | jq -e 'select(.title == \"server: big\") | (has(\"attachment\") | not) and (.message | length) <= 3800'"
+          )
 
-    with subtest("The watcher says so when the server reports in again"):
-        resolved = int(server.succeed(count.format("resolved")).strip())
-        server.succeed("systemctl start heartbeat.timer")
-        server.wait_until_succeeds(f"test $({count.format('resolved')}) -gt {resolved}", timeout=300)
+      with subtest("The watcher raises an alert when the server goes quiet"):
+          watcher.wait_until_succeeds(
+              "curl -fsS http://127.0.0.1:8080/api/v1/endpoints/statuses"
+              " | jq -e '.[] | select(.key == \"servers_server\") | .results | any(.success)'",
+              timeout=120,
+          )
+          # Gatus may have alerted before the first heartbeat; only a new alert counts.
+          count = "${ops} | grep -c '{}.*No heartbeat from server' || true"
+          before = int(server.succeed(count.format("triggered")).strip())
+          server.succeed("systemctl stop heartbeat.timer")
+          server.wait_until_succeeds(f"test $({count.format('triggered')}) -gt {before}", timeout=300)
 
-    with subtest("The server falls back to its second channel when the watcher is gone"):
-        watcher.succeed("systemctl stop nginx")
-        server.wait_until_succeeds(
-            "curl -fsS 'http://127.0.0.1:2587/fallback/json?poll=1' | grep 'server: heartbeat.service failed'",
-            timeout=300,
-        )
-  '';
+      with subtest("The watcher says so when the server reports in again"):
+          resolved = int(server.succeed(count.format("resolved")).strip())
+          server.succeed("systemctl start heartbeat.timer")
+          server.wait_until_succeeds(f"test $({count.format('resolved')}) -gt {resolved}", timeout=300)
+
+      with subtest("The server falls back to its second channel when the watcher is gone"):
+          watcher.succeed("systemctl stop nginx")
+          server.wait_until_succeeds(
+              "curl -fsS 'http://127.0.0.1:2587/fallback/json?poll=1' | grep 'server: heartbeat.service failed'",
+              timeout=300,
+          )
+    '';
 }

@@ -19,9 +19,14 @@
       ipv6 = "2001:db8::2/64";
       ipv6Gateway = "fe80::1";
     };
+    source = {
+      repository = "https://example.org/suveraen.git";
+      signers = [
+        "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tAAAAIIRVCuHQX9vy2/6+Z12L+Hxgx/+KwH4eEKwiyK/r+ZKrAAAABHNzaDo= example"
+      ];
+    };
     cluster = {
       enable = true;
-      repository = "https://example.org/suveraen.git";
       path = "./clusters/example";
       nodeIP = [
         "203.0.113.10"
@@ -41,6 +46,5 @@
         tokenFile = "/run/secrets/heartbeat-token";
       };
     };
-    upgrade.flake = "github:example/example";
   };
 }

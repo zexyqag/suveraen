@@ -7,3 +7,4 @@
 !/flake.lock
 !/nixos/
 !/checks/
+!/release/

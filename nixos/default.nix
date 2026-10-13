@@ -9,6 +9,7 @@
     ./cluster.nix
     ./watcher.nix
     ./alerts.nix
+    ./source.nix
     ./upgrade.nix
   ];
 }

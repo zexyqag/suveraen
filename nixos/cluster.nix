@@ -6,6 +6,7 @@
 }:
 let
   cfg = config.suveraen.cluster;
+  source = config.suveraen.source;
 
   fluxComponents = pkgs.runCommand "flux-components.yaml" { } ''
     ${lib.getExe pkgs.fluxcd} install --export > $out
@@ -27,22 +28,10 @@ in
   options.suveraen.cluster = {
     enable = lib.mkEnableOption "a k3s server with Flux";
 
-    repository = lib.mkOption {
-      type = lib.types.str;
-      example = "https://github.com/owner/suveraen";
-      description = "Public Git repository that Flux keeps the cluster in sync with.";
-    };
-
-    branch = lib.mkOption {
-      type = lib.types.str;
-      default = "main";
-      description = "Branch Flux follows.";
-    };
-
     path = lib.mkOption {
       type = lib.types.str;
       example = "./clusters/example";
-      description = "Directory in the repository that describes this cluster.";
+      description = "Directory in suveraen.source.repository that describes this cluster.";
     };
 
     nodeIP = lib.mkOption {
@@ -62,6 +51,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = source.repository != null;
+        message = "suveraen.cluster needs suveraen.source.repository for Flux to follow.";
+      }
+    ];
+
     services.k3s = {
       enable = true;
       # k3s only supports upgrading one minor version at a time.
@@ -95,8 +91,29 @@ in
           };
           spec = {
             interval = "5m";
-            url = cfg.repository;
-            ref.branch = cfg.branch;
+            url = source.repository;
+            ref.branch = source.branch;
+          }
+          # Flux keeps the last verified commit when the head isn't signed by a signer.
+          // lib.optionalAttrs (source.signers != [ ]) {
+            verify = {
+              mode = "HEAD";
+              secretRef.name = "release-signers";
+            };
+          };
+        };
+        flux-signers = lib.mkIf (source.signers != [ ]) {
+          content = {
+            apiVersion = "v1";
+            kind = "Secret";
+            metadata = {
+              name = "release-signers";
+              namespace = "flux-system";
+            };
+            # Public keys, so the world-readable store is fine. Flux wants just "type key" per entry.
+            stringData = lib.listToAttrs (
+              lib.imap0 (i: k: lib.nameValuePair "signer-${toString i}.sshpub" "${k.type} ${k.key}") source.keys
+            );
           };
         };
         flux-sync.content = {

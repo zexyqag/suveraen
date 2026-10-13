@@ -1,28 +1,20 @@
 { config, lib, ... }:
 let
-  cfg = config.suveraen.upgrade;
+  inherit (config.suveraen.source) flake;
   alert = lib.getExe config.suveraen.alerts.command;
   # An encrypted host would sit at the passphrase prompt after rebooting.
   canReboot = !config.suveraen.storage.encrypted;
 in
 {
-  options.suveraen.upgrade.flake = lib.mkOption {
-    type = lib.types.nullOr lib.types.str;
-    default = null;
-    example = "github:owner/repo";
-    description = ''
-      Flake the host follows: every night it switches to that flake's configuration for its hostname.
-      Unencrypted hosts reboot by themselves when a new kernel needs it; encrypted ones send an alert instead,
-      since their disks then wait for the passphrase. null leaves updates to manual deploys.
-    '';
-  };
-
-  config = lib.mkIf (cfg.flake != null) {
+  # Every night the host switches to its configuration (named after its hostname) from suveraen.source.
+  # Unencrypted hosts reboot by themselves when a new kernel needs it; encrypted ones send an alert instead,
+  # since their disks then wait for the passphrase.
+  config = lib.mkIf (flake != null) {
     system.autoUpgrade = {
       enable = true;
-      inherit (cfg) flake;
+      # The service puts it into a shell script unquoted.
+      flake = lib.escapeShellArg flake;
       flags = [
-        "--refresh"
         "-L"
       ];
       # Rebooting hosts (the watcher) go first, so they are back before the others' alerts arrive.
@@ -49,6 +41,7 @@ in
       '';
     };
 
+    # A head commit without a valid signature makes the upgrade fail, which alerts.
     suveraen.alerts.units = [ "nixos-upgrade" ];
   };
 }

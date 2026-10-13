@@ -43,6 +43,10 @@
       tokenFile = "/run/secrets/alerts-token";
       smart = false;
     };
-    upgrade.flake = "github:example/example";
+    # The watcher runs new changes first, before they are signed for the servers.
+    source = {
+      repository = "https://example.org/suveraen.git";
+      branch = "staging";
+    };
   };
 }
