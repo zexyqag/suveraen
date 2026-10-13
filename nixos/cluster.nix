@@ -156,7 +156,8 @@ in
     };
     services.unbound.settings.server = {
       interface = [ resolver ];
-      access-control = map (cidr: "${cidr} allow") podCIDRs;
+      # Host-network pods query from the resolver's own address.
+      access-control = map (cidr: "${cidr} allow") (podCIDRs ++ [ "${resolver}/32" ]);
     };
 
     # Rook mounts Ceph block devices and file systems from the host kernel.

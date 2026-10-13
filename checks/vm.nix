@@ -239,11 +239,22 @@ pkgs.testers.runNixOSTest {
             "kubectl get pod dns-probe -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
         )
         server.succeed("kubectl logs dns-probe | grep -F 192.0.2.53")
+        server.succeed(
+            f"kubectl run dns-probe-host --image={busybox} --image-pull-policy=Never --restart=Never"
+            """ --overrides='{"spec":{"hostNetwork":true}}' --command -- nslookup probe.test."""
+        )
+        server.wait_until_succeeds(
+            "kubectl get pod dns-probe-host -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
+        )
+        server.succeed("kubectl logs dns-probe-host | grep -F 192.0.2.53")
 
     with subtest("Clocks follow NTS servers"):
         for node in [server, watcher]:
             node.succeed("systemctl is-active chronyd")
-            node.succeed("grep -q ' nts' $(systemctl show chronyd -p ExecStart --value | grep -o '/nix/store/[^ ;]*chrony.conf')")
+            node.succeed(
+                "conf=$(systemctl show chronyd -p ExecStart --value | grep -o '/nix/store/[^ ;]*chrony.conf')"
+                " && grep -Eq '^server .* nts$' $conf && ! grep '^server ' $conf | grep -vq ' nts$'"
+            )
 
     with subtest("ntfy only takes messages from known publishers"):
         server.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d spam http://alerts.test/ops) = 403")
