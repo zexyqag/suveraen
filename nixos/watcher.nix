@@ -118,7 +118,20 @@ in
           # A missed heartbeat already means the whole interval was silent.
           alerts = [ (ntfyAlert "No heartbeat from ${server}" { failure-threshold = 1; }) ];
         }) cfg.servers;
-        endpoints = map (check: {
+        # Gatus refuses to start without a regular endpoint; ntfy's own health is a useful one.
+        endpoints = [
+          {
+            name = "ntfy";
+            group = "watcher";
+            url = "http://127.0.0.1:${toString ntfyPort}/v1/health";
+            interval = "1m";
+            conditions = [
+              "[STATUS] == 200"
+              "[BODY].healthy == true"
+            ];
+          }
+        ]
+        ++ map (check: {
           inherit (check) name url;
           group = "checks";
           interval = "2m";
