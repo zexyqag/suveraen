@@ -1,0 +1,9 @@
+/*
+!/.gitignore
+!/.github/
+!/LICENSE
+!/README.md
+!/flake.nix
+!/flake.lock
+!/modules/
+!/checks/
