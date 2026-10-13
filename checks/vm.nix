@@ -1,7 +1,7 @@
 # Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and
-# pointed at the repository, out of reach of namespace admins, secrets encrypted at rest and only
-# SSH and web ports open. Hosts and
-# pods resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
+# pointed at the repository, out of reach of namespace admins, pods held to the restricted Pod
+# Security Standard, secrets encrypted at rest and only SSH and web ports open. Hosts and pods
+# resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
 # takes known publishers and keeps its account API, stats and attachments closed; the server's
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
 # server falls back to a second channel when the watcher is gone. The server and its Flux only take
@@ -260,6 +260,19 @@ pkgs.testers.runNixOSTest {
           for kind in kinds:
               server.fail(f"kubectl auth can-i create {kind} {member}")
 
+      with subtest("Pods must meet the restricted Pod Security Standard unless the platform labels their namespace"):
+          out = server.fail(f"kubectl run root --image=busybox --restart=Never {member} 2>&1")
+          assert "violates PodSecurity" in out, out
+          server.succeed(
+              f"kubectl run restricted --image=busybox --restart=Never --dry-run=server {member}"
+              """ --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"""
+              """"containers":[{"name":"restricted","image":"busybox","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}'"""
+          )
+          out = server.fail(f"kubectl label namespace member pod-security.kubernetes.io/enforce=privileged {member} 2>&1")
+          assert "forbidden" in out, out
+          # Flux's own pods are created, so they meet the standard too.
+          server.wait_until_succeeds("test $(kubectl -n flux-system get pods --no-headers | wc -l) -ge 4", timeout=120)
+
       with subtest("Flux and the server only deploy commits signed by a release signer"):
           server.succeed("kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.verify.mode}' | grep -x HEAD")
           secret = server.succeed(
@@ -312,22 +325,26 @@ pkgs.testers.runNixOSTest {
               node.succeed("grep -qx 'nameserver 127.0.0.1' /etc/resolv.conf")
               node.fail("grep '^nameserver' /etc/resolv.conf | grep -vx -e 'nameserver 127.0.0.1' -e 'nameserver ::1'")
           server.succeed("getent hosts probe.test | grep -F 192.0.2.53")
+          # The probes run as root and one on the host's network, which only a namespace the platform labels may do.
+          server.succeed(
+              "kubectl create namespace probe && kubectl label namespace probe pod-security.kubernetes.io/enforce=privileged"
+          )
           busybox = server.succeed("k3s crictl images -o json | jq -r '.images[].repoTags[]' | grep busybox | head -n1").strip()
           server.succeed(
-              f"kubectl run dns-probe --image={busybox} --image-pull-policy=Never --restart=Never --command -- nslookup probe.test."
+              f"kubectl -n probe run dns-probe --image={busybox} --image-pull-policy=Never --restart=Never --command -- nslookup probe.test."
           )
           server.wait_until_succeeds(
-              "kubectl get pod dns-probe -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
+              "kubectl -n probe get pod dns-probe -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
           )
-          server.succeed("kubectl logs dns-probe | grep -F 192.0.2.53")
+          server.succeed("kubectl -n probe logs dns-probe | grep -F 192.0.2.53")
           server.succeed(
-              f"kubectl run dns-probe-host --image={busybox} --image-pull-policy=Never --restart=Never"
+              f"kubectl -n probe run dns-probe-host --image={busybox} --image-pull-policy=Never --restart=Never"
               """ --overrides='{"spec":{"hostNetwork":true}}' --command -- nslookup probe.test."""
           )
           server.wait_until_succeeds(
-              "kubectl get pod dns-probe-host -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
+              "kubectl -n probe get pod dns-probe-host -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
           )
-          server.succeed("kubectl logs dns-probe-host | grep -F 192.0.2.53")
+          server.succeed("kubectl -n probe logs dns-probe-host | grep -F 192.0.2.53")
 
       with subtest("Clocks follow NTS servers"):
           for node in [server, watcher]:

@@ -25,6 +25,32 @@ let
     ' > $out
   '';
 
+  # Every pod must meet the "restricted" Pod Security Standard unless the platform labels its namespace otherwise;
+  # namespace admins can't change namespace labels. kube-system holds k3s's own pods.
+  admissionConfig = pkgs.writeText "admission.json" (
+    builtins.toJSON {
+      apiVersion = "apiserver.config.k8s.io/v1";
+      kind = "AdmissionConfiguration";
+      plugins = [
+        {
+          name = "PodSecurity";
+          configuration = {
+            apiVersion = "pod-security.admission.config.k8s.io/v1";
+            kind = "PodSecurityConfiguration";
+            defaults = {
+              enforce = "restricted";
+              enforce-version = "latest";
+              # Also flags Deployments and the like whose pods would be refused.
+              warn = "restricted";
+              warn-version = "latest";
+            };
+            exemptions.namespaces = [ "kube-system" ];
+          };
+        }
+      ];
+    }
+  );
+
   podCIDRs = [
     "10.42.0.0/16"
     "fd42::/56"
@@ -95,6 +121,7 @@ in
         "--service-cidr=${lib.concatStringsSep "," serviceCIDRs}"
         # NodePorts are forwarded before the host firewall sees them; keep them off public addresses.
         "--kube-proxy-arg=nodeport-addresses=127.0.0.0/8,::1/128"
+        "--kube-apiserver-arg=admission-control-config-file=${admissionConfig}"
         # Without it k3s gives pods 8.8.8.8 when the host's resolver is on loopback.
         "--resolv-conf=${pkgs.writeText "resolv.conf" "nameserver ${resolver}\n"}"
       ];

@@ -14,7 +14,7 @@ It runs on Kubernetes (k3s) over NixOS, built to start on one server and grow to
   - `network.nix`: static or DHCP IPv4, static IPv6.
   - `resolver.nix`: every machine resolves names itself with [Unbound](https://nlnetlabs.nl/projects/unbound/) (DNSSEC, no outside resolver), and so do the cluster's pods.
   - `time.nix`: clocks follow several independent time servers over NTS, which authenticates their replies.
-  - `cluster.nix`: a k3s server with embedded etcd, secrets encrypted at rest, WireGuard between nodes, dual-stack networking. It installs [Flux](https://fluxcd.io), which keeps the cluster in sync with this repository; rights within a namespace don't extend to Flux.
+  - `cluster.nix`: a k3s server with embedded etcd, secrets encrypted at rest, WireGuard between nodes, dual-stack networking. It installs [Flux](https://fluxcd.io), which keeps the cluster in sync with this repository; rights within a namespace don't extend to Flux, and pods must meet the restricted Pod Security Standard unless the platform labels their namespace otherwise.
   - `watcher.nix`: the watcher. [ntfy](https://ntfy.sh) for alerts (only known accounts, instant on Android and iPhone, no account API or attachments) and [Gatus](https://gatus.io), which checks the public services and raises an alert when a server stops reporting in.
   - `alerts.nix`: failed jobs and disk or RAID problems are posted to the watcher's ntfy on a secret topic, with a second channel for when the watcher can't be reached; servers report in to Gatus every few minutes.
   - `source.nix`: the repository and branch a machine and its cluster follow, and the release signers: with signers set, Nix on the machine and Flux in the cluster refuse a branch head that none of them signed.
