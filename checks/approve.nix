@@ -51,7 +51,10 @@ pkgs.runCommand "approve-test"
     change two
     git config user.signingkey "$PWD/../other-key"
     expect_refusal "signed with a key that isn't a signer"
-    ! released
+    if released; then
+      echo "a release signed with the wrong key reached main"
+      exit 1
+    fi
 
     good=$(git rev-parse origin/main)
     git checkout -q -B tamper origin/main
@@ -62,6 +65,5 @@ pkgs.runCommand "approve-test"
 
     echo release | approve
     released
-    git verify-commit origin/main 2>/dev/null || true
     touch $out
   ''

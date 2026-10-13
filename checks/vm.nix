@@ -243,7 +243,7 @@ pkgs.testers.runNixOSTest {
           release_flake = """${releaseFlake}"""
           server.succeed(
               "install -m 600 ${keys.snakeOilEd25519PrivateKey} /root/signer"
-            " && install -m 600 ${keys.snakeOilPrivateKey} /root/other"
+            " && install -m 600 ${keys.snakeOilPrivateKey} /root/other && ssh-keygen -y -f /root/other > /root/other.pub"
               " && git init -q -b main /srv/release && cd /srv/release"
               " && git config user.name test && git config user.email test@example.org && git config gpg.format ssh"
               " && echo '{ outputs = _: { release = \"signed\"; }; }' > flake.nix && git add flake.nix"
