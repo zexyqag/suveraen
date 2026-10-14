@@ -97,6 +97,11 @@ pkgs.testers.runNixOSTest {
 
       def diagnose():
           for cmd in [
+              "systemctl show k3s -p NRestarts -p ActiveState",
+              "findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS /",
+              "df -h /",
+              "dmesg | grep -iE 'ext4|i/o error|remount|blk_update|oom' | head -n 40",
+              "journalctl -b -u k3s --no-pager | grep -E 'level=(error|fatal)' | head -n 20",
               "kubectl get gitrepositories,ocirepositories,kustomizations,helmreleases -A",
               "kubectl get pods -A -o wide",
               "kubectl get events -A --sort-by=.lastTimestamp | tail -n 100",
