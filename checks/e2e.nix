@@ -110,6 +110,11 @@ pkgs.testers.runNixOSTest {
               "kubectl -n flux-system logs deploy/helm-controller --tail=100",
           ]:
               print(server.execute(cmd)[1])
+          qmp = server.qmp_client
+          assert qmp is not None
+          qmp.send("query-status")
+          errors = [e["data"] for e in qmp.events() if e["event"] == "BLOCK_IO_ERROR"]
+          print(len(errors), "QEMU block errors, first:", errors[:3])
 
       server.wait_for_unit("k3s.service")
       try:
@@ -122,9 +127,11 @@ pkgs.testers.runNixOSTest {
 
           with subtest("Every Kustomization and HelmRelease becomes Ready"):
               # The root Kustomization is Ready only once it has created the others, so --all covers them all.
-              server.wait_until_succeeds(
-                  "kubectl -n flux-system wait kustomization --all --for=condition=Ready --timeout=0", timeout=1500
-              )
+              def ready(_):
+                  server.fail("dmesg | grep -F 'I/O error'")
+                  return server.execute("kubectl -n flux-system wait kustomization --all --for=condition=Ready --timeout=0")[0] == 0
+
+              retry(ready, timeout_seconds=1500)
               server.succeed("kubectl wait helmrelease -A --all --for=condition=Ready --timeout=0")
 
           with subtest("Every workload runs, and Pod Security refused nothing"):

@@ -42,9 +42,19 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      # The VMs' disks grow with every image they pull; the runner's second disk has the room.
-      - run: |
+      - shell: bash
+        run: |
+          uname -r; ulimit -a; cat /proc/self/cgroup; cat /proc/sys/kernel/io_uring_disabled || true
           sudo install -d -o "$USER" /mnt/e2e
-          TMPDIR=/mnt/e2e nix run -L .#e2e
+          sudo dmesg -wT > /mnt/e2e/host-dmesg 2>&1 &
+          vmstat -t 30 > /mnt/e2e/vmstat &
+          TMPDIR=/mnt/e2e nix run -L .#e2e 2>&1 | tee /mnt/e2e/log
       - if: always()
-        run: df -h / /mnt && free -m
+        shell: bash
+        run: |
+          df -h / /mnt && free -m
+          grep -aE "(qemu-system-x86_64|qcow2|block)[^ ]*:" /mnt/e2e/log | grep -v "terminating on signal" | head -n 30 || true
+          grep -a -m 3 -B 20 "I/O error, dev" /mnt/e2e/log || true
+          tail -n 60 /mnt/e2e/host-dmesg
+          cat /mnt/e2e/vmstat
+          nix shell --inputs-from . nixpkgs#qemu-utils -c qemu-img check -U /mnt/e2e/vm-state-server/server.qcow2 || true
