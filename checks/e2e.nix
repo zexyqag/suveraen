@@ -174,9 +174,6 @@ pkgs.testers.runNixOSTest {
                   f"kubectl -n flux-system get gitrepository suveraen -o jsonpath='{{.status.artifact.revision}}' | grep -F {signed}"
               )
               server.succeed("kubectl -n hello get deployment hello")
-
-          # What the charts resolved to, for pinning any that are still pinned by tag only.
-          print(server.succeed("kubectl get ocirepositories -A -o custom-columns=NAME:.metadata.name,REVISION:.status.artifact.revision"))
       except Exception:
           diagnose()
           raise

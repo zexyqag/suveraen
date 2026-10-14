@@ -107,6 +107,9 @@ pkgs.runCommand "render"
         bad=$(yq ea '[select(.kind == "Namespace") | select(.metadata.labels // {} | keys | any_c(test("^pod-security.kubernetes.io/")))
           | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: namespaces keep the cluster's restricted Pod Security default: $bad"
+        bad=$(yq ea '[select((.kind == "OCIRepository" and .spec.ref.digest == null) or (.kind == "GitRepository" and .spec.ref.commit == null))
+          | .metadata.name] | .[]' "$file")
+        [ -z "$bad" ] || fail "$cluster/$name: sources must be pinned to a digest or a commit: $bad"
         if [ "$name" != gateway ]; then
           bad=$(yq ea '[select(.kind == "Namespace" and .metadata.labels."suveraen/publish" == "true") | .metadata.name] | .[]' "$file")
           [ -z "$bad" ] || fail "$cluster/$name: only the gateway may publish ports: $bad"
