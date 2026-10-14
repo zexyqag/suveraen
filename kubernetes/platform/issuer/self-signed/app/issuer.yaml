@@ -1,0 +1,32 @@
+---
+# For test clusters: the "public" issuer signs with a CA the cluster makes for itself, which nothing outside trusts.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: self-signed
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: public-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: ${DOMAIN} test CA
+  secretName: public-ca
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    kind: ClusterIssuer
+    name: self-signed
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: public
+spec:
+  ca:
+    secretName: public-ca

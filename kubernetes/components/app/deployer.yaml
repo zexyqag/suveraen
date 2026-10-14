@@ -1,0 +1,23 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: flux-deployer
+  annotations:
+    # helm-controller skips the uninstall when this account is gone, so it must outlive the HelmRelease.
+    kustomize.toolkit.fluxcd.io/prune: disabled
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: flux-deployer
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flux-app
+subjects:
+  - kind: ServiceAccount
+    name: flux-deployer

@@ -1,0 +1,50 @@
+---
+# What every Flux Kustomization a cluster lists runs with. These override the ks.yaml files, which set none of
+# these fields.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      group: kustomize.toolkit.fluxcd.io
+      kind: Kustomization
+    patch: |-
+      apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      metadata:
+        name: _
+      spec:
+        # Flux applies only what a release signer signed, with its own cluster-wide account. Charts in app
+        # namespaces get far less: the app component's deployer account.
+        serviceAccountName: kustomize-controller
+        sourceRef:
+          kind: GitRepository
+          name: suveraen
+        interval: 1h
+        retryInterval: 2m
+        timeout: 10m
+        prune: true
+        wait: true
+        postBuild:
+          substituteFrom:
+            - kind: ConfigMap
+              name: cluster-settings
+            - kind: Secret
+              name: cluster-secrets
+              optional: true
+        # With wait, kinds without a Reconciling or Stalled condition count as ready as soon as they exist.
+        healthCheckExprs:
+          - apiVersion: cert-manager.io/v1
+            kind: Certificate
+            current: status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')
+          - apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            current: status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')
+          - apiVersion: gateway.networking.k8s.io/v1
+            kind: Gateway
+            current: status.conditions.exists(c, c.type == 'Programmed' && c.status == 'True')
+          - apiVersion: gateway.networking.k8s.io/v1
+            kind: HTTPRoute
+            current: >-
+              size(status.parents) > 0 && status.parents.all(p,
+              p.conditions.exists(c, c.type == 'Accepted' && c.status == 'True') &&
+              p.conditions.exists(c, c.type == 'ResolvedRefs' && c.status == 'True'))

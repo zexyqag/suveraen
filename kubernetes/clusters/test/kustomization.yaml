@@ -1,0 +1,12 @@
+---
+# The cluster CI deploys (checks/e2e.nix): the whole platform with a self-signed issuer, and every app.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: flux-system
+resources:
+  - ./settings.yaml
+  - ../../platform
+  - ../../platform/issuer/self-signed/ks.yaml
+  - ../../apps/hello/ks.yaml
+components:
+  - ../../components/defaults

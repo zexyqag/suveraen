@@ -1,0 +1,9 @@
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: issuer
+spec:
+  path: ./kubernetes/platform/issuer/self-signed/app
+  dependsOn:
+    - name: cert-manager

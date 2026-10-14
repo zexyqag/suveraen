@@ -74,7 +74,7 @@ in
 
     path = lib.mkOption {
       type = lib.types.str;
-      example = "./clusters/example";
+      example = "./kubernetes/clusters/example";
       description = "Directory in suveraen.source.repository that describes this cluster.";
     };
 
@@ -122,6 +122,8 @@ in
 
         # NodePorts are forwarded before the host firewall sees them; keep them off public addresses.
         "--kube-proxy-arg=nodeport-addresses=127.0.0.0/8,::1/128"
+        # So would a Service's external IPs, for any address it names.
+        "--kube-apiserver-arg=enable-admission-plugins+=DenyServiceExternalIPs"
         "--kube-apiserver-arg=admission-control-config-file=${admissionConfig}"
         # Without it k3s gives pods 8.8.8.8 when the host's resolver is on loopback.
         "--resolv-conf=${pkgs.writeText "resolv.conf" "nameserver ${resolver}\n"}"
@@ -185,8 +187,8 @@ in
             };
             inherit (cfg) path;
             prune = true;
-            # The platform itself is applied with Flux's own cluster-wide account; everything else gets only what
-            # its own service account allows.
+            # Flux applies the signed repository with its own cluster-wide account. The cluster directory gives every
+            # Kustomization it lists the same; charts in an app's namespace get only that namespace's deployer account.
             serviceAccountName = "kustomize-controller";
           }
           // lib.optionalAttrs (cfg.sopsAgeKeyFile != null) {

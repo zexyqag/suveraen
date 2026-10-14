@@ -1,0 +1,34 @@
+---
+# LoadBalancer and NodePort Services get past the host firewall (ServiceLB runs its pods in the exempt kube-system),
+# and ExternalName ones let a route reach any host. Only namespaces with components/publish may create them.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: published-services
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [services]
+    namespaceSelector:
+      matchExpressions:
+        - key: suveraen/publish
+          operator: NotIn
+          values: ["true"]
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system]
+  validations:
+    - expression: "!has(object.spec.type) || object.spec.type == 'ClusterIP'"
+      message: only namespaces the platform labels may publish ports
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: published-services
+spec:
+  policyName: published-services
+  validationActions: [Deny]

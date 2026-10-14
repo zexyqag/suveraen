@@ -1,0 +1,11 @@
+---
+# The platform every cluster runs. Each cluster also lists one issuer (platform/issuer/*), which every piece that
+# needs certificates depends on by its name, "issuer".
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./policies/ks.yaml
+  - ./gateway-api/ks.yaml
+  - ./cert-manager/ks.yaml
+  - ./gateway/ks.yaml
+  - ./reloader/ks.yaml

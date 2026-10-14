@@ -1,0 +1,10 @@
+---
+# Renamed to the Kustomization's targetNamespace. No Pod Security label: the cluster default, restricted, applies.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: _
+  labels:
+    suveraen/tier: app
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled

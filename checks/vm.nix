@@ -1,6 +1,8 @@
 # Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and
 # pointed at the repository, out of reach of namespace admins, pods held to the restricted Pod
-# Security Standard, secrets encrypted at rest and only SSH and web ports open. Hosts and pods
+# Security Standard, secrets encrypted at rest and only SSH and web ports open. An app's charts
+# reach only its own namespace and can neither widen who may act there nor publish ports, no
+# namespace leaves restricted Pod Security, and no Service takes external IPs. Hosts and pods
 # resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
 # takes known publishers and keeps its account API, stats and attachments closed; the server's
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
@@ -10,7 +12,7 @@
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
-  path = "./clusters/test";
+  path = "./kubernetes/clusters/test";
   adminKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN9QsUU2i+9+MwdvtxOsPVD6L24UHYJXVJRI2oe+9oHP example";
 
   # ntfy tokens are "tk_" plus 29 characters.
@@ -93,14 +95,12 @@ pkgs.testers.runNixOSTest {
       };
 
     server =
+      { nodes, ... }:
       {
-        config,
-        lib,
-        nodes,
-        ...
-      }:
-      {
-        imports = [ module ];
+        imports = [
+          module
+          ./vm-server.nix
+        ];
 
         virtualisation = {
           memorySize = 2048;
@@ -108,32 +108,10 @@ pkgs.testers.runNixOSTest {
           cores = 2;
         };
 
-        # The VM boots from its own plain disk, so there's nothing to unlock at boot.
-        boot.initrd.network.enable = lib.mkForce false;
-
-        # The test network has no IPv6 router; give the node an address and a route.
-        networking.interfaces.eth1.ipv6 = {
-          addresses = [
-            {
-              address = "fd00::2";
-              prefixLength = 64;
-            }
-          ];
-          routes = [
-            {
-              address = "::";
-              prefixLength = 0;
-              via = "fd00::1";
-            }
-          ];
-        };
         networking.hosts.${nodes.watcher.networking.primaryIPAddress} = [
           "alerts.test"
           "status.test"
         ];
-
-        # The VM has no internet; k3s's own images come from the release tarball.
-        services.k3s.images = [ config.services.k3s.package.airgap-images ];
 
         # A name only the node's own resolver knows, to show pods resolve through it.
         services.unbound.settings.server.local-data = [ ''"probe.test. A 192.0.2.53"'' ];
@@ -148,8 +126,6 @@ pkgs.testers.runNixOSTest {
           };
         };
 
-        networking.hostId = "0400bdef";
-        system.stateVersion = "26.05";
         environment.systemPackages = [
           pkgs.netcat
           pkgs.jq
@@ -158,22 +134,12 @@ pkgs.testers.runNixOSTest {
 
         suveraen = {
           adminKeys = [ adminKey ];
-          storage.systemDisks = [
-            "/dev/disk/by-id/test-0"
-            "/dev/disk/by-id/test-1"
-          ];
-          network.interface = uplink;
           source = {
             inherit repository;
             signers = [ signer ];
           };
           cluster = {
-            enable = true;
             inherit path;
-            nodeIP = [
-              config.networking.primaryIPAddress
-              "fd00::2"
-            ];
             sopsAgeKeyFile = toString (pkgs.writeText "age-key" "AGE-SECRET-KEY-TEST");
           };
           alerts = {
@@ -275,6 +241,69 @@ pkgs.testers.runNixOSTest {
           # Flux's own pods are created, so they meet the standard too.
           server.wait_until_succeeds("test $(kubectl -n flux-system get pods --no-headers | wc -l) -ge 4", timeout=120)
 
+      with subtest("An app's charts reach only its namespace, and can't widen who may act there or publish ports"):
+          server.succeed(
+              "kubectl apply -f ${../kubernetes/platform/policies/app/flux-app.yaml}"
+              " -f ${../kubernetes/platform/policies/app/rolebinding-subjects.yaml}"
+              " -f ${../kubernetes/platform/policies/app/published-services.yaml}"
+          )
+          # What components/app sets up in every app namespace.
+          server.succeed(
+              "kubectl create namespace app && kubectl label namespace app suveraen/tier=app"
+              " && kubectl -n app create serviceaccount flux-deployer"
+              " && kubectl -n app create rolebinding flux-deployer --clusterrole=flux-app --serviceaccount=app:flux-deployer"
+          )
+          deployer = "-n app --as=system:serviceaccount:app:flux-deployer"
+          server.wait_until_succeeds(f"kubectl auth can-i create deployments {deployer}")
+          for allowed in ["create secrets", "create services", "create roles", "create rolebindings", "create poddisruptionbudgets"]:
+              server.succeed(f"kubectl auth can-i {allowed} {deployer}")
+          for denied in [
+              "create networkpolicies",
+              "create ingresses",
+              "create daemonsets",
+              "create limitranges",
+              "create resourcequotas",
+              "create pods --subresource=exec",
+              "patch namespaces",
+              "create clusterrolebindings",
+              "create customresourcedefinitions",
+              "create helmreleases.helm.toolkit.fluxcd.io",
+          ]:
+              server.fail(f"kubectl auth can-i {denied} {deployer}")
+          server.fail("kubectl auth can-i create deployments -n default --as=system:serviceaccount:app:flux-deployer")
+
+          # Policies take a moment to load after they're created.
+          def refused(cmd, policy):
+              server.wait_until_fails(cmd)
+              out = server.fail(f"{cmd} 2>&1")
+              assert policy in out, out
+
+          refused(
+              f"kubectl create rolebinding wide --clusterrole=flux-app --group=system:authenticated --dry-run=server {deployer}",
+              "rolebinding-subjects",
+          )
+          refused(
+              f"kubectl create rolebinding other --clusterrole=flux-app --serviceaccount=default:default --dry-run=server {deployer}",
+              "rolebinding-subjects",
+          )
+          server.succeed(f"kubectl create rolebinding own --clusterrole=flux-app --serviceaccount=app:own --dry-run=server {deployer}")
+          for kind in ["loadbalancer", "nodeport"]:
+              refused(f"kubectl create service {kind} published --tcp=80 --dry-run=server {deployer}", "published-services")
+          server.succeed(f"kubectl create service clusterip internal --tcp=80 --dry-run=server {deployer}")
+          server.succeed(
+              "kubectl create namespace published && kubectl label namespace published suveraen/publish=true"
+              " && kubectl -n published create service loadbalancer published --tcp=80 --dry-run=server"
+          )
+
+      with subtest("No Service takes external IPs, which would be forwarded before the host firewall sees them"):
+          out = server.fail(
+              """echo '{"apiVersion":"v1","kind":"Service","metadata":{"name":"external","namespace":"default"},"""
+              """"spec":{"ports":[{"port":80}],"externalIPs":["192.0.2.1"]}}' | kubectl create --dry-run=server -f - 2>&1"""
+          )
+          assert "externalIPs" in out, out
+          # The added plugin comes on top of the one k3s enables itself.
+          server.succeed("journalctl -u k3s | grep -F -- --enable-admission-plugins=NodeRestriction")
+
       with subtest("Pods get a process limit and the default seccomp filter"):
           kubelet = json.loads(server.succeed("kubectl get --raw /api/v1/nodes/server/proxy/configz"))["kubeletconfig"]
           assert kubelet["podPidsLimit"] == ${toString nodes.server.services.k3s.extraKubeletConfig.podPidsLimit}, kubelet
@@ -366,6 +395,15 @@ pkgs.testers.runNixOSTest {
           # etcd answers on the node's address, but only to the API server.
           for line in ["open 6443", "open 10250", "closed 2379"]:
               assert line in ports, ports
+
+      with subtest("No namespace leaves the restricted Pod Security default, not even through Flux's own account"):
+          # After the probes above, whose namespace the test labels privileged itself.
+          server.succeed("kubectl apply -f ${../kubernetes/platform/policies/app/pod-security-labels.yaml}")
+          privileged = "kubectl label namespace member pod-security.kubernetes.io/enforce=privileged --dry-run=server"
+          server.wait_until_fails(privileged)
+          out = server.fail(f"{privileged} 2>&1")
+          assert "pod-security-labels" in out, out
+          server.succeed("kubectl label namespace member pod-security.kubernetes.io/enforce=restricted --dry-run=server")
 
       with subtest("Clocks follow NTS servers"):
           for node in [server, watcher]:

@@ -1,0 +1,8 @@
+---
+# A platform namespace, closed to incoming traffic unless the piece opens it. Its charts are installed from
+# flux-system with Flux's own account, so it holds no deploy account.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ./namespace.yaml
+  - ./networkpolicies.yaml

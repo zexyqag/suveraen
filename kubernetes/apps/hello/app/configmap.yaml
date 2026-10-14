@@ -1,0 +1,7 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hello
+data:
+  PODINFO_UI_MESSAGE: hello from ${DOMAIN}

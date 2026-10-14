@@ -49,17 +49,36 @@
         ];
       };
 
-      # `nix run .#approve`: sign what staging holds and publish it as the next release.
-      apps.x86_64-linux.approve = {
-        type = "app";
-        program = pkgs.lib.getExe approve;
-        meta.description = "Sign the staging branch's head as the next release";
+      apps.x86_64-linux = {
+        # `nix run .#approve`: sign what staging holds and publish it as the next release.
+        approve = {
+          type = "app";
+          program = pkgs.lib.getExe approve;
+          meta.description = "Sign the staging branch's head as the next release";
+        };
+
+        # `nix run .#e2e`: needs KVM and internet access, so it can't be one of the checks.
+        e2e = {
+          type = "app";
+          program = "${
+            (import ./checks/e2e.nix {
+              inherit pkgs;
+              module = self.nixosModules.default;
+              kubernetes = ./kubernetes;
+            }).driver
+          }/bin/nixos-test-driver";
+          meta.description = "Boot a server with internet access and let Flux deploy kubernetes/clusters/test onto it";
+        };
       };
 
       checks.x86_64-linux = {
         server = build ./checks/server.nix;
         watcher = build ./checks/watcher.nix;
         approve = import ./checks/approve.nix { inherit pkgs approve; };
+        render = import ./checks/render.nix {
+          inherit pkgs;
+          kubernetes = ./kubernetes;
+        };
 
         vm = import ./checks/vm.nix {
           inherit pkgs;

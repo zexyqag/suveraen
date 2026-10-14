@@ -1,0 +1,15 @@
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: reloader
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: oci://ghcr.io/stakater/charts/reloader
+  ref:
+    tag: 2.2.18
+    digest: sha256:209bd7de47e93313249b5e9c94321d49bcd1627400eab74b2727074c3e5b5f94
+  layerSelector:
+    mediaType: application/vnd.cncf.helm.chart.content.v1.tar+gzip
+    operation: copy

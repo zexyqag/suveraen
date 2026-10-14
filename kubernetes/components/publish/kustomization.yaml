@@ -1,0 +1,15 @@
+---
+# Lets the namespace publish ports on the nodes' addresses (LoadBalancer Services through ServiceLB, which get
+# past the host firewall). platform/policies refuses them everywhere else.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      kind: Namespace
+    patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: _
+        labels:
+          suveraen/publish: "true"

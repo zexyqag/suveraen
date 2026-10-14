@@ -1,0 +1,16 @@
+---
+# Only the routed port: the gateway can't reach a database or anything else in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: from-gateway
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gateway
+      ports:
+        - port: ${ROUTE_TARGET_PORT:=${ROUTE_PORT}}

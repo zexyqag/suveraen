@@ -27,7 +27,7 @@
     };
     cluster = {
       enable = true;
-      path = "./clusters/example";
+      path = "./kubernetes/clusters/example";
       nodeIP = [
         "203.0.113.10"
         "2001:db8::2"

@@ -1,0 +1,33 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: reloader
+  namespace: flux-system
+spec:
+  interval: 1h
+  serviceAccountName: helm-controller
+  targetNamespace: reloader
+  releaseName: reloader
+  chartRef:
+    kind: OCIRepository
+    name: reloader
+  install:
+    crds: CreateReplace
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 2m
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    reloader:
+      # Restarts only apps; platform pieces are rolled by their own charts.
+      namespaceSelector: suveraen/tier=app
+      readOnlyRootFileSystem: true
+      deployment:
+        containerSecurityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]

@@ -1,0 +1,31 @@
+---
+# RBAC stops a chart from granting more than it holds, but not from granting it to anyone: without this, a chart
+# could hand its namespace to every pod in the cluster (system:authenticated) or to another namespace's account.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: rolebinding-subjects
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [rbac.authorization.k8s.io]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [rolebindings]
+    namespaceSelector:
+      matchLabels:
+        suveraen/tier: app
+  validations:
+    - expression: >-
+        !has(object.subjects) || object.subjects.all(s, s.kind == 'ServiceAccount' &&
+        (!has(s.namespace) || s.namespace == '' || s.namespace == request.namespace))
+      message: role bindings in an app namespace may only name that namespace's own service accounts
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: rolebinding-subjects
+spec:
+  policyName: rolebinding-subjects
+  validationActions: [Deny]

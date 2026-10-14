@@ -1,0 +1,31 @@
+---
+# Every app: its own namespace, closed in both directions, and the account its charts are installed with, which
+# reaches only this namespace.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ./namespace.yaml
+  - ./networkpolicies.yaml
+  - ./limitrange.yaml
+  - ./deployer.yaml
+patches:
+  - target:
+      group: helm.toolkit.fluxcd.io
+      kind: HelmRelease
+    patch: |-
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      metadata:
+        name: _
+      spec:
+        serviceAccountName: flux-deployer
+        install:
+          # CRDs are cluster-wide; only the platform installs them.
+          crds: Skip
+          strategy:
+            name: RetryOnFailure
+            retryInterval: 2m
+        upgrade:
+          crds: Skip
+          remediation:
+            retries: 3

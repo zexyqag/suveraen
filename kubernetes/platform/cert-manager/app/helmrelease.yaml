@@ -1,0 +1,34 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cert-manager
+  namespace: flux-system
+spec:
+  interval: 1h
+  # Operator charts install CRDs, cluster roles and webhooks, which only Flux's own cluster-wide account may do.
+  serviceAccountName: helm-controller
+  targetNamespace: cert-manager
+  releaseName: cert-manager
+  chartRef:
+    kind: OCIRepository
+    name: cert-manager
+  install:
+    crds: CreateReplace
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 2m
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    crds:
+      enabled: true
+      keep: true
+    global:
+      leaderElection:
+        namespace: cert-manager
+      rbac:
+        # Only the platform asks for certificates: the built-in admin and edit roles get no cert-manager rights.
+        aggregateClusterRoles: false

@@ -4,7 +4,7 @@ Free and open-source services for a small community, self-hosted: files and docu
 
 It runs on Kubernetes (k3s) over NixOS, built to start on one server and grow to several with failover. A small separate watcher machine keeps an eye on it from outside.
 
-**Status:** the server layer is in place. The cluster's own services (storage, databases, certificates, accounts) come next, then the apps.
+**Status:** the server layer is in place, and so is the frame for the cluster's own services: the gateway, certificates and the template every app follows. Storage, databases and accounts come next, then the apps.
 
 ## Layout
 
@@ -14,13 +14,18 @@ It runs on Kubernetes (k3s) over NixOS, built to start on one server and grow to
   - `network.nix`: static or DHCP IPv4, static IPv6.
   - `resolver.nix`: every machine resolves names itself with [Unbound](https://nlnetlabs.nl/projects/unbound/) (DNSSEC, no outside resolver), and so do the cluster's pods.
   - `time.nix`: clocks follow several independent time servers over NTS, which authenticates their replies.
-  - `cluster.nix`: a k3s server with embedded etcd, secrets encrypted at rest, WireGuard between nodes, dual-stack networking. It installs [Flux](https://fluxcd.io), which keeps the cluster in sync with this repository; rights within a namespace don't extend to Flux, pods must meet the restricted Pod Security Standard unless the platform labels their namespace otherwise, and on the host they reach only the API server, the kubelet and the resolver.
+  - `cluster.nix`: a k3s server with embedded etcd, secrets encrypted at rest, WireGuard between nodes, dual-stack networking. It installs [Flux](https://fluxcd.io), which keeps the cluster in sync with this repository; rights within a namespace don't extend to Flux, pods must meet the restricted Pod Security Standard, Services can't take external IPs, and on the host pods reach only the API server, the kubelet and the resolver.
   - `watcher.nix`: the watcher. [ntfy](https://ntfy.sh) for alerts (only known accounts, instant on Android and iPhone, no account API or attachments) and [Gatus](https://gatus.io), which checks the public services and raises an alert when a server stops reporting in.
   - `alerts.nix`: failed jobs and disk or RAID problems are posted to the watcher's ntfy on a secret topic, with a second channel for when the watcher can't be reached; servers report in to Gatus every few minutes.
   - `source.nix`: the repository and branch a machine and its cluster follow, and the release signers: with signers set, Nix on the machine and Flux in the cluster refuse a branch head that none of them signed.
   - `upgrade.nix`: machines switch to their configuration from that branch nightly. Unencrypted ones reboot by themselves when needed; encrypted ones send an alert instead. A machine also alerts when the configuration it runs gets old.
+- `kubernetes/`: what Flux applies, from the release branch.
+  - `clusters/<name>/`: one directory per cluster, which a server's `suveraen.cluster.path` names. It lists the platform and the apps that cluster runs and holds its settings; `test` is the one CI deploys.
+  - `platform/`: the gateway (Gateway API on [Traefik](https://traefik.io)), certificates ([cert-manager](https://cert-manager.io)), restarts on changed settings ([Reloader](https://github.com/stakater/Reloader)) and the policies every app is held to.
+  - `components/`: what an app gets by listing it: its own namespace, closed by default, whose charts can act only there (`app`), and a public address through the gateway (`route`).
+  - `apps/`: one directory per app.
 - `release/approve.sh`: `approve` shows what changed on `staging` since the last release, and once you confirm, signs it and publishes it to `main`.
-- `checks/`: `server.nix` and `watcher.nix` build each kind of machine with stand-in values; `vm.nix` boots both in VMs and tests them together; `unlock.nix` boots an encrypted machine and unlocks it over SSH; `approve.nix` runs the release command against a scratch repository. CI runs them on every push.
+- `checks/`: `server.nix` and `watcher.nix` build each kind of machine with stand-in values; `vm.nix` boots both in VMs and tests them together; `unlock.nix` boots an encrypted machine and unlocks it over SSH; `approve.nix` runs the release command against a scratch repository; `render.nix` renders every cluster under `kubernetes/` the way Flux would and checks the rules apps are held to. CI runs them on every push. `e2e.nix` (`nix run .#e2e`) boots a server with internet access and lets Flux deploy `kubernetes/clusters/test` from a signed commit; CI runs it after the others.
 - `.github/workflows/update.yml`: updates `flake.lock` daily once the checks pass. The checks run with a read-only token; only a separate small job can push. Actions are pinned to commit hashes.
 
 ## Releases

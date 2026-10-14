@@ -1,0 +1,8 @@
+---
+# Gateway API's standard-channel CRDs, straight from its repository at a fixed commit: --no-remote-bases rules out
+# the release URL, and the CRDs don't come with any chart.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./gitrepository.yaml
+  - ./crds.yaml

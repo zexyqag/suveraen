@@ -1,0 +1,58 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: traefik
+  namespace: flux-system
+spec:
+  interval: 1h
+  serviceAccountName: helm-controller
+  targetNamespace: gateway
+  releaseName: traefik
+  chartRef:
+    kind: OCIRepository
+    name: traefik
+  install:
+    crds: CreateReplace
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 2m
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    global:
+      # Otherwise Traefik asks update.traefik.io for new versions, and Traefik Labs keeps the addresses.
+      checkNewVersion: false
+      sendAnonymousUsage: false
+    api:
+      dashboard: false
+    # Routes come only through the Gateway API, from namespaces the gateway admits.
+    ingressClass:
+      enabled: false
+    providers:
+      kubernetesCRD:
+        enabled: false
+      kubernetesIngress:
+        enabled: false
+      kubernetesGateway:
+        enabled: true
+        gateways:
+          - name: public
+            namespace: gateway
+        # Routes elsewhere can't point at Traefik's own services, such as its API.
+        crossProviderNamespaces: [gateway]
+    gateway:
+      enabled: false
+    ports:
+      web:
+        http:
+          redirections:
+            entryPoint:
+              to: websecure
+              scheme: https
+              permanent: true
+    service:
+      spec:
+        ipFamilyPolicy: PreferDualStack
