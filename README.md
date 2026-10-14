@@ -34,6 +34,8 @@ Changes land on `staging`, which the watcher runs first. The servers and the clu
 
 To release, work in a clone of the repository with git's `user.signingkey` set to your SSH signing key (a security key works). The very first time, run `nix run .#approve -- --first-release`. After each release, approve prints the command for the next one: it runs approve from the last signed release, whose signature Nix checks first, so your working tree never decides what gets signed.
 
+Each release can carry a warrant canary: approve shows its statements and signs them into the release's commit message only if you type `true`. Anyone can read it on `main` and check its signature against `release/signers`. If the newest release has no canary, one of its statements may no longer hold.
+
 ## Use
 
 Add the flake as an input and import `nixosModules.default`:

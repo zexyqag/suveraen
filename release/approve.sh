@@ -113,8 +113,26 @@ echo
 read -r -p "Type 'release' to sign and publish this: " answer
 [ "$answer" = release ] || die "Nothing released."
 
+today=$(date -u +%F)
+message="Release $today"
+pinned=$(git show "$candidate:flake.lock" | jq -r '.nodes[.nodes.root.inputs.nixpkgs].locked | "\(.rev) of \(.lastModified | todate)"')
+canary="Canary, $today. As of today:
+- I have received no order that forbids me to tell members about it, such as a secrecy order from a court or the police.
+- No authority has demanded suveraen's keys or passwords, or required me to change suveraen to collect data or weaken its encryption.
+- To my knowledge, no authority has seized, copied or secretly accessed a suveraen server or disk.
+This can't cover orders served only on Hetzner, or anything done without my knowledge.
+The release pins nixpkgs $pinned, so this was signed after that.
+If the newest release has no canary, assume one of these statements may no longer hold."
+echo
+echo "$canary"
+# Never renewed by default: under a gag order the release still goes out, just without it.
+read -r -p "Type 'true' if every line still holds, to sign it into this release; Enter leaves it out: " holds || holds=
+if [ "$holds" = true ]; then
+  message+=$'\n\n'"$canary"
+fi
+
 # The release commit carries the candidate's exact tree, so what gets deployed is what was tested.
-commit=$(git -c gpg.format=ssh commit-tree -S "$candidate^{tree}" -p "$release" -p "$candidate" -m "Release $(date -u +%F)")
+commit=$(git -c gpg.format=ssh commit-tree -S "$candidate^{tree}" -p "$release" -p "$candidate" -m "$message")
 signed_by "$commit" "$state/current" ||
   die "The release isn't signed by a current signer. Check git's user.signingkey."
 allowed_of "$candidate" "$state/next"
@@ -136,5 +154,6 @@ keys=$(signers_of "$candidate" | jq -R -s -r '
   | split("\n") | map(select(length > 0) | split(" ") | {type: $nix[.[0]], key: .[1]}) | tojson | @uri')
 git config approve.command "nix --extra-experimental-features verified-fetches run '$flake?ref=$release_branch&publicKeys=$keys#approve'"
 echo "Released $commit. The cluster picks it up within minutes, the servers tonight."
+[ "$holds" = true ] || echo "This release has no canary."
 echo "Next time, run this; Nix checks the release's signature before running approve from it:"
 echo "  $(git config approve.command)"

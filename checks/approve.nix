@@ -1,6 +1,6 @@
 # Runs the release command against a scratch repository: the first release, refusals for a wrong key, a forged
 # or rewound main, a tag posing as main and an unsafe key change, terminal control codes stripped from the review,
-# and a key change done in two releases.
+# a key change done in two releases, and the canary signed in only when confirmed.
 { pkgs, approve }:
 pkgs.runCommand "approve-test"
   {
@@ -21,7 +21,7 @@ pkgs.runCommand "approve-test"
     git init -q --bare remote.git
     git clone -q remote.git work
     cd work
-    echo '{"nodes":{}}' > flake.lock
+    echo '{"nodes":{"root":{"inputs":{"nixpkgs":"nixpkgs"}},"nixpkgs":{"locked":{"rev":"0123abc","lastModified":1791662279}}},"root":"root","version":7}' > flake.lock
     git add . && git commit -qm start && git push -q origin main main:staging
     git config user.signingkey $keys/owner
 
@@ -100,6 +100,18 @@ pkgs.runCommand "approve-test"
     git config user.signingkey $keys/new
     echo release | approve
     released
+
+    # The canary is signed into a release only when confirmed, and never changes what gets deployed.
+    stage "echo five > five" five
+    printf 'release\ntrue\n' | approve
+    released
+    git log -1 --format=%B refs/remotes/origin/main > ../message
+    grep -q "^Canary, " ../message
+    grep -q "pins nixpkgs 0123abc of 2026-" ../message
+    stage "echo six > six" six
+    echo release | approve
+    released
+    ! git log -1 --format=%B refs/remotes/origin/main | grep -q Canary || exit 1
     git config user.signingkey $keys/owner
     stage "echo four > four" four
     refused
