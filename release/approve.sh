@@ -76,13 +76,16 @@ if git merge-base --is-ancestor "$candidate" "$release"; then
 fi
 
 echo "Candidate: $candidate"
-url=$(git remote get-url "$remote")
+# The configured URL, not the insteadOf-expanded one, says which repository this is.
+url=$(git config --get "remote.$remote.url")
 if [[ $url =~ github\.com[:/]([^/]+)/([^/]+)$ ]]; then
   repo="${BASH_REMATCH[1]}/${BASH_REMATCH[2]%.git}"
+  runs=$(curl -fsS "${GITHUB_API_URL:-https://api.github.com}/repos/$repo/commits/$candidate/check-runs?per_page=100") ||
+    die "Couldn't read the checks of $candidate. Look at https://github.com/$repo/commits/$candidate and try again."
   echo "Checks:"
-  { curl -fsS "https://api.github.com/repos/$repo/commits/$candidate/check-runs" |
-    jq -r '.check_runs[] | "  \(.name): \(.conclusion // .status)"' | clean; } ||
-    echo "  (couldn't read them; look at https://github.com/$repo/commits/$candidate)"
+  jq -r '.check_runs[] | "  \(.name): \(.conclusion // .status)"' <<<"$runs" | clean
+  jq -e '.check_runs | length > 0 and all(.conclusion | IN("success", "neutral", "skipped"))' <<<"$runs" >/dev/null ||
+    die "Not every check on $candidate has passed. Release once they have."
 fi
 
 echo

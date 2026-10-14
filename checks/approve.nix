@@ -1,6 +1,7 @@
 # Runs the release command against a scratch repository: the first release, refusals for a wrong key, a forged
 # or rewound main, a tag posing as main and an unsafe key change, terminal control codes stripped from the review,
-# a key change done in two releases, and the canary signed in only when confirmed.
+# a key change done in two releases, the canary signed in only when confirmed, and refusals while checks fail or
+# can't be read.
 { pkgs, approve }:
 pkgs.runCommand "approve-test"
   {
@@ -8,6 +9,8 @@ pkgs.runCommand "approve-test"
       approve
       pkgs.git
       pkgs.openssh
+      pkgs.python3
+      pkgs.curl
     ];
   }
   ''
@@ -115,6 +118,30 @@ pkgs.runCommand "approve-test"
     git config user.signingkey $keys/owner
     stage "echo four > four" four
     refused
+
+    # On GitHub, a release needs every check on the candidate to have passed. A local server stands in for its API,
+    # and git reaches the scratch remote through insteadOf.
+    mkdir -p ../api
+    python3 -m http.server --bind 127.0.0.1 --directory ../api 8008 > /dev/null 2>&1 &
+    for _ in $(seq 50); do curl -fs http://127.0.0.1:8008/ > /dev/null && break; sleep 0.2; done
+    export GITHUB_API_URL=http://127.0.0.1:8008
+    git config url.$keys/remote.git.insteadOf https://github.com/test/suveraen
+    git remote set-url origin https://github.com/test/suveraen
+    git config user.signingkey $keys/new
+    runs() { mkdir -p ../api/repos/test/suveraen/commits/$(git rev-parse HEAD) && echo "$1" > ../api/repos/test/suveraen/commits/$(git rev-parse HEAD)/check-runs; }
+    stage "echo seven > seven" seven
+    refused
+    grep -q "Couldn't read the checks" ../out
+    runs '{"check_runs":[{"name":"check","conclusion":"success"},{"name":"e2e","status":"in_progress","conclusion":null}]}'
+    refused
+    grep -q "Not every check" ../out
+    runs '{"check_runs":[{"name":"check","conclusion":"failure"}]}'
+    refused
+    runs '{"check_runs":[]}'
+    refused
+    runs '{"check_runs":[{"name":"check","conclusion":"success"},{"name":"e2e","conclusion":"skipped"}]}'
+    echo release | approve
+    released
 
     git config approve.command | grep -q "ref=main&publicKeys="
     touch $out

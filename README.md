@@ -24,7 +24,7 @@ It runs on Kubernetes (k3s) over NixOS, built to start on one server and grow to
   - `platform/`: the gateway (Gateway API on [Traefik](https://traefik.io)), certificates ([cert-manager](https://cert-manager.io)), restarts on changed settings ([Reloader](https://github.com/stakater/Reloader)) and the policies every app is held to.
   - `components/`: what an app gets by listing it: its own namespace, closed by default, whose charts can act only there (`app`), and a public address through the gateway (`route`).
   - `apps/`: one directory per app.
-- `release/approve.sh`: `approve` shows what changed on `staging` since the last release, and once you confirm, signs it and publishes it to `main`.
+- `release/approve.sh`: `approve` shows what changed on `staging` since the last release, and once you confirm, signs it and publishes it to `main`. For a repository on GitHub it refuses until every check on the candidate has passed.
 - `checks/`: `server.nix` and `watcher.nix` build each kind of machine with stand-in values; `vm.nix` boots both in VMs and tests them together; `unlock.nix` boots an encrypted machine and unlocks it over SSH; `approve.nix` runs the release command against a scratch repository; `render.nix` renders every cluster under `kubernetes/` the way Flux would and checks the rules apps are held to. CI runs them on every push. `e2e.nix` (`nix run .#e2e`) boots a server with internet access and lets Flux deploy `kubernetes/clusters/test` from a signed commit; CI runs it after the others.
 - `.github/workflows/update.yml`: updates `flake.lock` daily once the checks pass. The checks run with a read-only token; only a separate small job can push. Actions are pinned to commit hashes.
 
