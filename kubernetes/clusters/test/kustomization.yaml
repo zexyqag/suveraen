@@ -9,4 +9,4 @@ resources:
   - ../../platform/issuer/self-signed/ks.yaml
   - ../../apps/hello/ks.yaml
 components:
-  - ../../components/defaults
+  - ../../components/cluster
