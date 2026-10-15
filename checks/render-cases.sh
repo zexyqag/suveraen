@@ -215,6 +215,10 @@ refuses app-route-other-app "route alpha-hello/x asks bravo-hello-hello for hell
   "append apps/hello/app/configmap.yaml '---\napiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:
   name: x\nspec:\n  parentRefs:\n    - {name: bravo-hello-hello, namespace: gateway, sectionName: https}
   hostnames: [hello.org.test]\n'"
+refuses app-route-edge-name "two Kustomizations apply the same object: HTTPRoute/alpha-hello/hello" \
+  "append apps/hello/app/configmap.yaml '---\napiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:
+  name: hello\nspec:\n  parentRefs:\n    - name: \${TENANT}-hello-hello\n      namespace: gateway
+      sectionName: https\n  hostnames:\n    - hello.\${TENANT_APP_DOMAIN}\n'"
 inapp="in its own namespace:"
 refuses gateway-in-app "$inapp Gateway.gateway.networking.k8s.io/x" \
   "append apps/hello/app/configmap.yaml '---\napiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata:

@@ -292,8 +292,10 @@ for dir in kubernetes/clusters/*/; do
   for dep in $deps; do
     grep -qxF "$dep" <<<"$known" || fail "$cluster: nothing is named $dep, which a Kustomization depends on"
   done
-  dup=$(yq ea '[select(.kind == "Namespace") | .metadata.name] | .[]' "$rendered"/*.yaml | sort | uniq -d)
-  [ -z "$dup" ] || fail "$cluster: two Kustomizations make the same namespace: $dup"
+  # Each would take the object back from the other on every reconcile.
+  dup=$(yq ea '[select(.kind != null) | .kind + "/" + (.metadata.namespace // "") + "/" + .metadata.name] | .[]' \
+    "$rendered"/*.yaml | sort | uniq -d | paste -sd' ')
+  [ -z "$dup" ] || fail "$cluster: two Kustomizations apply the same object: $dup"
   platform=$(yq ea "[select($fluxks) | select(.metadata.labels.\"suveraen/tenant\" == null) | .metadata.name] | .[]" \
     "$rendered/cluster.yaml")
   bad=$(grep -E "$tenantlike" <<<"$platform" || true)
