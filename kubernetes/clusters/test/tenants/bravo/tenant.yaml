@@ -10,3 +10,4 @@ spec:
   postBuild:
     substitute:
       TENANT: bravo
+      HELLO_QUOTA_MEMORY: 384Mi

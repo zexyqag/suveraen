@@ -22,6 +22,31 @@ tenantre='^[a-z][a-z0-9]{4}$'
 namere='^[a-z][a-z0-9]{1,15}$'
 tenantlike='^[a-z][a-z0-9]{4}-'
 up='../../../../..'
+# What an app's quota covers, each sized by its template.
+quotas='QUOTA_CONFIGMAPS,QUOTA_CPU,QUOTA_EPHEMERAL_STORAGE,QUOTA_JOBS,QUOTA_MEMORY,QUOTA_PODS,QUOTA_SECRETS'
+quotas+=',QUOTA_SERVICES,QUOTA_STORAGE,QUOTA_VOLUMES'
+hard='count/configmaps,count/jobs.batch,count/secrets,limits.ephemeral-storage,limits.memory'
+hard+=',persistentvolumeclaims,pods,requests.cpu,requests.ephemeral-storage,requests.memory,requests.storage'
+hard+=',services,services.loadbalancers,services.nodeports'
+export quotas hard
+
+# A whole Kubernetes quantity in thousandths of its unit, so CPU's "m" compares too.
+quantity() {
+  local n=$1 f=1000
+  case $n in
+    *m) n=${n%m} f=1 ;;
+    *Ki) n=${n%Ki} f=$((1000 * 1024)) ;;
+    *Mi) n=${n%Mi} f=$((1000 * 1024 ** 2)) ;;
+    *Gi) n=${n%Gi} f=$((1000 * 1024 ** 3)) ;;
+    *Ti) n=${n%Ti} f=$((1000 * 1024 ** 4)) ;;
+    *k) n=${n%k} f=$((1000 * 1000)) ;;
+    *M) n=${n%M} f=$((1000 * 1000 ** 2)) ;;
+    *G) n=${n%G} f=$((1000 * 1000 ** 3)) ;;
+    *T) n=${n%T} f=$((1000 * 1000 ** 4)) ;;
+  esac
+  [[ $n =~ ^[0-9]+$ ]] || fail "$1 isn't a whole quantity"
+  echo $((n * f))
+}
 
 for ks in $(find kubernetes/platform -name ks.yaml | sort); do
   # The root Kustomization, made by Nix, substitutes nothing.
@@ -52,8 +77,11 @@ for dir in kubernetes/apps/*/; do
       first=1
       yq ea -e 'select(documentIndex == 0) | (.metadata.name == ("${TENANT}-" + strenv(app))
         and .spec.targetNamespace == .metadata.name and .spec.path == ("./kubernetes/apps/" + strenv(app) + "/app")
-        and .spec.postBuild.substitute.APP == strenv(app))' "$file" >/dev/null \
-        || fail "$file: the app is \${TENANT}-$app in its own namespace, from ./kubernetes/apps/$app/app, with APP $app"
+        and .spec.postBuild.substitute.APP == strenv(app)
+        and ([.spec.postBuild.substitute | keys | .[] | select(test("^QUOTA_"))] | sort | join(","))
+          == strenv(quotas))' \
+        "$file" >/dev/null || fail "$file: the app is \${TENANT}-$app in its own namespace, from" \
+          "./kubernetes/apps/$app/app, with APP $app and its quota: ${quotas//,/, }"
     else
       [ "$docs" = 1 ] || fail "$file holds one host"
     fi
@@ -207,6 +235,9 @@ for dir in kubernetes/clusters/*/; do
     or .metadata.namespace != \"flux-system\" or (.spec.sourceRef | has(\"namespace\")) or (.spec | has(\"decryption\"))
     or ((.spec.dependsOn // []) | any_c(has(\"namespace\")))) | .metadata.name] | .[]" "$rendered"/*.yaml)
   [ -z "$bad" ] || fail "$cluster: Kustomizations that don't follow the lockdown: $bad"
+  bad=$(yq ea "[select($fluxks) | .metadata.name as \$n | (.spec.postBuild.substitute // {}) | to_entries | .[]
+    | select((.value | tag) != \"!!str\") | \$n + \"/\" + .key] | .[]" "$rendered"/*.yaml)
+  [ -z "$bad" ] || fail "$cluster: Flux takes only strings as values to substitute: $bad"
   # Nix names the root Kustomization "cluster".
   known=$(printf 'cluster\n'; yq ea "[select($fluxks) | .metadata.name] | .[]" "$rendered"/*.yaml)
   dup=$(sort <<<"$known" | uniq -d)
@@ -292,6 +323,26 @@ for dir in kubernetes/clusters/*/; do
           and (.[0].spec.podSelector | length) == 0 and (.[0].spec.policyTypes | sort | join(",")) == "Egress,Ingress"
           and (.[0].spec | (has("ingress") or has("egress")) | not))' "$file" >/dev/null \
           || fail "$cluster/$name: an app's namespace is closed in both directions by default"
+        yq ea -e '[select(.kind == "ResourceQuota")] | (length == 1 and .[0].metadata.name == "app"
+          and (.[0].spec.hard | keys | sort | join(",")) == strenv(hard)
+          and .[0].spec.hard."services.loadbalancers" == "0" and .[0].spec.hard."services.nodeports" == "0")' \
+          "$file" >/dev/null \
+          || fail "$cluster/$name: an app's namespace has one ResourceQuota, app, on ${hard//,/, }, and publishes nothing"
+        [ "$(yq ea '[select(.kind == "LimitRange")] | (length == 1 and .[0].metadata.name == "defaults"
+          and ([.[0].spec.limits[] | select(.type == "Container")] | length) == 1)' "$file")" = true ] \
+          || fail "$cluster/$name: an app's namespace has one LimitRange, defaults, with defaults for containers"
+        # Containers a chart leaves without requests or limits get the defaults, which the quota must allow.
+        for pair in default.memory:limits.memory default.ephemeral-storage:limits.ephemeral-storage \
+          defaultRequest.cpu:requests.cpu defaultRequest.memory:requests.memory \
+          defaultRequest.ephemeral-storage:requests.ephemeral-storage; do
+          field=${pair%%:*}
+          limit=$(yq ea "[select(.kind == \"LimitRange\") | .spec.limits[] | select(.type == \"Container\")]
+            | .[0].${field%%.*}.\"${field#*.}\" // \"\"" "$file")
+          quota=$(yq ea "[select(.kind == \"ResourceQuota\")] | .[0].spec.hard.\"${pair#*:}\"" "$file")
+          [ -n "$limit" ] || fail "$cluster/$name: the LimitRange sets $field for containers, which the quota needs"
+          [ "$(quantity "$limit")" -le "$(quantity "$quota")" ] \
+            || fail "$cluster/$name: the LimitRange's $field, $limit, is above the quota's ${pair#*:}, $quota"
+        done
         ;;
       ./kubernetes/edge/app | ./kubernetes/edge/identity | ./kubernetes/edge/apex)
         [[ $name =~ ^$t-([a-z0-9]+)-edge-([a-z0-9]+)$ ]] && [ -n "$t" ] \

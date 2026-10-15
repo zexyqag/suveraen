@@ -1,4 +1,5 @@
 ---
+# For containers a chart leaves without requests or limits, which the quota would otherwise refuse.
 apiVersion: v1
 kind: LimitRange
 metadata:
@@ -9,5 +10,7 @@ spec:
       defaultRequest:
         cpu: 10m
         memory: 64Mi
+        ephemeral-storage: 64Mi
       default:
-        memory: 512Mi
+        memory: 128Mi
+        ephemeral-storage: 256Mi

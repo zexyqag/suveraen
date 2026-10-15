@@ -173,6 +173,26 @@ refuses platform-tenantlike-ns "platform namespaces can't be named like a tenant
 refuses platform-tenantlike-digit "platform namespaces can't be named like a tenant's app" \
   "sed -i 's/NAMESPACE: reloader/NAMESPACE: relod-9x/' platform/reloader/ks.yaml"
 
+# Quotas.
+knob() { yq -i ".spec.postBuild.substitute.$1 = \"$2\"" "$T/bravo/tenant.yaml"; }
+refuses quota-below-memory-default "the LimitRange's default.memory, 128Mi, is above the quota's limits.memory, 64Mi" \
+  "knob HELLO_QUOTA_MEMORY 64Mi"
+refuses quota-below-ephemeral-default \
+  "the LimitRange's default.ephemeral-storage, 256Mi, is above the quota's limits.ephemeral-storage, 128Mi" \
+  "knob HELLO_QUOTA_EPHEMERAL_STORAGE 128Mi"
+refuses quota-below-cpu-default "the LimitRange's defaultRequest.cpu, 10m, is above the quota's requests.cpu, 5m" \
+  "knob HELLO_QUOTA_CPU 5m"
+refuses knob-number "Flux takes only strings as values to substitute: bravo-hello/QUOTA_MEMORY" \
+  "knob HELLO_QUOTA_MEMORY 512"
+refuses quota-publishes "has one ResourceQuota, app" \
+  "sed -i 's/services.loadbalancers: \"0\"/services.loadbalancers: \"1\"/' components/app/resourcequota.yaml"
+refuses quota-no-object-counts "has one ResourceQuota, app" \
+  "sed -i '/count\/secrets/d; /count\/configmaps/d' components/app/resourcequota.yaml"
+refuses template-without-quota "with APP hello and its quota" \
+  "yq -i 'del(select(documentIndex == 0) | .spec.postBuild.substitute.QUOTA_PODS)' apps/hello/ks.yaml"
+refuses limitrange-without-default "the LimitRange sets default.ephemeral-storage for containers" \
+  "yq -i 'del(.spec.limits[0].default.ephemeral-storage)' components/app/limitrange.yaml"
+
 # Network policies.
 refuses no-default-deny "closed in both directions by default" \
   "sed -i '0,/policyTypes: \[Ingress, Egress\]/s//policyTypes: [Ingress]/' components/app/networkpolicies.yaml"

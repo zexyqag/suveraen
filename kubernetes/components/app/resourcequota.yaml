@@ -1,0 +1,22 @@
+---
+# Sized by each app's template, which a tenant may resize through its knobs. Nothing here publishes ports.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: app
+spec:
+  hard:
+    requests.cpu: ${QUOTA_CPU}
+    requests.memory: ${QUOTA_MEMORY}
+    limits.memory: ${QUOTA_MEMORY}
+    requests.ephemeral-storage: ${QUOTA_EPHEMERAL_STORAGE}
+    limits.ephemeral-storage: ${QUOTA_EPHEMERAL_STORAGE}
+    requests.storage: ${QUOTA_STORAGE}
+    persistentvolumeclaims: ${QUOTA_VOLUMES}
+    pods: ${QUOTA_PODS}
+    services: ${QUOTA_SERVICES}
+    count/secrets: ${QUOTA_SECRETS}
+    count/configmaps: ${QUOTA_CONFIGMAPS}
+    count/jobs.batch: ${QUOTA_JOBS}
+    services.loadbalancers: "0"
+    services.nodeports: "0"

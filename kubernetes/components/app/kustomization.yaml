@@ -1,12 +1,13 @@
 ---
-# Every app: its own namespace, closed in both directions, and the account its charts are installed with, which
-# reaches only this namespace.
+# Every app: its own namespace, closed in both directions and held to a quota, and the account its charts are
+# installed with, which reaches only this namespace.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:
   - ./namespace.yaml
   - ./networkpolicies.yaml
   - ./limitrange.yaml
+  - ./resourcequota.yaml
   - ./deployer.yaml
 patches:
   - target:
