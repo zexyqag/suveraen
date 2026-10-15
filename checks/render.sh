@@ -69,19 +69,24 @@ for dir in kubernetes/apps/*/; do
     bad=$(grep -o '[$][{][^}]*[}]' "$file" | sort -u \
       | grep -vxE "[$][{]TENANT[}]|[$][{]$knob[A-Z0-9_]+:=[^}$]+[}]" || true)
     [ -z "$bad" ] || fail "$file: a template may use only \${TENANT} and \${$knob<NAME>:=<default>}: $bad"
-    [ "$(yq ea "[($fluxks | not) or (.spec | $owned)] | any" "$file")" = false ] \
-      || fail "$file holds only Flux Kustomizations, without fields components/defaults or components/tenant own"
+    [ "$(yq ea "[$fluxks | not] | any" "$file")" = false ] || fail "$file holds only Flux Kustomizations"
     docs=$(yq ea '[.] | length' "$file")
     first=0
     if [ "$file" = "$dir/ks.yaml" ]; then
       first=1
-      yq ea -e 'select(documentIndex == 0) | (.metadata.name == ("${TENANT}-" + strenv(app))
+      # Everything else comes from components/defaults and components/tenant.
+      yq ea -e 'select(documentIndex == 0) | ((.metadata | keys | join(",")) == "name"
+        and ([.spec | keys | .[] | select(test("^(path|targetNamespace|components|dependsOn|postBuild)$") | not)]
+          | length) == 0
+        and (.spec.postBuild | keys | join(",")) == "substitute"
+        and .metadata.name == ("${TENANT}-" + strenv(app))
         and .spec.targetNamespace == .metadata.name and .spec.path == ("./kubernetes/apps/" + strenv(app) + "/app")
         and .spec.postBuild.substitute.APP == strenv(app)
         and ([.spec.postBuild.substitute | keys | .[] | select(test("^QUOTA_"))] | sort | join(","))
           == strenv(quotas))' \
         "$file" >/dev/null || fail "$file: the app is \${TENANT}-$app in its own namespace, from" \
-          "./kubernetes/apps/$app/app, with APP $app and its quota: ${quotas//,/, }"
+          "./kubernetes/apps/$app/app, with APP $app and its quota: ${quotas//,/, }; it sets only its name, path," \
+          "targetNamespace, components, dependsOn and values to substitute"
     else
       [ "$docs" = 1 ] || fail "$file holds one host"
     fi
@@ -111,6 +116,10 @@ done
 
 ! grep -rnE '^\s*-\s*[a-z]+://' kubernetes --include=kustomization.yaml \
   || fail "kustomize resources must be files in this repository (--no-remote-bases)"
+# Values the shared components and hosts default, which only a template may set: a source that set them would quietly
+# change every app or host it reaches, such as the port the gateway may reach.
+defaults=$(grep -rhoE '[$][{][A-Z0-9_]+:?[-=]' kubernetes/components kubernetes/edge | sed -E 's/^..//; s/:?[-=]$//' \
+  | sort -u)
 
 for tenant in kubernetes/clusters/*/tenants/*/; do
   tenant=${tenant%/}
@@ -148,10 +157,23 @@ for tenant in kubernetes/clusters/*/tenants/*/; do
     grep -qxF "$edge" <<<"$apps" || fail "$manifest: adds a host to $edge, which the tenant doesn't run"
   done
   prefixes=$(tr a-z A-Z <<<"$apps" | paste -sd'|')
-  # Its only inline values: its ID, and sizes of the apps it runs.
-  bad=$(yq '.spec.postBuild.substitute | keys | .[]' "$tenant/tenant.yaml" | grep -vxE "TENANT|($prefixes)_[A-Z0-9_]+" \
-    || true)
+  # Its only inline values: its ID, and sizes of the apps it runs, each one a template it lists has a default for.
+  knobs=$(yq '.spec.postBuild.substitute | keys | .[]' "$tenant/tenant.yaml" | grep -vx TENANT || true)
+  bad=$(grep -vxE "($prefixes)_[A-Z0-9_]+" <<<"$knobs" || true)
   [ -z "$bad" ] || fail "$tenant/tenant.yaml: sets values for none of its apps: $bad"
+  templates=$(sed "s|^$up/|kubernetes/|" <<<"$listed")
+  for key in $knobs; do
+    grep -qF "\${$key:=" $templates \
+      || fail "$tenant/tenant.yaml: $key changes nothing, as no template the tenant lists has \${$key:=<default>}"
+  done
+  # Its secret holds its domains and, later, its apps' own keys; anything else could reach every app it runs.
+  keys=$(yq '(.stringData // {}) * (.data // {}) | keys | .[]' "$tenant/$secrets")
+  for key in TENANT_DOMAIN TENANT_APP_DOMAIN; do
+    grep -qxF "$key" <<<"$keys" || fail "$tenant/$secrets holds TENANT_DOMAIN and TENANT_APP_DOMAIN"
+  done
+  bad=$(grep -vxE "TENANT_DOMAIN|TENANT_APP_DOMAIN|($prefixes)_[A-Z0-9_]+" <<<"$keys" || true)
+  [ -z "$bad" ] || fail "$tenant/$secrets holds only TENANT_DOMAIN, TENANT_APP_DOMAIN and <APP>_* keys of apps the" \
+    "tenant runs: $bad"
 done
 dup=$(for tenant in kubernetes/clusters/*/tenants/*/; do basename "$tenant"; done | sort | uniq -d)
 [ -z "$dup" ] || fail "a tenant lives in one cluster, its home: $dup"
@@ -209,6 +231,8 @@ for dir in kubernetes/clusters/*/; do
         yq "(.stringData // {}) * ((.data // {}) | with(.[] | select(. != \"**SOPS**\"); . |= @base64d))
           | with(.[] | select(. == \"**SOPS**\"); . = $standin)" "$w/src.yaml" >"$w/src.vars.yaml"
       fi
+      bad=$(yq 'keys | .[]' "$w/src.vars.yaml" | grep -xF "$defaults" || true)
+      [ -z "$bad" ] || fail "$cluster/$name: $kind/$ref sets $bad, which only a template may set"
       both=$(yq ea 'select(fileIndex == 0) as $a | select(fileIndex == 1) | keys | .[]
         | select(. as $k | $a | has($k))' \
         "$w/$name.vars.yaml" "$w/src.vars.yaml")
@@ -252,6 +276,14 @@ for dir in kubernetes/clusters/*/; do
     "$rendered/cluster.yaml")
   bad=$(grep -E "$tenantlike" <<<"$platform" || true)
   [ -z "$bad" ] || fail "$cluster: platform Kustomizations can't be named like a tenant's app: $bad"
+  # In flux-system, tenant-<id> is each tenant's own Kustomization and Secret, and nothing else's.
+  expected=$(for tenant in "$dir"/tenants/*/; do
+    [ ! -d "$tenant" ] || printf '%s/tenant-%s\n' Kustomization "$(basename "$tenant")" Secret "$(basename "$tenant")"
+  done | sort)
+  reserved=$(yq ea '[select(.metadata.namespace == "flux-system" and (.metadata.name | test("^tenant-")))
+    | .kind + "/" + .metadata.name] | .[]' "$rendered"/*.yaml | sort)
+  [ "$reserved" = "$expected" ] || fail "$cluster: tenant- names only a tenant's own Kustomization and Secret:" \
+    $(comm -23 <(echo "$reserved") <(echo "$expected"))
 
   while read -r name path; do
     file=$rendered/$name.yaml
@@ -327,7 +359,8 @@ for dir in kubernetes/clusters/*/; do
           and (.[0].spec.hard | keys | sort | join(",")) == strenv(hard)
           and .[0].spec.hard."services.loadbalancers" == "0" and .[0].spec.hard."services.nodeports" == "0")' \
           "$file" >/dev/null \
-          || fail "$cluster/$name: an app's namespace has one ResourceQuota, app, on ${hard//,/, }, and publishes nothing"
+          || fail "$cluster/$name: an app's namespace has one ResourceQuota, app, on ${hard//,/, }, and publishes" \
+            "nothing"
         [ "$(yq ea '[select(.kind == "LimitRange")] | (length == 1 and .[0].metadata.name == "defaults"
           and ([.[0].spec.limits[] | select(.type == "Container")] | length) == 1)' "$file")" = true ] \
           || fail "$cluster/$name: an app's namespace has one LimitRange, defaults, with defaults for containers"
@@ -426,6 +459,14 @@ for dir in kubernetes/clusters/*/; do
       [ -z "$bad" ] || fail "$cluster/$name: only the gateway may publish ports: $bad"
     fi
   done <"$w/paths"
+  # Flux would wait forever on a Kustomization that depends on itself, however indirectly.
+  yq ea "[select($fluxks) | .metadata.name as \$n | .spec.dependsOn[]?.name | \$n + \" \" + .] | .[]" \
+    "$rendered"/*.yaml >"$w/deps"
+  bad=$(awk '$1 == $2 { print $1 }' "$w/deps")
+  [ -z "$bad" ] || fail "$cluster: Kustomizations depend on themselves: $bad"
+  tsort "$w/deps" >/dev/null 2>"$w/loop" \
+    || fail "$cluster: Kustomizations depend on each other in a loop: $(grep -v 'input contains a loop' "$w/loop" \
+      | sed 's/^tsort: //' | paste -sd' ')"
 
   # Each name has one listener, and every route asks a listener that admits its namespace for exactly its name.
   yq ea '[select(.kind == "Gateway") | .metadata.name + " " + .metadata.labels."suveraen/tenant" + " "

@@ -77,12 +77,27 @@ refuses host-without-app "adds a host to hello, which the tenant doesn't run" \
   "sed -i 's|apps/hello/ks.yaml|apps/hello/edge-apex.yaml|' $T/bravo/apps/kustomization.yaml"
 refuses knob-for-other-app "sets values for none of its apps" \
   "yq -i '.spec.postBuild.substitute.NEXTCLOUD_QUOTA_MEMORY = \"1Gi\"' $T/bravo/tenant.yaml"
-refuses secret-missing-key "bravo-hello-edge-hello doesn't render" \
+refuses knob-typo "HELLO_QUOTA_MEMROY changes nothing" \
+  "yq -i '.spec.postBuild.substitute.HELLO_QUOTA_MEMROY = \"512Mi\"' $T/bravo/tenant.yaml"
+refuses knob-without-default "HELLO_QUOTA_PODS changes nothing" \
+  "yq -i '.spec.postBuild.substitute.HELLO_QUOTA_PODS = \"8\"' $T/bravo/tenant.yaml"
+only="holds only TENANT_DOMAIN, TENANT_APP_DOMAIN and <APP>_* keys of apps the tenant runs"
+refuses secret-missing-key "holds TENANT_DOMAIN and TENANT_APP_DOMAIN" \
   "sed -i '/TENANT_APP_DOMAIN/d' $T/bravo/secrets.yaml"
-refuses secret-sets-tenant "TENANT is set inline and by one of its sources" \
-  "append $T/bravo/secrets.yaml '  TENANT: alpha\n'"
-refuses secret-shadows-setting "TEST_CLUSTER comes from more than one of its sources" \
-  "append $T/bravo/secrets.yaml '  TEST_CLUSTER: \"false\"\n'"
+refuses secret-sets-tenant "$only: TENANT" "append $T/bravo/secrets.yaml '  TENANT: alpha\n'"
+refuses secret-extra-key "$only: SOMETHING_ELSE" "append $T/bravo/secrets.yaml '  SOMETHING_ELSE: x\n'"
+refuses secret-other-app-key "$only: NEXTCLOUD_ADMIN_PASSWORD" \
+  "append $T/bravo/secrets.yaml '  NEXTCLOUD_ADMIN_PASSWORD: x\n'"
+refuses secret-overrides-route-port "$only: ROUTE_TARGET_PORT" \
+  "append $T/bravo/secrets.yaml '  ROUTE_TARGET_PORT: \"22\"\n'"
+refuses secret-and-setting "HELLO_GREETING comes from more than one of its sources" \
+  "append $T/bravo/secrets.yaml '  HELLO_GREETING: x\n'; append clusters/test/settings.yaml '  HELLO_GREETING: x\n'"
+refuses setting-and-inline "QUOTA_CPU is set inline and by one of its sources" \
+  "append clusters/test/settings.yaml '  QUOTA_CPU: 1000m\n'"
+refuses settings-override-route-port "cluster-settings sets ROUTE_TARGET_PORT, which only a template may set" \
+  "append clusters/test/settings.yaml '  ROUTE_TARGET_PORT: \"22\"\n'"
+refuses settings-override-route-service "cluster-settings sets ROUTE_SERVICE, which only a template may set" \
+  "append clusters/test/settings.yaml '  ROUTE_SERVICE: other\n'"
 refuses cluster-secrets-to-tenant "substituting from its sources only" \
   "sed -i 's/              name: tenant-\${TENANT}/&\n            - kind: Secret\n              name: cluster-secrets\n\
               optional: true/' components/tenant/kustomization.yaml"
@@ -110,6 +125,24 @@ refuses template-variable "a template may use only" \
   "sed -i 's/      HOST: hello\$/      HOST: \${TENANT_APP_DOMAIN}/' apps/hello/ks.yaml"
 refuses app-at-root "creates a Kustomization named \${TENANT}-hello" \
   "sed -i 's|  - ./tenants/alpha|  - ../../apps/hello/ks.yaml\n  - ./tenants/alpha|' clusters/test/kustomization.yaml"
+refuses template-kubeconfig "it sets only its name, path, targetNamespace, components, dependsOn" \
+  "yq -i '(select(documentIndex == 0) | .spec.kubeConfig.secretRef.name) = \"tenant-\${TENANT}\"' apps/hello/ks.yaml"
+refuses template-deletion-policy "it sets only its name, path, targetNamespace, components, dependsOn" \
+  "yq -i '(select(documentIndex == 0) | .spec.deletionPolicy) = \"Delete\"' apps/hello/ks.yaml"
+refuses template-labels "it sets only its name, path, targetNamespace, components, dependsOn" \
+  "yq -i '(select(documentIndex == 0) | .metadata.labels.x) = \"y\"' apps/hello/ks.yaml"
+refuses template-defaults-field "it sets only its name, path, targetNamespace, components, dependsOn" \
+  "yq -i '(select(documentIndex == 0) | .spec.wait) = false' apps/hello/ks.yaml"
+refuses dep-loop "Kustomizations depend on each other in a loop" \
+  "yq -i '(select(documentIndex == 0) | .spec.dependsOn) += [{\"name\": \"\${TENANT}-hello-edge-hello\"}]' \
+   apps/hello/ks.yaml"
+refuses dep-self "Kustomizations depend on themselves: alpha-hello" \
+  "yq -i '(select(documentIndex == 0) | .spec.dependsOn) += [{\"name\": \"\${TENANT}-hello\"}]' apps/hello/ks.yaml"
+refuses platform-named-like-tenant "tenant- names only a tenant's own Kustomization and Secret: Kustomization/tenant-" \
+  "sed -i 's/  name: reloader\$/  name: tenant-zzzzz/' platform/reloader/ks.yaml"
+refuses secret-named-like-tenant "tenant- names only a tenant's own Kustomization and Secret: Secret/tenant-zzzzz" \
+  "sed -i 's/  - .\/settings.yaml/&\n  - .\/extra.yaml/' clusters/test/kustomization.yaml
+   append clusters/test/extra.yaml 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: tenant-zzzzz\n'"
 refuses cross-tenant-dep "depends on bravo-hello, which is neither the platform nor tenant alpha's" \
   "yq -i '(select(documentIndex == 0) | .spec.dependsOn) += [{\"name\": \"bravo-hello\"}]' apps/hello/ks.yaml"
 refuses edge-without-app-dep "a host is \${TENANT}-hello-edge-<EDGE>" \
@@ -218,6 +251,7 @@ refuses np-edge-ports-only "a network policy rule without peers reaches everythi
 
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"
+renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'"
 renders real-cluster "prod delta; encsecret clusters/prod/tenants/delta; encmap clusters/prod"
 renders test-cluster-renamed \
   "mv clusters/test clusters/ci; sed -i 's|clusters/test|clusters/ci|' clusters/ci/tenants/*/tenant.yaml"
