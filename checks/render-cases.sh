@@ -8,7 +8,8 @@ cases=$(mktemp -d)
 jobs=${NIX_BUILD_CORES:-1}
 [ "$jobs" -gt 0 ] || jobs=$(nproc)
 
-# Runs a case in the background: a copy of kubernetes/ changed by a shell snippet, then render.sh on it.
+# Runs a case in the background: a copy of kubernetes/ changed by a shell snippet, then render.sh on it. The snippet
+# runs in a shell of its own, as a condition would turn off errexit for every step but the last.
 run() {
   local id=$1 expect=$2 change=$3 dir=$cases/$1
   mkdir -p "$dir"
@@ -16,7 +17,7 @@ run() {
   while [ "$(jobs -rp | wc -l)" -ge "$jobs" ]; do wait -n || true; done
   (
     cd "$dir/kubernetes"
-    if ! (eval "$change") >"$dir/log" 2>&1; then
+    if ! bash -euo pipefail -c "$change" >"$dir/log" 2>&1; then
       echo "BROKEN      $id: the change itself failed: $(tail -1 "$dir/log")" >"$dir/result"
     elif bash "$render" "$dir/kubernetes" "$dir/out" >"$dir/log" 2>&1; then
       if [ -z "$expect" ]; then echo "ok          $id" >"$dir/result"; else echo "NOT REFUSED $id" >"$dir/result"; fi
@@ -66,6 +67,9 @@ other() { # a second app like hello, which bravo also runs
   sed -i 's|  - ../../../../../apps/hello/ks.yaml|&\n  - ../../../../../apps/other/ks.yaml|' \
     $T/bravo/apps/kustomization.yaml
 }
+knob() { yq -i ".spec.postBuild.substitute.$1 = \"$2\"" "$T/bravo/tenant.yaml"; }
+export -f append np encsecret encmap prod other knob
+export T sops encrypted
 keymap='---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: key\ndata:\n  KEY: '
 
 # Tenants and their sources.
@@ -242,7 +246,6 @@ refuses platform-tenantlike-digit "platform namespaces can't be named like a ten
   "sed -i 's/NAMESPACE: reloader/NAMESPACE: relod-9x/' platform/reloader/ks.yaml"
 
 # Quotas.
-knob() { yq -i ".spec.postBuild.substitute.$1 = \"$2\"" "$T/bravo/tenant.yaml"; }
 refuses quota-below-memory-default "the LimitRange's default.memory, 128Mi, is above the quota's limits.memory, 64Mi" \
   "knob HELLO_QUOTA_MEMORY 64Mi"
 refuses quota-below-ephemeral-default \
