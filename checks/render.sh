@@ -4,8 +4,9 @@
 # wouldn't catch, on what was rendered rather than on what a file says.
 # Usage: render.sh <kubernetes directory> <output directory>
 set -euo pipefail
-out=$2
+out=$(realpath -m "$2")
 work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
 cp -r --no-preserve=mode "$1" "$work/kubernetes"
 cd "$work"
 fail() {
@@ -22,7 +23,6 @@ tenantre='^[a-z][a-z0-9]{4}$'
 namere='^[a-z][a-z0-9]{1,15}$'
 tenantlike='^[a-z][a-z0-9]{4}-'
 up='../../../../..'
-# What an app's quota covers, each sized by its template.
 quotas='QUOTA_CONFIGMAPS,QUOTA_CPU,QUOTA_EPHEMERAL_STORAGE,QUOTA_JOBS,QUOTA_MEMORY,QUOTA_PODS,QUOTA_SECRETS'
 quotas+=',QUOTA_SERVICES,QUOTA_STORAGE,QUOTA_VOLUMES'
 hard='count/configmaps,count/jobs.batch,count/secrets,limits.ephemeral-storage,limits.memory'
@@ -54,8 +54,6 @@ for ks in $(find kubernetes/platform -name ks.yaml | sort); do
   [ "$(yq ea "[.spec | $owned] | any" "$ks")" = false ] || fail "$ks sets a field components/defaults owns"
 done
 
-# An app's templates, which tenants list: ks.yaml (the app and the hosts every tenant gets), and edge-<key>.yaml for
-# each host a tenant may add.
 for dir in kubernetes/apps/*/; do
   dir=${dir%/}
   app=$(basename "$dir")
@@ -65,7 +63,6 @@ for dir in kubernetes/apps/*/; do
   export app
   for file in "$dir"/ks.yaml "$dir"/edge-*.yaml; do
     [ -e "$file" ] || continue
-    # A tenant fills in its ID, and may size the app through ${<APP>_<NAME>:=<default>}.
     bad=$(grep -o '[$][{][^}]*[}]' "$file" | sort -u \
       | grep -vxE "[$][{]TENANT[}]|[$][{]$knob[A-Z0-9_]+:=[^}$]+[}]" || true)
     [ -z "$bad" ] || fail "$file: a template may use only \${TENANT} and \${$knob<NAME>:=<default>}: $bad"
@@ -157,7 +154,6 @@ for tenant in kubernetes/clusters/*/tenants/*/; do
     grep -qxF "$edge" <<<"$apps" || fail "$manifest: adds a host to $edge, which the tenant doesn't run"
   done
   prefixes=$(tr a-z A-Z <<<"$apps" | paste -sd'|')
-  # Its only inline values: its ID, and sizes of the apps it runs, each one a template it lists has a default for.
   knobs=$(yq '.spec.postBuild.substitute | keys | .[]' "$tenant/tenant.yaml" | grep -vx TENANT || true)
   bad=$(grep -vxE "($prefixes)_[A-Z0-9_]+" <<<"$knobs" || true)
   [ -z "$bad" ] || fail "$tenant/tenant.yaml: sets values for none of its apps: $bad"
@@ -195,7 +191,6 @@ for dir in kubernetes/clusters/*/; do
   [ "$testing" = true ] || [ "$testing" = false ] \
     || fail "$cluster: cluster-settings says whether its tenants are stand-ins, TEST_CLUSTER \"true\" or \"false\""
 
-  # Breadth first: the cluster's Kustomizations, then those they create, as long as they come from this repository.
   yq ea "[select($fluxks and .spec.sourceRef.name == \"suveraen\") | .metadata.name] | .[]" "$rendered/cluster.yaml" \
     | sed 's/^/cluster /' >"$w/queue"
   while [ -s "$w/queue" ]; do
@@ -254,11 +249,11 @@ for dir in kubernetes/clusters/*/; do
       | sed "s/^/$name /" >>"$w/queue"
   done
 
-  # Every Flux Kustomization acts as Flux's own account, in flux-system, and only the root (Nix's) decrypts.
   bad=$(yq ea "[select($fluxks) | select(.spec.serviceAccountName != \"kustomize-controller\"
     or .metadata.namespace != \"flux-system\" or (.spec.sourceRef | has(\"namespace\")) or (.spec | has(\"decryption\"))
     or ((.spec.dependsOn // []) | any_c(has(\"namespace\")))) | .metadata.name] | .[]" "$rendered"/*.yaml)
-  [ -z "$bad" ] || fail "$cluster: Kustomizations that don't follow the lockdown: $bad"
+  [ -z "$bad" ] || fail "$cluster: Kustomizations act as Flux's own account from flux-system, and only the root" \
+    "decrypts: $bad"
   bad=$(yq ea "[select($fluxks) | .metadata.name as \$n | (.spec.postBuild.substitute // {}) | to_entries | .[]
     | select((.value | tag) != \"!!str\") | \$n + \"/\" + .key] | .[]" "$rendered"/*.yaml)
   [ -z "$bad" ] || fail "$cluster: Flux takes only strings as values to substitute: $bad"
@@ -276,7 +271,6 @@ for dir in kubernetes/clusters/*/; do
     "$rendered/cluster.yaml")
   bad=$(grep -E "$tenantlike" <<<"$platform" || true)
   [ -z "$bad" ] || fail "$cluster: platform Kustomizations can't be named like a tenant's app: $bad"
-  # In flux-system, tenant-<id> is each tenant's own Kustomization and Secret, and nothing else's.
   expected=$(for tenant in "$dir"/tenants/*/; do
     [ ! -d "$tenant" ] || printf '%s/tenant-%s\n' Kustomization "$(basename "$tenant")" Secret "$(basename "$tenant")"
   done | sort)
@@ -383,7 +377,7 @@ for dir in kubernetes/clusters/*/; do
         app=${BASH_REMATCH[1]}
         key=${BASH_REMATCH[2]}
         base=$t-$app-$key
-        export app base key
+        export app base
         grep -qxF "$t-$app" <<<"$known" || fail "$cluster/$name: a host belongs to an app its tenant runs, $t-$app"
         case ${path##*/} in
           app) host='.HOST + "." + .TENANT_APP_DOMAIN' ;;
@@ -431,7 +425,6 @@ for dir in kubernetes/clusters/*/; do
           | select([((.spec.ingress // [])[] | (.from // [])), ((.spec.egress // [])[] | (.to // []))]
             | any_c(length == 0 or any_c((keys | length) == 0))) | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: a network policy rule without peers reaches everything: $bad"
-        # Other namespaces are reached only when named: a platform piece, or the same tenant's apps.
         bad=$(yq ea '[select(.kind == "NetworkPolicy") | .metadata.name as $np
           | [.spec.ingress[]?.from[]?, .spec.egress[]?.to[]?] | .[]
           | {"np": $np, "ipblock": has("ipBlock"), "selector": has("namespaceSelector"),
@@ -468,7 +461,6 @@ for dir in kubernetes/clusters/*/; do
     || fail "$cluster: Kustomizations depend on each other in a loop: $(grep -v 'input contains a loop' "$w/loop" \
       | sed 's/^tsort: //' | paste -sd' ')"
 
-  # Each name has one listener, and every route asks a listener that admits its namespace for exactly its name.
   yq ea '[select(.kind == "Gateway") | .metadata.name + " " + .metadata.labels."suveraen/tenant" + " "
     + .spec.listeners[0].hostname + " "
     + .spec.listeners[0].allowedRoutes.namespaces.selector.matchLabels."kubernetes.io/metadata.name"] | .[]' \
@@ -529,12 +521,12 @@ done
 # Every cluster sets the same settings and secrets, so none is forgotten in one of them.
 [ "$(for keys in "$work"/*/keys; do sort "$keys" | sha256sum; done | sort -u | wc -l)" = 1 ] \
   || fail "the clusters don't set the same settings and secrets"
-# A test cluster's tenants run every app and every host an app offers, at least two of them side by side.
 grep -oE '^[^ ]+ tenant-' "$work/tested" | sort | uniq -c | awk '$1 >= 2 { found = 1 } END { exit !found }' \
   || fail "a test cluster runs at least two tenants, so their separation is tested"
 for file in kubernetes/apps/*/ks.yaml kubernetes/apps/*/edge-*.yaml; do
   [ -e "$file" ] || continue
-  for template in $(yq ea '[.metadata.name | sub("^[$][{]TENANT[}]-", "")] | .[]' "$file"); do
+  names=$(yq ea '[.metadata.name | sub("^[$][{]TENANT[}]-", "")] | .[]' "$file")
+  for template in $names; do
     grep -qE " [a-z][a-z0-9]{4}-$template$" "$work/tested" || fail "$file: no test cluster's tenant runs $template"
   done
 done
