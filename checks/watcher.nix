@@ -47,7 +47,10 @@
         }
       ];
     };
-    dns.self = "example-watcher";
+    dns = {
+      self = "example-watcher";
+      check.enable = true;
+    };
     alerts = {
       urlFile = "/run/secrets/alerts-url";
       tokenFile = "/run/secrets/alerts-token";

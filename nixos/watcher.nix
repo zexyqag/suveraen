@@ -54,9 +54,10 @@ in
     gatusEnvironmentFile = lib.mkOption {
       type = lib.types.str;
       description = ''
-        Environment file with NTFY_TOPIC (the secret alert topic), NTFY_TOKEN (the `gatus` account's ntfy token) and
-        one HEARTBEAT_TOKEN_<NAME> per server, the name upper-cased with `-` as `_`. Values must be plain letters and
-        digits (ntfy tokens keep their `tk_`); Gatus substitutes them into its YAML.
+        Environment file with NTFY_TOPIC (the secret alert topic), NTFY_TOKEN (the `gatus` account's ntfy token),
+        one HEARTBEAT_TOKEN_<NAME> per server, the name upper-cased with `-` as `_`, and with suveraen.dns.check
+        DNS_TOKEN. Values must be plain letters and digits (ntfy tokens keep their `tk_`); Gatus substitutes them
+        into its YAML.
       '';
     };
 

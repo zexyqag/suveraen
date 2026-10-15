@@ -1,9 +1,11 @@
-# Boots a hidden signer, two published secondaries (ns1 and ns2), a provider's secondary without TSIG and a client
-# that holds the parent zone. A signer refuses to start until it has the key whose DS the parent publishes; every
-# nameserver answers with signatures that validate; the zones carry what the settings say; changes reach every
-# nameserver by NOTIFY and IXFR; the ACME zone takes TXT records at _acme-challenge names with its key, which a
-# restart replaces, and refuses everything else; and ns2 takes over signing from the key backup with the same keys,
-# and gets them back from it after losing them, while the guard keeps knot down.
+# Boots a hidden signer, two published secondaries (ns1 on the watcher, ns2 on its own), a provider's secondary
+# without TSIG and a client that holds the parent zone. A signer refuses to start until it has the key whose DS the
+# parent publishes; every nameserver answers with signatures that validate; the zones carry what the settings say;
+# changes reach every nameserver by NOTIFY and IXFR; the ACME zone takes TXT records at _acme-challenge names with
+# its key, which a restart replaces, and refuses everything else; the watcher's check runs on a timer, passes, and
+# catches a lagging nameserver, a DS the parent shouldn't publish, signatures running out and a copy it can't read;
+# and ns2 takes over signing from the key backup with the same keys, and gets them back from it after losing them,
+# while the guard keeps knot down.
 { pkgs, module }:
 let
   keys = import "${pkgs.path}/nixos/tests/ssh-keys.nix" pkgs;
@@ -19,6 +21,21 @@ let
     -----END PRIVATE KEY-----
   '';
   exampleDS = "34533 13 2 c5252d0bd05638256c4884ba430e61c899579ffb6f64f2d452da89185a52e105";
+
+  gatusToken = "tk_suveraentestgatus000000000000";
+  secrets = pkgs.runCommand "dns-test-secrets" { nativeBuildInputs = [ pkgs.ntfy-sh ]; } ''
+    mkdir $out
+    hash() { printf '%s\n%s\n' "$1" "$1" | ntfy user hash | grep -o '\$2a\$.*'; }
+    cat > $out/ntfy.env <<EOF
+    NTFY_AUTH_USERS='phone:$(hash unused):user,publisher:$(hash unused):user,gatus:$(hash unused):user'
+    NTFY_AUTH_TOKENS='gatus:${gatusToken}'
+    EOF
+    cat > $out/gatus.env <<EOF
+    NTFY_TOPIC=ops
+    NTFY_TOKEN=${gatusToken}
+    DNS_TOKEN=dnstesttoken
+    EOF
+  '';
 
   addresses = node: [
     node.networking.primaryIPAddress
@@ -117,11 +134,43 @@ pkgs.testers.runNixOSTest {
       specialisation.changed.configuration.suveraen.dns.zones."one.test".records.www.A = [ "192.0.2.80" ];
     };
 
-    ns1 = {
-      imports = [ common ];
-      suveraen.dns.self = "ns1";
-      specialisation.promoted.configuration = promoted;
-    };
+    ns1 =
+      { lib, nodes, ... }:
+      {
+        imports = [ common ];
+        suveraen = {
+          dns = {
+            self = "ns1";
+            check.enable = true;
+          };
+          watcher = {
+            enable = true;
+            ntfyHost = "alerts.test";
+            statusHost = "status.test";
+            readers = [ "phone" ];
+            ntfyEnvironmentFile = "${secrets}/ntfy.env";
+            gatusEnvironmentFile = "${secrets}/gatus.env";
+          };
+        };
+        services.nginx.virtualHosts = lib.genAttrs [ "alerts.test" "status.test" ] (_: {
+          forceSSL = lib.mkForce false;
+          enableACME = lib.mkForce false;
+        });
+        # The client holds the parent zone; it isn't signed.
+        services.unbound.settings = {
+          server = {
+            local-zone = [ ''"test." nodefault'' ];
+            domain-insecure = [ "test." ];
+          };
+          stub-zone = [
+            {
+              name = "test.";
+              stub-addr = [ nodes.client.networking.primaryIPAddress ];
+            }
+          ];
+        };
+        specialisation.promoted.configuration = promoted;
+      };
 
     ns2 = {
       imports = [ common ];
@@ -377,6 +426,47 @@ pkgs.testers.runNixOSTest {
           for n in serving("one.test"):
               client.wait_until_succeeds(f"kdig @{servers[n]} +short A www.one.test | grep -q 192.0.2.80", timeout=60)
           ns1.succeed("journalctl -u knot | grep -q 'one.test.\\] IXFR, incoming'")
+
+      def check(ok, contains=None, everywhere=False):
+          ns1.succeed("systemctl start dns-check")
+          results = {}
+          for zone in top + [acme]:
+              key = "dns_" + zone.replace(".", "-")
+              r = ns1.succeed(f"curl -fsS http://127.0.0.1:8080/api/v1/endpoints/{key}/statuses | jq -c '.results[-1]'")
+              results[zone] = r
+          bad = {z: r for z, r in results.items() if '"success":false' in r}
+          if ok:
+              assert not bad, bad
+          elif everywhere:
+              assert len(bad) == len(results) and all(contains in r for r in bad.values()), results
+          else:
+              assert bad and any(contains in r for r in bad.values()), results
+
+      with subtest("The watcher's check runs on a timer, passes, and catches a lagging nameserver, a wrong DS, old signatures and a copy it can't read"):
+          ns1.wait_for_unit("gatus.service")
+          ns1.wait_until_succeeds("curl -fsS http://127.0.0.1:8080/health")
+          # From here on the test runs the check itself.
+          ns1.succeed("systemctl is-active dns-check.timer && systemctl stop dns-check.timer")
+          ns1.wait_until_succeeds("systemctl show -p ActiveState --value dns-check.service | grep -qx -e inactive -e failed")
+          check(True)
+          ns2.succeed(f"knotc zone-freeze {acme}")
+          assert accepted(update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT token2\\n"))
+          check(False, "serials differ")
+          ns2.succeed(f"knotc zone-thaw {acme}")
+          in_sync(acme, signer, "${ip "signer"}")
+          client.succeed("knotc zone-begin test && knotc zone-set test one 60 DS 12345 13 2 " + "00" * 32 + " && knotc zone-commit test")
+          check(False, "publishes DS")
+          client.succeed("knotc zone-begin test && knotc zone-unset test one DS && knotc zone-commit test")
+          check(True)
+          ns1.succeed("date -s @$(( $(date +%s) + 20 * 86400 ))")
+          check(False, "signature expires")
+          ns1.succeed("date -s @$(( $(date +%s) - 20 * 86400 ))")
+          # Every zone still gets its report.
+          ns1.succeed("systemctl stop knot")
+          check(False, "can't transfer the zone from this server", everywhere=True)
+          ns1.succeed("systemctl start knot")
+          for zone in top + [acme]:
+              in_sync(zone, signer, "${ip "signer"}")
 
       with subtest("ns2 takes over signing from the key backup, with the same keys"):
           signer.succeed("systemctl start knot-backup")

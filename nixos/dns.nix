@@ -245,6 +245,11 @@ let
       key = "transfer";
       action = "transfer";
     };
+    # The watcher's checks read the zones from the server on the same host.
+    transfer-self = {
+      address = self.addresses;
+      action = "transfer";
+    };
     transfer-external = {
       address = externalTransfer;
       action = "transfer";
@@ -322,7 +327,8 @@ let
           example = [ "12345 13 2 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ];
           description = ''
             DS records published at the registrar for ${name}, as key tag, algorithm, digest type and digest.
-            While set, a signer refuses to start without a matching key.
+            While set, a signer refuses to start without a matching key, and the watcher compares them with the
+            parent's.
           '';
         };
       };
@@ -627,6 +633,7 @@ in
                 {
                   acl = aclsFor [
                     "transfer-servers"
+                    "transfer-self"
                     "transfer-external"
                     (if signing then null else "notify-signer")
                   ];
@@ -640,6 +647,7 @@ in
                 ${cfg.acme.zone} = {
                   acl = aclsFor [
                     "transfer-servers"
+                    "transfer-self"
                     (if signing then "acme-update" else "notify-signer")
                   ];
                 }
