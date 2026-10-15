@@ -23,4 +23,3 @@ patches:
               name: cluster-settings
             - kind: Secret
               name: cluster-secrets
-              optional: true

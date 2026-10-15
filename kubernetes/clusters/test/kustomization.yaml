@@ -1,14 +1,16 @@
 ---
-# The cluster CI deploys (checks/e2e.nix): the whole platform with a self-signed issuer, and two tenants that
-# between them run every app and every host an app offers.
+# The cluster CI deploys (checks/e2e.nix): the whole platform, with test ACME CAs standing in for both CAs, and two
+# tenants that between them run every app and every host an app offers.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: flux-system
 resources:
   - ./settings.yaml
+  - ./secrets.yaml
   - ./hostnames.yaml
   - ../../platform
-  - ../../platform/issuer/self-signed/ks.yaml
+  - ../../platform/issuer/public/ks.yaml
+  - ../../platform/issuer/standby/ks.yaml
   - ./tenants/alpha
   - ./tenants/bravo
 components:

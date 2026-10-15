@@ -221,17 +221,13 @@ for dir in kubernetes/clusters/*/; do
     for i in $sources; do
       kind=$(yq ".spec.postBuild.substituteFrom[$i].kind" "$w/$name.ks.yaml")
       ref=$(yq ".spec.postBuild.substituteFrom[$i].name" "$w/$name.ks.yaml")
-      optional=$(yq ".spec.postBuild.substituteFrom[$i].optional // false" "$w/$name.ks.yaml")
       yq ea "[select(.kind == \"$kind\" and .metadata.name == \"$ref\" and .metadata.namespace == \"flux-system\")]
         | .[0] // {}" "$rendered/cluster.yaml" >"$w/src.yaml"
-      if [ "$(yq 'length' "$w/src.yaml")" = 0 ]; then
-        [ "$optional" = true ] \
-          || fail "$cluster/$name: substituteFrom names $kind/$ref, which the cluster doesn't define"
-        continue
-      fi
+      [ "$(yq 'length' "$w/src.yaml")" != 0 ] \
+        || fail "$cluster/$name: substituteFrom names $kind/$ref, which the cluster doesn't define"
       # Names are readable even when values are encrypted; flux build masks a Secret's as **SOPS** and drops its sops
-      # key. Each stand-in differs per source and key.
-      standin="(\"$ref-\" + key | downcase | sub(\"_\", \"-\"))"
+      # key. Each stand-in differs per source and key, and is base64, as it may land in a Secret's data.
+      standin="(\"$ref-\" + key | downcase | sub(\"_\", \"-\") | @base64)"
       if [ "$(yq 'has("sops")' "$w/src.yaml")" = true ]; then
         yq "(.stringData // .data // {}) | with(.[]; . = $standin)" "$w/src.yaml" >"$w/src.vars.yaml"
       elif [ "$kind" = ConfigMap ]; then
@@ -532,7 +528,21 @@ for dir in kubernetes/clusters/*/; do
         || fail "$cluster: $admitted serves $host, but the hostname map gives it to ${value:-nobody}"
     done <"$w/listeners"
   fi
+  for issuer in public standby; do
+    [ "$(yq ea "[select(.kind == \"ClusterIssuer\" and .metadata.name == \"$issuer\")] | length" "$rendered"/*.yaml)" \
+      = 1 ] || fail "$cluster: the cluster has one ClusterIssuer public, which every host's certificate names, and" \
+      "one standby"
+  done
   if [ "$testing" = false ]; then
+    # Hosts' certificates come from CAs that browsers trust, so no test or self-made CA is left in place.
+    bad=$(yq ea '[select(.kind == "ClusterIssuer") | select((.spec | keys | join(",")) != "acme"
+      or (.spec.acme.caBundle // "") != "" or .spec.acme.skipTLSVerify == true) | .metadata.name] | .[]' \
+      "$rendered"/*.yaml | sort | paste -sd' ')
+    [ -z "$bad" ] || fail "$cluster: every ClusterIssuer is an ACME CA the public trust store vouches for: $bad"
+    bad=$(yq ea '[select(.kind == "Secret" and .metadata.name == "cluster-secrets")
+      | select((.stringData // {}) * (.data // {}) | to_entries | any_c(.value != "**SOPS**")) | .metadata.name]
+      | .[]' "$rendered/cluster.yaml")
+    [ -z "$bad" ] || fail "$cluster: the cluster's secrets, its CA accounts, are encrypted in every value"
     # A tenant's secret holds its domains and keys, which tie it to a customer or a person.
     bad=$(yq ea '[select(.kind == "Secret" and (.metadata.name | test("^tenant-")))
       | select((.stringData // {}) * (.data // {}) | to_entries | any_c(.value != "**SOPS**")) | .metadata.name]

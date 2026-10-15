@@ -1,0 +1,17 @@
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: standby
+spec:
+  acme:
+    server: ${ACME_STANDBY_SERVER}
+    disableAccountKeyGeneration: true
+    privateKeySecretRef:
+      name: acme
+      key: standby-account
+    externalAccountBinding:
+      keyID: ${ACME_STANDBY_EAB_KID}
+      keySecretRef:
+        name: acme
+        key: standby-eab

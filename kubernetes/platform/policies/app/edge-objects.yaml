@@ -1,9 +1,10 @@
 ---
 # Traefik serves every Gateway of its class and puts every listener's certificate in one store, so Gateways and
 # certificates live only in the gateway namespace, where no app's account reaches. No route needs a ReferenceGrant,
-# and only the platform's ClusterIssuers sign. cert-manager signs any CertificateRequest for an issuer it knows, and
-# the hostnames policy can't read the names in one, so requests too stay where cert-manager makes them from
-# certificates. What a tenant applies carries its label.
+# and only the platform's ClusterIssuers sign. cert-manager signs any CertificateRequest for an issuer it knows and
+# completes any ACME Order, and the hostnames policy can't read the names in either, so requests, Orders and their
+# Challenges too stay where cert-manager makes them from certificates. cert-manager's startup check tries a request in
+# its own namespace as a dry run, which makes nothing. What a tenant applies carries its label.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -20,11 +21,16 @@ spec:
         apiVersions: ["*"]
         operations: [CREATE, UPDATE]
         resources: [certificates, certificaterequests, issuers, clusterissuers]
+      - apiGroups: [acme.cert-manager.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [orders, challenges]
   validations:
     - expression: >-
-        request.resource.resource in ['gateways', 'listenersets'] ? request.namespace == 'gateway' :
-        request.resource.resource in ['certificates', 'certificaterequests'] ?
-        request.namespace in ['gateway', 'cert-manager'] :
+        request.resource.resource in ['gateways', 'listenersets', 'certificates', 'certificaterequests', 'orders',
+        'challenges'] ?
+        request.namespace == 'gateway' || request.resource.resource == 'certificaterequests'
+        && request.namespace == 'cert-manager' && request.?dryRun.orValue(false) :
         request.resource.resource == 'clusterissuers' ? object.metadata.?labels[?'suveraen/tenant'].orValue('') == '' :
         false
       message: >-

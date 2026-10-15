@@ -1,0 +1,18 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../public/app/secret.yaml
+  - ../../standby/app/standby.yaml
+components:
+  - ../../acme
+patches:
+  - target:
+      kind: ClusterIssuer
+      name: standby
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: public
+    options:
+      allowNameChange: true

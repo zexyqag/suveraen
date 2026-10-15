@@ -1,0 +1,22 @@
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: every-issuer
+spec:
+  acme:
+    caBundle: "${ACME_CA_BUNDLE}"
+    solvers:
+      # _acme-challenge names are CNAMEs into the ACME zone, the only place the key may write (nixos/dns.nix).
+      - dns01:
+          cnameStrategy: Follow
+          rfc2136:
+            # Where pods reach the signer's Knot on its node: suveraen.cluster.nodeServices.dnsUpdates.
+            nameserver: 169.254.53.54:53
+            protocol: TCP
+            tsigKeyName: acme-update
+            tsigAlgorithm: HMACSHA256
+            # The node's Knot makes this key and hands it to cert-manager.
+            tsigSecretSecretRef:
+              name: acme-update
+              key: secret

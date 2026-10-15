@@ -1,0 +1,10 @@
+---
+# A second CA, ready for platform/issuer/failover; hosts don't wait for it.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: issuer-standby
+spec:
+  path: ./kubernetes/platform/issuer/standby/app
+  dependsOn:
+    - name: issuer

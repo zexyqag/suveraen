@@ -1,0 +1,9 @@
+---
+# What every ClusterIssuer shares: the CA's server checked against the cluster's bundle, or the public trust store
+# when that is empty, and DNS-01 through the node's Knot.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - path: ./acme.yaml
+    target:
+      kind: ClusterIssuer

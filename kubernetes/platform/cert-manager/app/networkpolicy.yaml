@@ -1,0 +1,21 @@
+---
+# The controller answers DNS-01 challenges through the DNS signer's Knot on its node (nixos/dns.nix), which every
+# other platform pod is kept from (components/platform).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dns-updates
+  namespace: cert-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/component: controller
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 169.254.53.54/32
+      ports:
+        - { protocol: TCP, port: 53 }
+        - { protocol: UDP, port: 53 }

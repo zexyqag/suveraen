@@ -40,7 +40,7 @@ np() { # a NetworkPolicy added to every app namespace
 sops='sops:\n  age:\n    - recipient: age1example\n      enc: x\n  lastmodified: "2026-10-15T00:00:00Z"\n  mac: ENC[x]
   version: 3.10.2\n'
 encrypted='ENC[AES256_GCM,data:x,type:str]'
-encsecret() { # tenant directory
+encsecret() { # tenant or cluster directory
   mv "$1/secrets.yaml" "$1/secrets.sops.yaml"
   sed -i 's|./secrets.yaml|./secrets.sops.yaml|' "$1/kustomization.yaml"
   yq -i ".stringData[] = \"$encrypted\"" "$1/secrets.sops.yaml"
@@ -50,11 +50,11 @@ encmap() { # cluster directory
   yq -i ".data[] = \"$encrypted\"" "$1/hostnames.yaml"
   append "$1/hostnames.yaml" "$sops"
 }
-# A second cluster, not a test one, whose only tenant is shaped like alpha.
+# A second cluster, not a test one, whose only tenant is shaped like alpha; its CAs are trusted publicly.
 prod() { # tenant ID
   mkdir -p clusters/prod/tenants
-  cp clusters/test/settings.yaml clusters/test/hostnames.yaml clusters/prod/
-  sed -i 's/TEST_CLUSTER: "true"/TEST_CLUSTER: "false"/' clusters/prod/settings.yaml
+  cp clusters/test/settings.yaml clusters/test/secrets.yaml clusters/test/hostnames.yaml clusters/prod/
+  yq -i '.data.TEST_CLUSTER = "false" | .data.ACME_CA_BUNDLE = ""' clusters/prod/settings.yaml
   sed "s|./tenants/alpha|./tenants/$1|; /tenants\/bravo/d" clusters/test/kustomization.yaml \
     >clusters/prod/kustomization.yaml
   cp -r $T/alpha "clusters/prod/tenants/$1"
@@ -137,13 +137,32 @@ refuses no-test-marker "cluster-settings says whether its tenants are stand-ins"
   "yq -i 'del(.data.TEST_CLUSTER)' clusters/test/settings.yaml"
 refuses marked-real "test: the hostname map links domains to tenants, so it is encrypted" \
   "sed -i 's/TEST_CLUSTER: \"true\"/TEST_CLUSTER: \"false\"/' clusters/test/settings.yaml"
+real="prod delta; encsecret clusters/prod/tenants/delta; encmap clusters/prod; encsecret clusters/prod"
 refuses real-cluster-plain-map "prod: the hostname map links domains to tenants, so it is encrypted" \
-  "prod delta; encsecret clusters/prod/tenants/delta"
+  "prod delta; encsecret clusters/prod/tenants/delta; encsecret clusters/prod"
 refuses real-cluster-plain-secret "prod: tenant secrets are encrypted in every value: tenant-delta" \
-  "prod delta; encmap clusters/prod"
+  "prod delta; encmap clusters/prod; encsecret clusters/prod"
+refuses real-cluster-plain-cluster-secrets \
+  "prod: the cluster's secrets, its CA accounts, are encrypted in every value" \
+  "prod delta; encsecret clusters/prod/tenants/delta; encmap clusters/prod"
+untrusted="prod: every ClusterIssuer is an ACME CA the public trust store vouches for"
+refuses real-cluster-test-ca "$untrusted: public standby" \
+  "$real; yq -i '.data.ACME_CA_BUNDLE = \"eA==\"' clusters/prod/settings.yaml"
+refuses real-cluster-skip-verify "$untrusted: standby" \
+  "$real; yq -i '.spec.acme.skipTLSVerify = true' platform/issuer/standby/app/standby.yaml"
+refuses real-cluster-self-signed "$untrusted: public" \
+  "$real; yq -i '.spec = {\"selfSigned\": {}}' platform/issuer/public/app/public.yaml"
+refuses real-cluster-other-issuer "$untrusted: x" \
+  "$real; append platform/issuer/public/app/public.yaml '---\napiVersion: cert-manager.io/v1\nkind: ClusterIssuer
+metadata:\n  name: x\nspec:\n  selfSigned: {}\n'"
+refuses no-standby-issuer "test: the cluster has one ClusterIssuer public, which every host's certificate names" \
+  "sed -i '/issuer\\/standby\\/ks.yaml/d' clusters/test/kustomization.yaml"
+refuses no-public-issuer "test: the cluster has one ClusterIssuer public" \
+  "yq -i '.metadata.name = \"primary\"' platform/issuer/public/app/public.yaml"
+refuses no-cluster-secrets "substituteFrom names Secret/cluster-secrets, which the cluster doesn't define" \
+  "sed -i '/secrets.yaml/d' clusters/test/kustomization.yaml"
 refuses settings-differ "the clusters don't set the same settings and secrets" \
-  "prod delta; encsecret clusters/prod/tenants/delta; encmap clusters/prod
-   append clusters/prod/settings.yaml '  EXTRA: x\n'"
+  "$real; append clusters/prod/settings.yaml '  EXTRA: x\n'"
 
 # Templates.
 refuses template-variable "a template may use only" \
@@ -292,7 +311,10 @@ renders encrypted "encsecret $T/bravo; encmap clusters/test"
 renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
   sed -i 's/PODINFO_UI_MESSAGE: .*/PODINFO_UI_MESSAGE: \${HELLO_API_KEY:=none}/' apps/hello/app/configmap.yaml"
 renders two-apps "other"
-renders real-cluster "prod delta; encsecret clusters/prod/tenants/delta; encmap clusters/prod"
+renders real-cluster "$real"
+renders failover "sed -i 's|issuer/public/ks.yaml|issuer/failover/ks.yaml|' clusters/test/kustomization.yaml"
+renders real-cluster-failover \
+  "$real; sed -i 's|issuer/public/ks.yaml|issuer/failover/ks.yaml|' clusters/prod/kustomization.yaml"
 renders test-cluster-renamed \
   "mv clusters/test clusters/ci; sed -i 's|clusters/test|clusters/ci|' clusters/ci/tenants/*/tenant.yaml"
 renders identity-host \

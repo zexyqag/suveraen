@@ -3,8 +3,8 @@
 # Security Standard, secrets encrypted at rest with secretbox and only SSH and web ports open. An
 # app's charts reach only its own namespace and can neither widen who may act there nor publish
 # ports, no namespace leaves restricted Pod Security, and no Service takes external IPs. A tenant's
-# namespaces, names in flux-system and hosts are its own, Gateways and certificates stay in the
-# gateway namespace, and the platform's pods run at a priority no tenant's may ask for. Hosts and
+# namespaces, names in flux-system and hosts are its own, Gateways, certificates and ACME orders stay
+# in the gateway namespace, and the platform's pods run at a priority no tenant's may ask for. Hosts and
 # pods resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
 # takes known publishers and keeps its account API, stats and attachments closed; the server's
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
@@ -125,6 +125,14 @@ let
               group = "cert-manager.io";
               kind = "ClusterIssuer";
               scope = "Cluster";
+            }
+            {
+              group = "acme.cert-manager.io";
+              kind = "Order";
+            }
+            {
+              group = "acme.cert-manager.io";
+              kind = "Challenge";
             }
           ];
     }
@@ -630,6 +638,21 @@ pkgs.testers.runNixOSTest {
 
           refused(dry(request("alpha-hello")), "edge-objects")
           server.succeed(dry(request("gateway")))
+          # cert-manager's startup check, a dry run in its own namespace, gets through; a real request there doesn't.
+          server.succeed(dry(request("cert-manager")))
+          refused(f"echo {shlex.quote(json.dumps(request('cert-manager')))} | kubectl create -f -", "edge-objects")
+
+          def order(namespace):
+              return {
+                  "apiVersion": "acme.cert-manager.io/v1",
+                  "kind": "Order",
+                  "metadata": {"name": "probe", "namespace": namespace},
+                  "spec": {"request": "eA==", "issuerRef": {"kind": "ClusterIssuer", "name": "public"}},
+              }
+
+          refused(dry(order("alpha-hello")), "edge-objects")
+          refused(dry(order("cert-manager")), "edge-objects")
+          server.succeed(dry(order("gateway")))
           refused(dry(cluster_issuer("alpha")), "edge-objects")
           server.succeed(dry(cluster_issuer(None)))
           refused(
@@ -644,7 +667,7 @@ pkgs.testers.runNixOSTest {
                             "to": [{"group": "", "kind": "Service"}]}}),
               "edge-objects",
           )
-          server.succeed(dry(certificate(None, "cert-manager", isCA=True, commonName="test CA")))
+          refused(dry(certificate(None, "cert-manager", isCA=True, commonName="test CA")), "edge-objects")
 
           # Each host belongs to whom the longest matching entry of the hostname map names: a tenant, or one namespace.
           refused(dry(gateway("bravo", "hello.example.test", "bravo-hello")), "hostnames")
