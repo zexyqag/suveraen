@@ -6,8 +6,9 @@
 # manifest asks for, and hello answers on each of its hosts with that tenant's own settings and restarts when
 # they change; a tenant's pods reach neither other tenants' services nor the gateway's, and nothing outside
 # reaches theirs; tenants can't take each other's namespaces or hosts or keep Gateways outside the gateway
-# namespace, and stay within their quota; a host's key goes with its certificate; and an unsigned commit is
-# never applied.
+# namespace, and stay within their quota; a host's key goes with its certificate; removing a tenant takes its
+# Kustomizations, hosts, keys and pods but leaves its namespaces, which then go by its label; and an unsigned
+# commit is never applied.
 {
   pkgs,
   module,
@@ -80,6 +81,7 @@ pkgs.testers.runNixOSTest {
     let
       server = nodes.server.networking.primaryIPAddress;
       cluster = "${kubernetes}/${pkgs.lib.removePrefix "./kubernetes/" nodes.server.suveraen.cluster.path}";
+      checkout = "/srv/src/${pkgs.lib.removePrefix "./" nodes.server.suveraen.cluster.path}";
     in
     ''
       import base64
@@ -327,6 +329,42 @@ pkgs.testers.runNixOSTest {
                   """ -p '{"data":{"PODINFO_UI_MESSAGE":"changed"}}'"""
               )
               forge.wait_until_succeeds(f"{fetch(hello[tenant][0])} | grep -F changed", timeout=180)
+
+          with subtest("Removing a tenant takes its Kustomizations, hosts, keys and pods, and leaves its namespaces"):
+              theirs = hosts_of(second)
+              namespaces = server.succeed(f"kubectl get namespace -l suveraen/tenant={second} -o name").split()
+              assert theirs and namespaces, (theirs, namespaces)
+              forge.succeed(
+                  f"cd ${checkout} && ${asCgit} git rm -q -r tenants/{second}"
+                  f" && ${asCgit} sed -i '\\#^  - ./tenants/{second}$#d' kustomization.yaml"
+                  " && ${asCgit} git -c user.name=test -c user.email=test@example.org -c gpg.format=ssh"
+                  " -c user.signingkey=/srv/signer commit -q -a -S -m remove"
+                  " && ${asCgit} git push -q /srv/git/suveraen.git main"
+              )
+              signed = forge.succeed("${asCgit} git -C /srv/git/suveraen.git rev-parse main").strip()
+              server.succeed(
+                  "kubectl -n flux-system annotate gitrepository suveraen --overwrite reconcile.fluxcd.io/requestedAt=$(date +%s)"
+              )
+              server.wait_until_succeeds(
+                  f"kubectl -n flux-system get gitrepository suveraen -o jsonpath='{{.status.artifact.revision}}' | grep -F {signed}",
+                  timeout=300,
+              )
+
+              def gone(what):
+                  server.wait_until_succeeds(f"test -z \"$(kubectl get {what} -o name)\"", timeout=600)
+
+              gone(f"kustomization,secret -n flux-system -l suveraen/tenant={second}")
+              gone(f"gateway,certificate,secret -n gateway -l suveraen/tenant={second}")
+              gone(f"helmrelease,httproute,networkpolicy -A -l suveraen/tenant={second}")
+              for namespace in namespaces:
+                  gone(f"pods -n {namespace.removeprefix('namespace/')}")
+              assert server.succeed(f"kubectl get namespace -l suveraen/tenant={second} -o name").split() == namespaces
+              for host in hosts_of(first):
+                  forge.succeed(f"{fetch(host)} -o /dev/null")
+              for host in theirs:
+                  forge.wait_until_fails(f"{fetch(host)} -o /dev/null", timeout=120)
+              server.succeed(f"kubectl delete namespace -l suveraen/tenant={second} --timeout=300s")
+              gone(f"namespace -l suveraen/tenant={second}")
 
           with subtest("An unsigned commit is never applied"):
               forge.succeed(
