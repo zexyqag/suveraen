@@ -1,0 +1,35 @@
+---
+# A namespace named <tenant>-<app> belongs to that tenant and to no other, and carries its label from creation, so
+# selecting by the label can never reach another tenant's namespace. Names can't change, so neither can the label.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tenant-namespaces
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [namespaces]
+  variables:
+    - name: tenant
+      expression: object.metadata.?labels[?'suveraen/tenant'].orValue('')
+  validations:
+    - expression: >-
+        object.metadata.name.matches('^[a-z][a-z0-9]{4}-[a-z]') ?
+        variables.tenant == object.metadata.name.substring(0, 5) : variables.tenant == ''
+      message: namespaces named <tenant>-<app> carry that tenant's label, and no other namespace carries one
+    - expression: >-
+        variables.tenant == '' || (object.metadata.?labels[?'suveraen/tier'].orValue('') == 'app' &&
+        !('suveraen/publish' in object.metadata.labels))
+      message: a tenant's namespaces are app namespaces and never publish ports
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tenant-namespaces
+spec:
+  policyName: tenant-namespaces
+  validationActions: [Deny]

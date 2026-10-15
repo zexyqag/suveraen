@@ -6,3 +6,7 @@ resources:
   - ./rolebinding-subjects.yaml
   - ./published-services.yaml
   - ./pod-security-labels.yaml
+  - ./tenant-namespaces.yaml
+  - ./tenant-names.yaml
+  - ./edge-objects.yaml
+  - ./hostnames.yaml

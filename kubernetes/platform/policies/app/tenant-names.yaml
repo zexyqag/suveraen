@@ -1,0 +1,40 @@
+---
+# In flux-system, tenant-<id> is that tenant's own Kustomization and Secret, and a tenant's label goes only on its own
+# names, so nothing else passes for a tenant, and selecting by the label finds only what is the tenant's.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tenant-names
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [kustomize.toolkit.fluxcd.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [kustomizations]
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [secrets]
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: flux-system
+  variables:
+    - name: tenant
+      expression: object.metadata.?labels[?'suveraen/tenant'].orValue('')
+  validations:
+    - expression: >-
+        object.metadata.name.startsWith('tenant-') ?
+        variables.tenant.matches('^[a-z][a-z0-9]{4}$') && object.metadata.name == 'tenant-' + variables.tenant :
+        variables.tenant == '' ||
+        (request.resource.resource == 'kustomizations' && object.metadata.name.startsWith(variables.tenant + '-'))
+      message: tenant-<id> names a tenant's own Kustomization and Secret, and a tenant's label goes only on its names
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tenant-names
+spec:
+  policyName: tenant-names
+  validationActions: [Deny]

@@ -2,7 +2,9 @@
 # pointed at the repository, out of reach of namespace admins, pods held to the restricted Pod
 # Security Standard, secrets encrypted at rest and only SSH and web ports open. An app's charts
 # reach only its own namespace and can neither widen who may act there nor publish ports, no
-# namespace leaves restricted Pod Security, and no Service takes external IPs. Hosts and pods
+# namespace leaves restricted Pod Security, and no Service takes external IPs. A tenant's namespaces,
+# names in flux-system and hosts are its own, and Gateways and certificates stay in the gateway
+# namespace. Hosts and pods
 # resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
 # takes known publishers and keeps its account API, stats and attachments closed; the server's
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
@@ -43,6 +45,77 @@ let
 
   # "en*" would also match eth1, the test network, through its alternative names.
   uplink = "eth0";
+
+  # The tenant policies match these kinds by group and resource; their real definitions come with the platform,
+  # which this test doesn't deploy.
+  standIns = pkgs.writeText "stand-in-crds.json" (
+    builtins.toJSON {
+      apiVersion = "v1";
+      kind = "List";
+      items =
+        map
+          (
+            { group, kind }:
+            let
+              singular = pkgs.lib.toLower kind;
+            in
+            {
+              apiVersion = "apiextensions.k8s.io/v1";
+              kind = "CustomResourceDefinition";
+              metadata = {
+                name = "${singular}s.${group}";
+                # Required for groups under k8s.io.
+                annotations."api-approved.kubernetes.io" = "unapproved, stand-in for a test";
+              };
+              spec = {
+                inherit group;
+                scope = "Namespaced";
+                names = {
+                  inherit kind singular;
+                  plural = "${singular}s";
+                };
+                versions = [
+                  {
+                    name = "v1";
+                    served = true;
+                    storage = true;
+                    schema.openAPIV3Schema = {
+                      type = "object";
+                      x-kubernetes-preserve-unknown-fields = true;
+                    };
+                  }
+                ];
+              };
+            }
+          )
+          [
+            {
+              group = "gateway.networking.k8s.io";
+              kind = "Gateway";
+            }
+            {
+              group = "gateway.networking.k8s.io";
+              kind = "ListenerSet";
+            }
+            {
+              group = "gateway.networking.k8s.io";
+              kind = "HTTPRoute";
+            }
+            {
+              group = "gateway.networking.k8s.io";
+              kind = "ReferenceGrant";
+            }
+            {
+              group = "cert-manager.io";
+              kind = "Certificate";
+            }
+            {
+              group = "cert-manager.io";
+              kind = "Issuer";
+            }
+          ];
+    }
+  );
   phone = "-u phone:${phonePassword}";
   # Phones read through the public host name and nginx, as the apps do.
   ops = "curl -fsS ${phone} 'http://alerts.test/ops/json?poll=1'";
@@ -172,6 +245,7 @@ pkgs.testers.runNixOSTest {
     in
     ''
       import json
+      import shlex
 
       start_all()
 
@@ -276,7 +350,7 @@ pkgs.testers.runNixOSTest {
           def refused(cmd, policy):
               server.wait_until_fails(cmd)
               out = server.fail(f"{cmd} 2>&1")
-              assert policy in out, out
+              assert f"ValidatingAdmissionPolicy '{policy}'" in out, out
 
           refused(
               f"kubectl create rolebinding wide --clusterrole=flux-app --group=system:authenticated --dry-run=server {deployer}",
@@ -404,6 +478,159 @@ pkgs.testers.runNixOSTest {
           out = server.fail(f"{privileged} 2>&1")
           assert "pod-security-labels" in out, out
           server.succeed("kubectl label namespace member pod-security.kubernetes.io/enforce=restricted --dry-run=server")
+
+      with subtest("A tenant's namespaces, names and hosts are its own, and Gateways and certificates stay at the gateway"):
+          server.succeed(
+              "kubectl apply -f ${standIns} && kubectl wait --for condition=established crd --all --timeout=120s"
+              " && kubectl create namespace gateway && kubectl create namespace cert-manager"
+              " && kubectl -n flux-system create configmap hostnames --from-literal=example.test=alpha"
+              " --from-literal=one.test=alpha-hello --from-literal=org.test=bravo"
+          )
+          server.succeed(
+              "kubectl apply -f ${../kubernetes/platform/policies/app/tenant-namespaces.yaml}"
+              " -f ${../kubernetes/platform/policies/app/tenant-names.yaml}"
+              " -f ${../kubernetes/platform/policies/app/edge-objects.yaml}"
+              " -f ${../kubernetes/platform/policies/app/hostnames.yaml}"
+          )
+
+          def dry(obj, verb="create"):
+              return f"echo {shlex.quote(json.dumps(obj))} | kubectl {verb} --dry-run=server -f -"
+
+          def labelled(tenant):
+              return {"suveraen/tenant": tenant} if tenant else {}
+
+          def namespace(name, tenant=None, **labels):
+              labels = {f"suveraen/{k}": v for k, v in labels.items()} | labelled(tenant)
+              return {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": name, "labels": labels}}
+
+          def flux_system(kind, name, tenant):
+              obj = {"metadata": {"name": name, "namespace": "flux-system", "labels": labelled(tenant)}}
+              if kind == "Secret":
+                  return obj | {"apiVersion": "v1", "kind": kind}
+              spec = {"interval": "1h", "path": "./x", "prune": True, "sourceRef": {"kind": "GitRepository", "name": "x"}}
+              return obj | {"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": kind, "spec": spec}
+
+          def gateway(tenant, host, admits, namespace="gateway", source="Selector"):
+              return {
+                  "apiVersion": "gateway.networking.k8s.io/v1",
+                  "kind": "Gateway",
+                  "metadata": {"name": "probe", "namespace": namespace, "labels": labelled(tenant)},
+                  "spec": {
+                      "gatewayClassName": "traefik",
+                      "listeners": [
+                          {
+                              "name": "https",
+                              "protocol": "HTTPS",
+                              "port": 8443,
+                              "hostname": host,
+                              "tls": {"mode": "Terminate", "certificateRefs": [{"name": "probe-tls"}]},
+                              "allowedRoutes": {
+                                  "kinds": [{"kind": "HTTPRoute"}],
+                                  "namespaces": {
+                                      "from": source,
+                                      "selector": {"matchLabels": {"kubernetes.io/metadata.name": admits}},
+                                  },
+                              },
+                          }
+                      ],
+                  },
+              }
+
+          def route(namespace, host):
+              return {
+                  "apiVersion": "gateway.networking.k8s.io/v1",
+                  "kind": "HTTPRoute",
+                  "metadata": {"name": "probe", "namespace": namespace},
+                  "spec": {
+                      "parentRefs": [{"name": "probe", "namespace": "gateway", "sectionName": "https"}],
+                      "hostnames": [host],
+                      "rules": [{"backendRefs": [{"name": "hello", "port": 9898}]}],
+                  },
+              }
+
+          def certificate(tenant, namespace="gateway", **spec):
+              return {
+                  "apiVersion": "cert-manager.io/v1",
+                  "kind": "Certificate",
+                  "metadata": {"name": "probe", "namespace": namespace, "labels": labelled(tenant)},
+                  "spec": {"secretName": "probe-tls", "issuerRef": {"kind": "ClusterIssuer", "name": "public"}} | spec,
+              }
+
+          # A namespace named <tenant>-<app> carries that tenant's label from creation, and only such a namespace does.
+          refused(dry(namespace("alpha-x", tier="app")), "tenant-namespaces")
+          for name in ["alpha-hello", "alpha-web", "bravo-hello"]:
+              server.succeed(f"echo {shlex.quote(json.dumps(namespace(name, name[:5], tier='app')))} | kubectl create -f -")
+          refused(dry(namespace("alpha-y", "bravo", tier="app")), "tenant-namespaces")
+          refused(dry(namespace("misc", "alpha", tier="app")), "tenant-namespaces")
+          refused(dry(namespace("alpha-z", "alpha", tier="platform")), "tenant-namespaces")
+          refused(dry(namespace("alpha-p", "alpha", tier="app", publish="true")), "tenant-namespaces")
+          refused("kubectl label namespace bravo-hello suveraen/tenant=alpha --overwrite --dry-run=server", "tenant-namespaces")
+          refused("kubectl label namespace bravo-hello suveraen/tenant- --dry-run=server", "tenant-namespaces")
+          refused(dry(namespace("local-path", tier="platform")), "tenant-namespaces")
+          server.succeed(dry(namespace("cert-manager"), "apply"))
+
+          # tenant-<id> in flux-system is that tenant's, and its label goes on nothing else there.
+          refused(dry(flux_system("Secret", "tenant-zzzzz", None)), "tenant-names")
+          refused(dry(flux_system("Secret", "tenant-zzzzz", "alpha")), "tenant-names")
+          refused(dry(flux_system("Secret", "alpha-hello", "alpha")), "tenant-names")
+          refused(dry(flux_system("Kustomization", "tenant-zzzzz", None)), "tenant-names")
+          refused(dry(flux_system("Kustomization", "reloader", "alpha")), "tenant-names")
+          server.succeed(dry(flux_system("Secret", "tenant-alpha", "alpha")))
+          server.succeed(dry(flux_system("Kustomization", "tenant-alpha", "alpha")))
+          server.succeed(dry(flux_system("Kustomization", "alpha-hello-edge-hello", "alpha")))
+          server.succeed(dry(flux_system("Kustomization", "reloader", None)))
+
+          # Gateways and certificates only at the gateway; no ReferenceGrants or Issuers.
+          refused(dry(gateway("alpha", "hello.example.test", "alpha-hello", namespace="alpha-hello")), "edge-objects")
+          refused(dry(certificate("alpha", "alpha-hello", dnsNames=["hello.example.test"])), "edge-objects")
+          refused(
+              dry({"apiVersion": "cert-manager.io/v1", "kind": "Issuer", "metadata": {"name": "probe", "namespace": "alpha-hello"},
+                   "spec": {"selfSigned": {}}}),
+              "edge-objects",
+          )
+          refused(
+              dry({"apiVersion": "gateway.networking.k8s.io/v1", "kind": "ReferenceGrant",
+                   "metadata": {"name": "probe", "namespace": "alpha-hello"},
+                   "spec": {"from": [{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "namespace": "bravo-hello"}],
+                            "to": [{"group": "", "kind": "Service"}]}}),
+              "edge-objects",
+          )
+          server.succeed(dry(certificate(None, "cert-manager", isCA=True, commonName="test CA")))
+
+          # Each host belongs to whom the longest matching entry of the hostname map names: a tenant, or one namespace.
+          refused(dry(gateway("bravo", "hello.example.test", "bravo-hello")), "hostnames")
+          server.succeed(dry(gateway("bravo", "hello.org.test", "bravo-hello")))
+          server.succeed(dry(gateway("alpha", "hello.example.test", "alpha-hello")))
+          server.succeed(dry(gateway("alpha", "one.test", "alpha-hello")))
+          for obj in [
+              gateway("alpha", "hello.org.test", "alpha-hello"),
+              gateway("alpha", "hello.example.test", "bravo-hello"),
+              gateway("alpha", "*.example.test", "alpha-hello"),
+              gateway(None, "hello.example.test", "alpha-hello"),
+              gateway("bravo", "evilorg.test", "bravo-hello"),
+              gateway("alpha", "hello.example.test", "alpha-hello", source="All"),
+              gateway("alpha", "one.test", "alpha-web"),
+              route("bravo-hello", "hello.example.test"),
+              route("alpha-web", "one.test"),
+              certificate("alpha", dnsNames=["hello.org.test"]),
+              certificate("alpha", dnsNames=["*.example.test"]),
+              certificate("alpha", commonName="hello.org.test"),
+              certificate("alpha", dnsNames=["hello.example.test"], commonName="hello.org.test"),
+              certificate("alpha", dnsNames=["hello.example.test"], uris=["https://hello.org.test/"]),
+              certificate("alpha", dnsNames=["hello.example.test"], ipAddresses=["192.0.2.1"]),
+          ]:
+              refused(dry(obj), "hostnames")
+          for obj in [
+              route("bravo-hello", "hello.org.test"),
+              route("alpha-hello", "one.test"),
+              certificate("bravo", dnsNames=["hello.org.test"]),
+              certificate("alpha", dnsNames=["one.test", "hello.example.test"], commonName="one.test"),
+          ]:
+              server.succeed(dry(obj))
+          server.succeed("""kubectl -n flux-system patch configmap hostnames --type merge -p '{"data":{"hello.org.test":"alpha"}}'""")
+          refused(dry(gateway("bravo", "hello.org.test", "bravo-hello")), "hostnames")
+          server.succeed("kubectl -n flux-system delete configmap hostnames")
+          refused(dry(gateway("alpha", "hello.example.test", "alpha-hello")), "hostnames")
 
       with subtest("Clocks follow NTS servers"):
           for node in [server, watcher]:

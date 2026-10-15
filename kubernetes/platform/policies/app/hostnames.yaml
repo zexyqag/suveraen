@@ -1,0 +1,78 @@
+---
+# Gateway API merges every route for a name, and Traefik serves the first Gateway that claims it, so each name has one
+# owner, set in the cluster's hostname map (ConfigMap hostnames in flux-system): a tenant, or one app namespace of a
+# tenant. The longest matching entry decides. Objects in the gateway namespace name their tenant in a label;
+# elsewhere the namespace's label does.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: hostnames
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: v1
+    kind: ConfigMap
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [gateway.networking.k8s.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [gateways, listenersets, httproutes, grpcroutes, tlsroutes]
+      - apiGroups: [cert-manager.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [certificates]
+  variables:
+    - name: map
+      expression: params.?data.orValue({})
+    - name: owner
+      expression: >-
+        request.namespace == 'gateway' ? object.metadata.?labels[?'suveraen/tenant'].orValue('') :
+        namespaceObject.metadata.?labels[?'suveraen/tenant'].orValue(request.namespace)
+    - name: listeners
+      expression: "request.resource.resource in ['gateways', 'listenersets'] ? object.spec.listeners : []"
+    # Each name claimed, with the namespace it takes routes from; a certificate takes none.
+    - name: claims
+      expression: >-
+        request.resource.resource in ['gateways', 'listenersets'] ? variables.listeners.map(l,
+        {'host': string(l.?hostname.orValue('')), 'namespace':
+        string(l.?allowedRoutes.namespaces.selector.matchLabels[?'kubernetes.io/metadata.name'].orValue(''))}) :
+        request.resource.resource == 'certificates' ?
+        object.spec.?dnsNames.orValue([]).map(n, {'host': string(n), 'namespace': ''}) :
+        object.spec.?hostnames.orValue([]).map(n, {'host': string(n), 'namespace': request.namespace})
+  validations:
+    - expression: variables.owner != ''
+      message: objects in the gateway namespace name their tenant in the suveraen/tenant label
+    - expression: variables.claims.all(c, c.host != '' && !c.host.contains('*'))
+      message: every listener names one exact host, and nothing claims a wildcard
+    - expression: >-
+        variables.claims.all(c, variables.map.exists(k, c.host == k || c.host.endsWith('.' + k)) &&
+        variables.map.filter(k, c.host == k || c.host.endsWith('.' + k)).exists(k,
+        variables.map.filter(m, c.host == m || c.host.endsWith('.' + m)).all(m, size(m) <= size(k)) &&
+        (variables.map[k] == variables.owner || (c.namespace == '' ?
+        variables.map[k].startsWith(variables.owner + '-') : variables.map[k] == c.namespace))))
+      messageExpression: "'the hostname map gives these names to someone other than ' + variables.owner"
+    - expression: >-
+        variables.listeners.all(l, l.?allowedRoutes.namespaces.from.orValue('') == 'Selector' &&
+        !has(l.allowedRoutes.namespaces.selector.matchExpressions) &&
+        l.allowedRoutes.namespaces.selector.?matchLabels.orValue({}).size() == 1 &&
+        l.allowedRoutes.namespaces.selector.matchLabels.exists(k, k == 'kubernetes.io/metadata.name' &&
+        l.allowedRoutes.namespaces.selector.matchLabels[k].startsWith(variables.owner + '-')))
+      message: each listener admits routes from exactly one namespace of its tenant
+    - expression: >-
+        request.resource.resource != 'certificates' || (!has(object.spec.uris) && !has(object.spec.ipAddresses) &&
+        (object.spec.?isCA.orValue(false) || !has(object.spec.commonName) ||
+        object.spec.commonName in object.spec.?dnsNames.orValue([])))
+      message: a certificate names its hosts in dnsNames, its common name among them, and no URIs or addresses
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: hostnames
+spec:
+  policyName: hostnames
+  validationActions: [Deny]
+  paramRef:
+    name: hostnames
+    namespace: flux-system
+    parameterNotFoundAction: Deny

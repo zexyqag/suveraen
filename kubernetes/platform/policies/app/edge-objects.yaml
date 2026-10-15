@@ -1,0 +1,34 @@
+---
+# Traefik serves every Gateway of its class and puts every listener's certificate in one store, so Gateways and
+# certificates live only in the gateway namespace, where no app's account reaches. No route needs a ReferenceGrant,
+# and only the platform's ClusterIssuers sign.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: edge-objects
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [gateway.networking.k8s.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [gateways, listenersets, referencegrants]
+      - apiGroups: [cert-manager.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [certificates, issuers]
+  validations:
+    - expression: >-
+        request.resource.resource in ['gateways', 'listenersets'] ? request.namespace == 'gateway' :
+        request.resource.resource == 'certificates' ? request.namespace in ['gateway', 'cert-manager'] :
+        false
+      message: gateways and certificates live in the gateway namespace; ReferenceGrants and Issuers nowhere
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: edge-objects
+spec:
+  policyName: edge-objects
+  validationActions: [Deny]
