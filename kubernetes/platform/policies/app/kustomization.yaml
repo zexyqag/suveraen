@@ -10,3 +10,4 @@ resources:
   - ./tenant-names.yaml
   - ./edge-objects.yaml
   - ./hostnames.yaml
+  - ./tenant-priority.yaml

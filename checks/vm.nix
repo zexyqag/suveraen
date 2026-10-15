@@ -3,8 +3,8 @@
 # Security Standard, secrets encrypted at rest and only SSH and web ports open. An app's charts
 # reach only its own namespace and can neither widen who may act there nor publish ports, no
 # namespace leaves restricted Pod Security, and no Service takes external IPs. A tenant's namespaces,
-# names in flux-system and hosts are its own, and Gateways and certificates stay in the gateway
-# namespace. Hosts and pods
+# names in flux-system and hosts are its own, Gateways and certificates stay in the gateway
+# namespace, and the platform's pods run at a priority no tenant's may ask for. Hosts and pods
 # resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
 # takes known publishers and keeps its account API, stats and attachments closed; the server's
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
@@ -631,6 +631,32 @@ pkgs.testers.runNixOSTest {
           refused(dry(gateway("bravo", "hello.org.test", "bravo-hello")), "hostnames")
           server.succeed("kubectl -n flux-system delete configmap hostnames")
           refused(dry(gateway("alpha", "hello.example.test", "alpha-hello")), "hostnames")
+
+      with subtest("The platform's pods run ahead of tenants', whose pods can't ask for its priority"):
+          server.succeed("kubectl get priorityclass tenant -o jsonpath='{.globalDefault}' | grep -x true")
+          classes = server.succeed("kubectl -n flux-system get pods -o jsonpath='{.items[*].spec.priorityClassName}'").split()
+          assert classes and set(classes) == {"platform"}, classes
+          server.succeed("kubectl apply -f ${../kubernetes/platform/policies/app/tenant-priority.yaml}")
+
+          def pod(namespace, priority=None):
+              spec = {
+                  "securityContext": {"runAsNonRoot": True, "runAsUser": 65534, "seccompProfile": {"type": "RuntimeDefault"}},
+                  "containers": [
+                      {
+                          "name": "probe",
+                          "image": "busybox",
+                          "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+                      }
+                  ],
+              }
+              if priority:
+                  spec["priorityClassName"] = priority
+              return {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "probe", "namespace": namespace}, "spec": spec}
+
+          refused(dry(pod("alpha-hello", "platform")), "tenant-priority")
+          out = server.succeed(f"{dry(pod('alpha-hello'))} -o jsonpath='{{.spec.priorityClassName}}'")
+          assert out.strip() == "tenant", out
+          server.succeed(dry(pod("member", "platform")))
 
       with subtest("Clocks follow NTS servers"):
           for node in [server, watcher]:

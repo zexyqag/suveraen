@@ -27,6 +27,7 @@ spec:
       enabled: true
       keep: true
     global:
+      priorityClassName: platform
       leaderElection:
         namespace: cert-manager
       rbac:

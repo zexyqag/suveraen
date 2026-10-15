@@ -27,6 +27,7 @@ spec:
       namespaceSelector: suveraen/tier=app
       readOnlyRootFileSystem: true
       deployment:
+        priorityClassName: platform
         containerSecurityContext:
           allowPrivilegeEscalation: false
           capabilities:

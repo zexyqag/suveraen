@@ -1,0 +1,30 @@
+---
+# A tenant's pods run at the tenant priority, below the platform's, whatever its charts ask for; pods that name no
+# class get it as the default.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tenant-priority
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+    namespaceSelector:
+      matchExpressions:
+        - key: suveraen/tenant
+          operator: Exists
+  validations:
+    - expression: object.spec.?priorityClassName.orValue('') in ['', 'tenant']
+      message: a tenant's pods run at the tenant priority
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tenant-priority
+spec:
+  policyName: tenant-priority
+  validationActions: [Deny]

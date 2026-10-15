@@ -53,3 +53,4 @@ spec:
     service:
       spec:
         ipFamilyPolicy: PreferDualStack
+    priorityClassName: platform

@@ -22,6 +22,7 @@ let
         ["--no-cross-namespace-refs=true", "--default-service-account=default"]
       | (select(.kind == "Deployment" and .metadata.name == "notification-controller").spec.template.spec.containers[0].args) +=
         ["--no-cross-namespace-refs=true"]
+      | (select(.kind == "Deployment").spec.template.spec.priorityClassName) = "platform"
     ' > $out
   '';
 
@@ -137,6 +138,25 @@ in
         seccompDefault = true;
       };
       manifests = {
+        # When the nodes run short, the platform's pods (priorityClassName platform) are scheduled ahead of tenants',
+        # which get the default and may be evicted to make room.
+        priority-classes.content = [
+          {
+            apiVersion = "scheduling.k8s.io/v1";
+            kind = "PriorityClass";
+            metadata.name = "platform";
+            value = 100000;
+            description = "The platform every tenant relies on.";
+          }
+          {
+            apiVersion = "scheduling.k8s.io/v1";
+            kind = "PriorityClass";
+            metadata.name = "tenant";
+            value = 1000;
+            globalDefault = true;
+            description = "Tenants' apps.";
+          }
+        ];
         flux-components.source = fluxComponents;
         flux-source.content = {
           apiVersion = "source.toolkit.fluxcd.io/v1";
