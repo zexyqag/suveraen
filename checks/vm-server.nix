@@ -1,6 +1,11 @@
 # A cluster server as a node of a NixOS test: it boots from its own plain disk, so there's nothing to unlock,
 # reaches the outside through eth0 and its peers on eth1, and loads k3s's own images from the release tarball.
-{ config, lib, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 {
   boot.initrd.network.enable = lib.mkForce false;
 
@@ -22,6 +27,27 @@
   };
 
   services.k3s.images = [ config.services.k3s.package.airgap-images ];
+
+  # The provider and key that encrypted each Secret, as etcd holds them.
+  environment.systemPackages = [
+    (pkgs.writeShellApplication {
+      name = "secret-prefixes";
+      runtimeInputs = [ pkgs.etcd ];
+      text = ''
+        tls=/var/lib/rancher/k3s/server/tls/etcd
+        get() {
+          etcdctl --endpoints=https://127.0.0.1:2379 --cacert="$tls/server-ca.crt" --cert="$tls/client.crt" \
+            --key="$tls/client.key" get "$@"
+        }
+        value=$(mktemp)
+        get /registry/secrets/ --prefix --keys-only | grep . | while read -r key; do
+          get "$key" --print-value-only >"$value"
+          head -c 34 "$value"
+          echo
+        done | sort -u
+      '';
+    })
+  ];
 
   networking.hostId = "0400bdef";
   system.stateVersion = "26.05";

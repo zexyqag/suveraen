@@ -1,14 +1,14 @@
 # Boots a server built from the same modules as a real one, with internet access, and lets Flux deploy
 # kubernetes/clusters/test from a signed commit on a git server inside the test. Every Kustomization and
-# HelmRelease becomes Ready and no pod is refused; every route answers through the host firewall, ServiceLB,
-# the gateway and the app's network policy with a certificate from the cluster's own CA, and port 80
-# redirects there; the platform's pods run ahead of tenants'. Each tenant runs in exactly the namespaces its
-# manifest asks for, and hello answers on each of its hosts with that tenant's own settings and restarts when
-# they change; a tenant's pods reach neither other tenants' services nor the gateway's, and nothing outside
-# reaches theirs; tenants can't take each other's namespaces or hosts or keep Gateways outside the gateway
-# namespace, and stay within their quota; a host's key goes with its certificate; removing a tenant takes its
-# Kustomizations, hosts, keys and pods but leaves its namespaces, which then go by its label; and an unsigned
-# commit is never applied.
+# HelmRelease becomes Ready, every Secret is stored encrypted with secretbox and no pod is refused; every
+# route answers through the host firewall, ServiceLB, the gateway and the app's network policy with a
+# certificate from the cluster's own CA, and port 80 redirects there; the platform's pods run ahead of
+# tenants'. Each tenant runs in exactly the namespaces its manifest asks for, and hello answers on each of
+# its hosts with that tenant's own settings and restarts when they change; a tenant's pods reach neither
+# other tenants' services nor the gateway's, and nothing outside reaches theirs; tenants can't take each
+# other's namespaces or hosts or keep Gateways outside the gateway namespace, and stay within their quota; a
+# host's key goes with its certificate; removing a tenant takes its Kustomizations, hosts, keys and pods but
+# leaves its namespaces, which then go by its label; and an unsigned commit is never applied.
 {
   pkgs,
   module,
@@ -133,6 +133,10 @@ pkgs.testers.runNixOSTest {
                   "kubectl -n flux-system wait kustomization --all --for=condition=Ready --timeout=0", timeout=1500
               )
               server.succeed("kubectl wait helmrelease -A --all --for=condition=Ready --timeout=0")
+
+          with subtest("Every Secret, Flux's and the tenants' included, is stored encrypted with secretbox"):
+              prefixes = server.succeed("secret-prefixes").split()
+              assert prefixes == ["k8s:enc:secretbox:v1:secretboxkey:"], prefixes
 
           with subtest("Every workload runs, and Pod Security refused nothing"):
               def items(kind):

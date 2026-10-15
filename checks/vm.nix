@@ -1,16 +1,16 @@
 # Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and
 # pointed at the repository, out of reach of namespace admins, pods held to the restricted Pod
-# Security Standard, secrets encrypted at rest and only SSH and web ports open. An app's charts
-# reach only its own namespace and can neither widen who may act there nor publish ports, no
-# namespace leaves restricted Pod Security, and no Service takes external IPs. A tenant's namespaces,
-# names in flux-system and hosts are its own, Gateways and certificates stay in the gateway
-# namespace, and the platform's pods run at a priority no tenant's may ask for. Hosts and pods
-# resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
+# Security Standard, secrets encrypted at rest with secretbox and only SSH and web ports open. An
+# app's charts reach only its own namespace and can neither widen who may act there nor publish
+# ports, no namespace leaves restricted Pod Security, and no Service takes external IPs. A tenant's
+# namespaces, names in flux-system and hosts are its own, Gateways and certificates stay in the
+# gateway namespace, and the platform's pods run at a priority no tenant's may ask for. Hosts and
+# pods resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
 # takes known publishers and keeps its account API, stats and attachments closed; the server's
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
 # server falls back to a second channel when the watcher is gone. The server and its Flux only take
-# commits signed by a release signer, the server never goes back to an older one, and it alerts
-# when its configuration gets old.
+# commits signed by a release signer, the server never goes back to an older one, and it alerts when
+# its configuration gets old.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -277,8 +277,14 @@ pkgs.testers.runNixOSTest {
           )
           server.wait_until_succeeds("kubectl get node server -o jsonpath='{.spec.podCIDRs}' | grep fd42", timeout=120)
 
-      with subtest("Secrets are encrypted at rest"):
-          server.succeed("k3s secrets-encrypt status | grep 'Encryption Status: Enabled'")
+      def stored_with_secretbox():
+          prefixes = server.succeed("secret-prefixes").split()
+          assert prefixes == ["k8s:enc:secretbox:v1:secretboxkey:"], prefixes
+
+      with subtest("Secrets are encrypted at rest with secretbox"):
+          status = json.loads(server.succeed("k3s secrets-encrypt status -o json"))
+          assert status.get("enable") and status["activekey"] == "XSalsa20-POLY1305 secretboxkey", status
+          stored_with_secretbox()
 
       with subtest("Flux is installed and follows the repository"):
           server.wait_until_succeeds("kubectl -n flux-system get deployment source-controller", timeout=300)

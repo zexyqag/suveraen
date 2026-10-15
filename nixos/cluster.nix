@@ -116,6 +116,8 @@ in
       extraFlags = [
         # These must match on every server and can't change once the cluster exists.
         "--secrets-encryption"
+        # XSalsa20-Poly1305; Kubernetes advises against the default, AES-CBC.
+        "--secrets-encryption-provider=secretbox"
         "--flannel-backend=wireguard-native"
         "--flannel-ipv6-masq"
         "--cluster-cidr=${lib.concatStringsSep "," podCIDRs}"
