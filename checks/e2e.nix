@@ -8,11 +8,10 @@
 # the app's network policy with a certificate from the CA, and port 80 redirects there; the platform's pods run
 # ahead of tenants'. Each tenant runs in exactly the namespaces its manifest asks for, and hello answers on each
 # of its hosts with that tenant's own settings and restarts when they change; a tenant's pods reach neither other
-# tenants' services nor the gateway's, and nothing outside reaches theirs; of the platform's pods only
-# cert-manager's controller reaches the node's Knot for DNS updates; tenants can't take each other's namespaces
-# or hosts or keep Gateways outside the gateway namespace, and stay within their quota; a host's key goes with
-# its certificate; removing a tenant takes its Kustomizations, hosts, keys and pods but leaves its namespaces,
-# which then go by its label; and an unsigned commit is never applied.
+# tenants' services nor the gateway's, and nothing outside reaches theirs; tenants can't take each other's
+# namespaces or hosts or keep Gateways outside the gateway namespace, and stay within their quota; a host's key
+# goes with its certificate; removing a tenant takes its Kustomizations, hosts, keys and pods but leaves its
+# namespaces, which then go by its label; and an unsigned commit is never applied.
 {
   pkgs,
   module,
@@ -250,7 +249,6 @@ pkgs.testers.runNixOSTest {
       cluster = clusterIn nodes;
       inherit (nodes.acme.test-support.acme) caCert;
       checkout = "/srv/src/${lib.removePrefix "./" nodes.server.suveraen.cluster.path}";
-      inherit (nodes.server.suveraen.cluster.nodeServices) dnsUpdates;
     in
     ''
       import base64
@@ -482,24 +480,6 @@ pkgs.testers.runNixOSTest {
               for tenant in tenants:
                   for backend in backends(tenant):
                       blocked(f"{outside} {url(*backend)}")
-
-          with subtest("Of the platform's pods only cert-manager's controller reaches the node's Knot for DNS updates"):
-              # Whether a probe got a connection; Knot never answers what curl sends.
-              def connects(namespace):
-                  took = server.succeed(
-                      f"kubectl -n {namespace} exec probe -- curl -s --connect-timeout 5 -m 6 -o /dev/null"
-                      " -w '%{time_connect}' http://${dnsUpdates}:53/ || true"
-                  )
-                  return float(took.strip() or 0) > 0
-
-              # Nothing in the probe namespace keeps it from there; the controller got there for every certificate.
-              assert connects("probe")
-              for namespace in ["gateway", "cert-manager"]:
-                  server.succeed(
-                      f"{create(probe(namespace))} && kubectl -n {namespace} wait pod probe --for=condition=Ready --timeout=300s"
-                  )
-                  assert not connects(namespace), namespace
-                  server.succeed(f"kubectl -n {namespace} delete pod probe")
 
           with subtest("Tenants can't take each other's namespaces or hosts, keep Gateways outside the gateway, or outgrow their quota"):
               def denied_by(cmd, reason):

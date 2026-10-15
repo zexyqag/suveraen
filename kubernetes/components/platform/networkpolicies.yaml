@@ -1,4 +1,5 @@
 ---
+# Egress stays open until the phone-home inventory gives each piece its own list.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -19,24 +20,3 @@ spec:
   ingress:
     - from:
         - podSelector: {}
----
-# Egress stays open until the phone-home inventory gives each piece its own list, but for the address at which pods
-# reach the DNS signer's Knot on its node (suveraen.cluster.nodeServices.dnsUpdates in nixos/cluster.nix). Only
-# cert-manager opens it: Traefik and Reloader read every Secret, so whoever takes one over has the ACME zone's key,
-# but can't use it from there.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: egress
-  namespace: ${NAMESPACE}
-spec:
-  podSelector: {}
-  policyTypes: [Egress]
-  egress:
-    - to:
-        - namespaceSelector: {}
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except: [169.254.53.54/32]
-        - ipBlock:
-            cidr: ::/0
