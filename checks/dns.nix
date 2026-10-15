@@ -2,10 +2,10 @@
 # without TSIG and a client that holds the parent zone. A signer refuses to start until it has the key whose DS the
 # parent publishes; every nameserver answers with signatures that validate; the zones carry what the settings say;
 # changes reach every nameserver by NOTIFY and IXFR; the ACME zone takes TXT records at _acme-challenge names with
-# its key, which a restart replaces, and refuses everything else; the watcher's check runs on a timer, passes, and
-# catches a lagging nameserver, a DS the parent shouldn't publish, signatures running out and a copy it can't read;
-# and ns2 takes over signing from the key backup with the same keys, and gets them back from it after losing them,
-# while the guard keeps knot down.
+# its key, which a restart replaces, and refuses everything else, and a CA validates a certificate's challenge
+# through its CNAME there; the watcher's check runs on a timer, passes, and catches a lagging nameserver, a DS the
+# parent shouldn't publish, signatures running out and a copy it can't read; and ns2 takes over signing from the key
+# backup with the same keys, and gets them back from it after losing them, while the guard keeps knot down.
 { pkgs, module }:
 let
   keys = import "${pkgs.path}/nixos/tests/ssh-keys.nix" pkgs;
@@ -36,6 +36,21 @@ let
     DNS_TOKEN=dnstesttoken
     EOF
   '';
+
+  # A test ACME CA on the client.
+  certs = import "${pkgs.path}/nixos/tests/common/acme/server/snakeoil-certs.nix";
+  pebbleConfig = pkgs.writeText "pebble.json" (
+    builtins.toJSON {
+      pebble = {
+        listenAddress = "127.0.0.1:14000";
+        managementListenAddress = "127.0.0.1:15000";
+        certificate = certs.${certs.domain}.cert;
+        privateKey = certs.${certs.domain}.key;
+        httpPort = 5002;
+        tlsPort = 5001;
+      };
+    }
+  );
 
   addresses = node: [
     node.networking.primaryIPAddress
@@ -224,7 +239,29 @@ pkgs.testers.runNixOSTest {
           allowedTCPPorts = [ 53 ];
           allowedUDPPorts = [ 53 ];
         };
-        environment.systemPackages = [ pkgs.unbound ];
+        environment.systemPackages = [
+          pkgs.unbound
+          pkgs.pebble
+          pkgs.lego
+          pkgs.curl
+        ];
+        networking.hosts."127.0.0.1" = [ certs.domain ];
+        # The resolver the CA and lego use, as they would on the internet: it finds the zones from the parent.
+        services.unbound = {
+          enable = true;
+          settings = {
+            server = {
+              local-zone = [ ''"test." nodefault'' ];
+              domain-insecure = [ "test." ];
+            };
+            stub-zone = [
+              {
+                name = "test.";
+                stub-addr = [ nodes.client.networking.primaryIPAddress ];
+              }
+            ];
+          };
+        };
         services.knot = {
           enable = true;
           settings = {
@@ -420,6 +457,24 @@ pkgs.testers.runNixOSTest {
           assert not accepted(update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT x\\n", secret=old))
           assert accepted(update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT x\\n"))
           assert accepted(update("${ip "signer"}", f"del _acme-challenge.{label} TXT\\n"))
+
+      with subtest("A CA validates a certificate's challenge through its CNAME into the ACME zone"):
+          client.succeed(
+              "systemd-run --unit=pebble --setenv=PEBBLE_VA_NOSLEEP=1 --setenv=PEBBLE_WFE_NONCEREJECT=0"
+              " pebble -config ${pebbleConfig} -dnsserver 127.0.0.1:53"
+          )
+          client.wait_until_succeeds("curl -fsS --cacert ${certs.ca.cert} https://${certs.domain}:14000/dir")
+          # As cert-manager does: follow the CNAME, update the ACME zone on the signer with its key, wait until the
+          # published servers have the answer.
+          client.succeed(
+              "LEGO_CA_CERTIFICATES=${certs.ca.cert} RFC2136_NAMESERVER=${ip "signer"} RFC2136_TSIG_KEY=acme-update"
+              f" RFC2136_TSIG_SECRET={key} RFC2136_TSIG_ALGORITHM=hmac-sha256. RFC2136_PROPAGATION_TIMEOUT=300"
+              " lego --server https://${certs.domain}:14000/dir --accept-tos --email hostmaster@example.test"
+              " --dns rfc2136 --dns.resolvers 127.0.0.1:53 --domains idm.one.test --path /tmp/lego run"
+          )
+          client.succeed("test -s /tmp/lego/certificates/idm.one.test.crt")
+          client.succeed("systemctl stop pebble")
+          in_sync(acme, signer, "${ip "signer"}")
 
       with subtest("A changed zone reaches every nameserver by NOTIFY and IXFR"):
           signer.succeed("/run/booted-system/specialisation/changed/bin/switch-to-configuration test")
