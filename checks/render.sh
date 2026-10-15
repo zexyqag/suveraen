@@ -393,6 +393,11 @@ for dir in kubernetes/clusters/*/; do
     esac
     case $path in
       ./kubernetes/apps/* | ./kubernetes/edge/*)
+        # A rule without peers, or with an empty one, reaches every pod and address there is, both ways.
+        bad=$(yq ea '[select(.kind == "NetworkPolicy")
+          | select([((.spec.ingress // [])[] | (.from // [])), ((.spec.egress // [])[] | (.to // []))]
+            | any_c(length == 0 or any_c((keys | length) == 0))) | .metadata.name] | .[]' "$file")
+        [ -z "$bad" ] || fail "$cluster/$name: a network policy rule without peers reaches everything: $bad"
         # Other namespaces are reached only when named: a platform piece, or the same tenant's apps.
         bad=$(yq ea '[select(.kind == "NetworkPolicy") | .metadata.name as $np
           | [.spec.ingress[]?.from[]?, .spec.egress[]?.to[]?] | .[]

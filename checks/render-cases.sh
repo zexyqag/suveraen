@@ -203,6 +203,18 @@ refuses np-other-tenant "network policies reach only named platform namespaces a
               kubernetes.io/metadata.name: bravo-hello\n'"
 refuses np-ipblock "network policies reach only named platform namespaces and tenant alpha's own: x" \
   "np '  egress:\n    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n'"
+refuses np-egress-all "a network policy rule without peers reaches everything: x" "np '  egress:\n    - {}\n'"
+refuses np-egress-ports-only "a network policy rule without peers reaches everything: x" \
+  "np '  egress:\n    - ports:\n        - port: 443\n'"
+refuses np-ingress-all "a network policy rule without peers reaches everything: x" "np '  ingress:\n    - {}\n'"
+refuses np-ingress-ports-only "a network policy rule without peers reaches everything: x" \
+  "np '  ingress:\n    - ports:\n        - port: 9898\n'"
+refuses np-ingress-empty-from "a network policy rule without peers reaches everything: x" \
+  "np '  ingress:\n    - from: []\n'"
+refuses np-empty-peer "a network policy rule without peers reaches everything: x" \
+  "np '  egress:\n    - to:\n        - {}\n'"
+refuses np-edge-ports-only "a network policy rule without peers reaches everything: from-gateway-hello" \
+  "yq -i 'del(.spec.ingress[0].from)' edge/base/networkpolicy.yaml"
 
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"
