@@ -59,6 +59,14 @@ prod() { # tenant ID
   cp -r $T/alpha "clusters/prod/tenants/$1"
   sed -i "s/alpha/$1/g; s|clusters/test|clusters/prod|" "clusters/prod/tenants/$1"/*.yaml
 }
+other() { # a second app like hello, which bravo also runs
+  cp -r apps/hello apps/other
+  rm apps/other/edge-apex.yaml
+  sed -i 's/hello/other/g; s/HELLO/OTHER/g' apps/other/ks.yaml apps/other/app/*.yaml
+  sed -i 's|  - ../../../../../apps/hello/ks.yaml|&\n  - ../../../../../apps/other/ks.yaml|' \
+    $T/bravo/apps/kustomization.yaml
+}
+keymap='---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: key\ndata:\n  KEY: '
 
 # Tenants and their sources.
 refuses bad-tenant-id "tenant IDs are five lowercase letters" "mv $T/bravo $T/bravo1"
@@ -88,6 +96,19 @@ refuses secret-sets-tenant "$only: TENANT" "append $T/bravo/secrets.yaml '  TENA
 refuses secret-extra-key "$only: SOMETHING_ELSE" "append $T/bravo/secrets.yaml '  SOMETHING_ELSE: x\n'"
 refuses secret-other-app-key "$only: NEXTCLOUD_ADMIN_PASSWORD" \
   "append $T/bravo/secrets.yaml '  NEXTCLOUD_ADMIN_PASSWORD: x\n'"
+refuses other-app-reads-key "kubernetes/apps/other: an app reads only its own keys, not HELLO_API_KEY" \
+  "other; append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
+   sed -i 's/PODINFO_UI_MESSAGE: .*/PODINFO_UI_MESSAGE: \${HELLO_API_KEY}/' apps/other/app/configmap.yaml"
+refuses other-app-includes-key "bravo-other reads HELLO_API_KEY: an app reads only its own keys" \
+  "other; append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
+   append apps/hello/app/key.yaml '$keymap\${HELLO_API_KEY}\n'
+   append apps/other/app/kustomization.yaml '  - ../../hello/app/key.yaml\n'"
+refuses edge-reads-key "so they read no app's own keys: HELLO_API_KEY" \
+  "sed -i 's/^  name: from-gateway-\${EDGE}\$/&-\${HELLO_API_KEY:=x}/' edge/base/networkpolicy.yaml"
+refuses edge-includes-key "bravo-hello-edge-hello reads HELLO_API_KEY: an app reads only its own keys, and a host" \
+  "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
+   append apps/hello/app/key.yaml '$keymap\${HELLO_API_KEY:=none}\n'
+   append edge/base/kustomization.yaml '  - ../../apps/hello/app/key.yaml\n'"
 refuses secret-overrides-route-port "$only: ROUTE_TARGET_PORT" \
   "append $T/bravo/secrets.yaml '  ROUTE_TARGET_PORT: \"22\"\n'"
 refuses secret-and-setting "HELLO_GREETING comes from more than one of its sources" \
@@ -261,7 +282,9 @@ refuses np-edge-ports-only "a network policy rule without peers reaches everythi
 
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"
-renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'"
+renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
+  sed -i 's/PODINFO_UI_MESSAGE: .*/PODINFO_UI_MESSAGE: \${HELLO_API_KEY:=none}/' apps/hello/app/configmap.yaml"
+renders two-apps "other"
 renders real-cluster "prod delta; encsecret clusters/prod/tenants/delta; encmap clusters/prod"
 renders test-cluster-renamed \
   "mv clusters/test clusters/ci; sed -i 's|clusters/test|clusters/ci|' clusters/ci/tenants/*/tenant.yaml"

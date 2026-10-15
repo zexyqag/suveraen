@@ -60,6 +60,8 @@ for ks in $(find kubernetes/platform -name ks.yaml | sort); do
   [ "$(yq ea "[.spec | $owned] | any" "$ks")" = false ] || fail "$ks sets a field components/defaults owns"
 done
 
+# A tenant's Secret holds each of its apps' own keys, <APP>_*, for that app alone.
+appnames=$(for dir in kubernetes/apps/*/; do basename "$dir"; done | tr a-z A-Z)
 for dir in kubernetes/apps/*/; do
   dir=${dir%/}
   app=$(basename "$dir")
@@ -67,6 +69,9 @@ for dir in kubernetes/apps/*/; do
   [ -f "$dir/ks.yaml" ] || fail "$dir: an app's template is ks.yaml"
   knob=$(tr a-z A-Z <<<"$app")_
   export app
+  others=$(grep -vxF "${knob%_}" <<<"$appnames" | paste -sd'|' || true)
+  bad=$([ -z "$others" ] || grep -rhoE "[$][{]($others)_[A-Z0-9_]*" "$dir" | cut -c3- | sort -u | paste -sd' ' || true)
+  [ -z "$bad" ] || fail "$dir: an app reads only its own keys, not $bad"
   for file in "$dir"/ks.yaml "$dir"/edge-*.yaml; do
     [ -e "$file" ] || continue
     bad=$(grep -o '[$][{][^}]*[}]' "$file" | sort -u \
@@ -117,6 +122,9 @@ for dir in kubernetes/apps/*/; do
   done
 done
 
+bad=$(grep -rhoE "[$][{]($(paste -sd'|' <<<"$appnames"))_[A-Z0-9_]*" kubernetes/components kubernetes/edge | cut -c3- \
+  | sort -u | paste -sd' ' || true)
+[ -z "$bad" ] || fail "components/ and edge/ serve every app, so they read no app's own keys: $bad"
 ! grep -rnE '^\s*-\s*[a-z]+://' kubernetes --include=kustomization.yaml \
   || fail "kustomize resources must be files in this repository (--no-remote-bases)"
 # Values the shared components and hosts default, which only a template may set: a source that set them would quietly
@@ -245,11 +253,24 @@ for dir in kubernetes/clusters/*/; do
       | select(. as \$k | load(\"$w/$name.vars.yaml\") | has(\$k))" \
       "$w/$name.ks.yaml")
     [ -z "$both" ] || fail "$cluster/$name: $both is set inline and by one of its sources"
+    path=$(yq '.spec.path' "$w/$name.ks.yaml")
+    # A file from elsewhere in the repository can read a key too, so other apps' keys get a value to look for.
+    case $path in
+      ./kubernetes/apps/*/app) guarded=$(grep -vxF "$(basename "$(dirname "$path")" | tr a-z A-Z)" <<<"$appnames" \
+        | paste -sd'|' || true) ;;
+      ./kubernetes/edge/*) guarded=$(paste -sd'|' <<<"$appnames") ;;
+      *) guarded= ;;
+    esac
+    export guarded
+    [ -z "$guarded" ] || yq -i 'with(.[] | select(key | test("^(" + strenv(guarded) + ")_"));
+      . = "render-guard-" + key)' "$w/$name.vars.yaml"
     yq ".spec.postBuild.substitute = (load(\"$w/$name.vars.yaml\") * (.spec.postBuild.substitute // {}))
       | del(.spec.postBuild.substituteFrom)" "$w/$name.ks.yaml" >"$w/$name.build.yaml"
-    path=$(yq '.spec.path' "$w/$name.ks.yaml")
     flux build kustomization "$name" --path "$path" --kustomization-file "$w/$name.build.yaml" \
       --dry-run --strict-substitute >"$rendered/$name.yaml" || fail "$cluster/$name doesn't render"
+    bad=$(grep -oE 'render-guard-[A-Z0-9_]+' "$rendered/$name.yaml" | sort -u | sed 's/^render-guard-//' \
+      | paste -sd' ' || true)
+    [ -z "$bad" ] || fail "$cluster/$name reads $bad: an app reads only its own keys, and a host none"
     echo "$name $path" >>"$w/paths"
     yq ea "[select($fluxks and .spec.sourceRef.name == \"suveraen\") | .metadata.name] | .[]" "$rendered/$name.yaml" \
       | sed "s/^/$name /" >>"$w/queue"
