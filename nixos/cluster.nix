@@ -52,10 +52,7 @@ let
     }
   );
 
-  podCIDRs = [
-    "10.42.0.0/16"
-    "fd42::/56"
-  ];
+  inherit (cfg) podCIDRs;
   serviceCIDRs = [
     "10.43.0.0/16"
     "fd43::/112"
@@ -66,8 +63,7 @@ let
     builtins.substring 0 12 (builtins.hashString "sha256" (builtins.toJSON source.keys))
   }";
 
-  # Pods reach the node's own resolver at this link-local address, the same on every node.
-  resolver = "169.254.53.53";
+  inherit (cfg.nodeServices) resolver;
 in
 {
   options.suveraen.cluster = {
@@ -102,6 +98,31 @@ in
       type = lib.types.nullOr lib.types.str;
       default = null;
       description = "File holding the age key Flux decrypts the repository's secrets with.";
+    };
+
+    podCIDRs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      readOnly = true;
+      internal = true;
+      default = [
+        "10.42.0.0/16"
+        "fd42::/56"
+      ];
+      description = "The pods' address ranges, fixed when the cluster is created.";
+    };
+
+    nodeServices = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      readOnly = true;
+      internal = true;
+      default = {
+        resolver = "169.254.53.53";
+        dnsUpdates = "169.254.53.54";
+      };
+      description = ''
+        Link-local addresses, the same on every node, at which pods reach the node's own resolver and, on the DNS
+        signer, the Knot that takes certificate challenges (dns.nix).
+      '';
     };
   };
 
@@ -254,13 +275,13 @@ in
       '';
     };
 
-    systemd.network.netdevs."20-resolver".netdevConfig = {
+    systemd.network.netdevs."20-node-services".netdevConfig = {
       Kind = "dummy";
-      Name = "resolver";
+      Name = "node-services";
     };
-    systemd.network.networks."20-resolver" = {
-      matchConfig.Name = "resolver";
-      address = [ "${resolver}/32" ];
+    systemd.network.networks."20-node-services" = {
+      matchConfig.Name = "node-services";
+      address = map (a: "${a}/32") (lib.attrValues cfg.nodeServices);
       linkConfig.RequiredForOnline = "no";
     };
     services.unbound.settings.server = {
@@ -278,7 +299,8 @@ in
     environment.systemPackages = [ pkgs.kubectl ];
     environment.variables.KUBECONFIG = "/etc/rancher/k3s/k3s.yaml";
 
-    # Pods may reach the API server, the kubelet and the node's resolver on the host, and nothing else there.
+    # Pods may reach the API server, the kubelet and the node's resolver on the host, and on the DNS signer its Knot
+    # (dns.nix); nothing else there.
     networking.firewall.extraInputRules =
       let
         v4 = lib.filter (cidr: !lib.hasInfix ":" cidr) podCIDRs;

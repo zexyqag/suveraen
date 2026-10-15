@@ -1,8 +1,11 @@
 # Builds a watcher with stand-in values; nothing here points at a real machine.
 { modulesPath, ... }:
 {
-  # Hetzner Cloud VMs need the virtio disk and PCI drivers at boot.
-  imports = [ (modulesPath + "/profiles/qemu-guest.nix") ];
+  imports = [
+    # Hetzner Cloud VMs need the virtio disk and PCI drivers at boot.
+    (modulesPath + "/profiles/qemu-guest.nix")
+    ./dns-example.nix
+  ];
 
   nixpkgs.hostPlatform = "x86_64-linux";
   networking.hostName = "example-watcher";
@@ -20,6 +23,9 @@
       arcMax = 256 * 1024 * 1024;
     };
     network = {
+      # Static: the hidden signer lets peers in by address.
+      ipv4 = "203.0.113.20/32";
+      ipv4Gateway = "203.0.113.1";
       ipv6 = "2001:db8:2::1/64";
       ipv6Gateway = "fe80::1";
     };
@@ -30,7 +36,10 @@
       readers = [ "example" ];
       ntfyEnvironmentFile = "/run/secrets/ntfy-env";
       gatusEnvironmentFile = "/run/secrets/gatus-env";
-      servers = [ "example" ];
+      servers = [
+        "example"
+        "example-ns"
+      ];
       checks = [
         {
           name = "accounts";
@@ -38,6 +47,7 @@
         }
       ];
     };
+    dns.self = "example-watcher";
     alerts = {
       urlFile = "/run/secrets/alerts-url";
       tokenFile = "/run/secrets/alerts-token";

@@ -7,6 +7,7 @@
     ./resolver.nix
     ./time.nix
     ./cluster.nix
+    ./dns.nix
     ./watcher.nix
     ./alerts.nix
     ./source.nix

@@ -1,5 +1,7 @@
 # Builds the node layer with stand-in values; nothing here points at a real machine.
 {
+  imports = [ ./dns-example.nix ];
+
   nixpkgs.hostPlatform = "x86_64-linux";
   networking.hostName = "example";
   networking.hostId = "0400bdef";
@@ -35,6 +37,7 @@
       tokenFile = "/run/secrets/k3s-token";
       sopsAgeKeyFile = "/run/secrets/flux-age-key";
     };
+    dns.self = "example";
     alerts = {
       urlFile = "/run/secrets/alerts-url";
       tokenFile = "/run/secrets/alerts-token";

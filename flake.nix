@@ -74,6 +74,7 @@
       checks.x86_64-linux = {
         server = build ./checks/server.nix;
         watcher = build ./checks/watcher.nix;
+        ns = build ./checks/ns.nix;
         approve = import ./checks/approve.nix { inherit pkgs approve; };
         render = import ./checks/render.nix {
           inherit pkgs;
@@ -90,6 +91,11 @@
         };
 
         unlock = import ./checks/unlock.nix {
+          inherit pkgs;
+          module = self.nixosModules.default;
+        };
+
+        dns = import ./checks/dns.nix {
           inherit pkgs;
           module = self.nixosModules.default;
         };
