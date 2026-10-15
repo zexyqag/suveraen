@@ -262,13 +262,16 @@ pkgs.testers.runNixOSTest {
       releaseFlake = pkgs.lib.escapeShellArg (inVM nodes.server.suveraen.source.flake);
       resolve = inVM nodes.server.systemd.services.nixos-upgrade.preStart;
       inherit (nodes.server.systemd.services.nixos-upgrade) postStart;
-      # k3s as its unit starts it, restoring a snapshot instead, with the given token file.
+      # k3s as its unit starts it, restoring a snapshot instead, with the given token file. A restore checks for
+      # the token before it reads --token-file, so the token also goes in K3S_TOKEN.
       restore =
         token:
-        pkgs.lib.replaceStrings
-          [ "--token-file ${nodes.server.suveraen.cluster.tokenFile}" ]
-          [ "--token-file ${token}" ]
-          nodes.server.systemd.services.k3s.serviceConfig.ExecStart
+        "env K3S_TOKEN=\\\"$(cat ${token})\\\" "
+        +
+          pkgs.lib.replaceStrings
+            [ "--token-file ${nodes.server.suveraen.cluster.tokenFile}" ]
+            [ "--token-file ${token}" ]
+            nodes.server.systemd.services.k3s.serviceConfig.ExecStart
         + " --cluster-reset --cluster-reset-restore-path=/root/drill";
       staleDays = toString (nodes.server.suveraen.upgrade.staleAfterDays + 1);
     in
