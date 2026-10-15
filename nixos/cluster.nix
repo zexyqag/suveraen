@@ -88,6 +88,16 @@ in
       description = "This node's IPv4 and IPv6 address; the cluster is dual-stack.";
     };
 
+    tokenFile = lib.mkOption {
+      type = lib.types.str;
+      example = "/run/secrets/k3s-token";
+      description = ''
+        File holding the cluster's server token, a random password (`openssl rand -hex 32`). Every etcd snapshot
+        carries the cluster's CA keys and secrets key encrypted with it, so a snapshot restores only with this token:
+        keep a copy off the machine and apart from the snapshots. Change it only through `k3s token rotate`.
+      '';
+    };
+
     sopsAgeKeyFile = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -108,6 +118,7 @@ in
       # k3s only supports upgrading one minor version at a time.
       package = pkgs.k3s_1_36;
       role = "server";
+      inherit (cfg) tokenFile;
       # Embedded etcd from the start, so more servers can join later.
       clusterInit = true;
       nodeIP = lib.concatStringsSep "," cfg.nodeIP;

@@ -61,6 +61,7 @@
     network.interface = "eth0";
     cluster = {
       enable = true;
+      tokenFile = toString (pkgs.writeText "k3s-token" "suveraen-test-token");
       nodeIP = [
         config.networking.primaryIPAddress
         "fd00::2"

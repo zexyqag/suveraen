@@ -32,6 +32,7 @@
         "203.0.113.10"
         "2001:db8::2"
       ];
+      tokenFile = "/run/secrets/k3s-token";
       sopsAgeKeyFile = "/run/secrets/flux-age-key";
     };
     alerts = {

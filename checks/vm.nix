@@ -10,7 +10,8 @@
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
 # server falls back to a second channel when the watcher is gone. The server and its Flux only take
 # commits signed by a release signer, the server never goes back to an older one, and it alerts when
-# its configuration gets old.
+# its configuration gets old. Wiped, the server comes back from an etcd snapshot with its token file
+# alone.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -253,6 +254,14 @@ pkgs.testers.runNixOSTest {
       releaseFlake = pkgs.lib.escapeShellArg (inVM nodes.server.suveraen.source.flake);
       resolve = inVM nodes.server.systemd.services.nixos-upgrade.preStart;
       inherit (nodes.server.systemd.services.nixos-upgrade) postStart;
+      # k3s as its unit starts it, restoring a snapshot instead, with the given token file.
+      restore =
+        token:
+        pkgs.lib.replaceStrings
+          [ "--token-file ${nodes.server.suveraen.cluster.tokenFile}" ]
+          [ "--token-file ${token}" ]
+          nodes.server.systemd.services.k3s.serviceConfig.ExecStart
+        + " --cluster-reset --cluster-reset-restore-path=/root/drill";
       staleDays = toString (nodes.server.suveraen.upgrade.staleAfterDays + 1);
     in
     ''
@@ -762,5 +771,31 @@ pkgs.testers.runNixOSTest {
               "curl -fsS 'http://127.0.0.1:2587/fallback/json?poll=1' | grep 'server: heartbeat.service failed'",
               timeout=300,
           )
+
+      with subtest("A wiped server comes back from an etcd snapshot with its token file, and not with another token"):
+          server.succeed(
+              "kubectl create secret generic drill --from-literal=value=kept && k3s etcd-snapshot save --name drill"
+              " && cp /var/lib/rancher/k3s/server/db/snapshots/drill-* /root/drill"
+              " && sha256sum /var/lib/rancher/k3s/server/token > /root/token.sum"
+          )
+          # What a new machine has: no CA, keys, encryption config or token of its own.
+          wipe = (
+              "systemctl stop k3s && rm -rf /var/lib/rancher/k3s/server"
+              " && systemd-tmpfiles --create --prefix=/var/lib/rancher/k3s/server"
+          )
+          other = """${restore (pkgs.writeText "other-token" "not-the-cluster-token")}"""
+          assert "other-token" in other, other
+          server.succeed(wipe)
+          status, out = server.execute(f"timeout 300 {other} 2>&1")
+          assert status != 0 and "encrypted with different token" in out, (status, out[-2000:])
+          server.succeed(wipe)
+          _, out = server.execute("timeout 300 ${restore nodes.server.suveraen.cluster.tokenFile} 2>&1")
+          assert "membership has been reset" in out, out[-2000:]
+          server.succeed("systemctl start k3s")
+          server.wait_until_succeeds(
+              "kubectl get secret drill -o jsonpath='{.data.value}' | base64 -d | grep -x kept", timeout=300
+          )
+          server.succeed("sha256sum -c /root/token.sum")
+          stored_with_secretbox()
     '';
 }
