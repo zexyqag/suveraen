@@ -26,6 +26,8 @@ spec:
     crds:
       enabled: true
       keep: true
+    # A certificate's key goes with it: removing a host leaves no key behind in the gateway namespace.
+    enableCertificateOwnerRef: true
     global:
       priorityClassName: platform
       leaderElection:
