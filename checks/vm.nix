@@ -55,7 +55,11 @@ let
       items =
         map
           (
-            { group, kind }:
+            {
+              group,
+              kind,
+              scope ? "Namespaced",
+            }:
             let
               singular = pkgs.lib.toLower kind;
             in
@@ -68,8 +72,7 @@ let
                 annotations."api-approved.kubernetes.io" = "unapproved, stand-in for a test";
               };
               spec = {
-                inherit group;
-                scope = "Namespaced";
+                inherit group scope;
                 names = {
                   inherit kind singular;
                   plural = "${singular}s";
@@ -111,7 +114,16 @@ let
             }
             {
               group = "cert-manager.io";
+              kind = "CertificateRequest";
+            }
+            {
+              group = "cert-manager.io";
               kind = "Issuer";
+            }
+            {
+              group = "cert-manager.io";
+              kind = "ClusterIssuer";
+              scope = "Cluster";
             }
           ];
     }
@@ -580,9 +592,31 @@ pkgs.testers.runNixOSTest {
           server.succeed(dry(flux_system("Kustomization", "alpha-hello-edge-hello", "alpha")))
           server.succeed(dry(flux_system("Kustomization", "reloader", None)))
 
-          # Gateways and certificates only at the gateway; no ReferenceGrants or Issuers.
+          # Gateways and certificates only at the gateway, ClusterIssuers only from the platform; no ReferenceGrants or
+          # Issuers.
           refused(dry(gateway("alpha", "hello.example.test", "alpha-hello", namespace="alpha-hello")), "edge-objects")
           refused(dry(certificate("alpha", "alpha-hello", dnsNames=["hello.example.test"])), "edge-objects")
+
+          def request(namespace):
+              return {
+                  "apiVersion": "cert-manager.io/v1",
+                  "kind": "CertificateRequest",
+                  "metadata": {"name": "probe", "namespace": namespace},
+                  "spec": {"request": "eA==", "issuerRef": {"kind": "ClusterIssuer", "name": "public"}},
+              }
+
+          def cluster_issuer(tenant):
+              return {
+                  "apiVersion": "cert-manager.io/v1",
+                  "kind": "ClusterIssuer",
+                  "metadata": {"name": "probe", "labels": labelled(tenant)},
+                  "spec": {"selfSigned": {}},
+              }
+
+          refused(dry(request("alpha-hello")), "edge-objects")
+          server.succeed(dry(request("gateway")))
+          refused(dry(cluster_issuer("alpha")), "edge-objects")
+          server.succeed(dry(cluster_issuer(None)))
           refused(
               dry({"apiVersion": "cert-manager.io/v1", "kind": "Issuer", "metadata": {"name": "probe", "namespace": "alpha-hello"},
                    "spec": {"selfSigned": {}}}),

@@ -1,7 +1,9 @@
 ---
 # Traefik serves every Gateway of its class and puts every listener's certificate in one store, so Gateways and
 # certificates live only in the gateway namespace, where no app's account reaches. No route needs a ReferenceGrant,
-# and only the platform's ClusterIssuers sign.
+# and only the platform's ClusterIssuers sign. cert-manager signs any CertificateRequest for an issuer it knows, and
+# the hostnames policy can't read the names in one, so requests too stay where cert-manager makes them from
+# certificates. What a tenant applies carries its label.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -17,13 +19,17 @@ spec:
       - apiGroups: [cert-manager.io]
         apiVersions: ["*"]
         operations: [CREATE, UPDATE]
-        resources: [certificates, issuers]
+        resources: [certificates, certificaterequests, issuers, clusterissuers]
   validations:
     - expression: >-
         request.resource.resource in ['gateways', 'listenersets'] ? request.namespace == 'gateway' :
-        request.resource.resource == 'certificates' ? request.namespace in ['gateway', 'cert-manager'] :
+        request.resource.resource in ['certificates', 'certificaterequests'] ?
+        request.namespace in ['gateway', 'cert-manager'] :
+        request.resource.resource == 'clusterissuers' ? object.metadata.?labels[?'suveraen/tenant'].orValue('') == '' :
         false
-      message: gateways and certificates live in the gateway namespace; ReferenceGrants and Issuers nowhere
+      message: >-
+        gateways and certificates live at the gateway, ClusterIssuers come from the platform, and nothing makes
+        ReferenceGrants or Issuers
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

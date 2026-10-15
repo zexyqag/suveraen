@@ -194,9 +194,19 @@ refuses app-route-other-app "route alpha-hello/x asks bravo-hello-hello for hell
   "append apps/hello/app/configmap.yaml '---\napiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:
   name: x\nspec:\n  parentRefs:\n    - {name: bravo-hello-hello, namespace: gateway, sectionName: https}
   hostnames: [hello.org.test]\n'"
-refuses gateway-in-app "an app's hosts and certificates come from its edges" \
+inapp="in its own namespace:"
+refuses gateway-in-app "$inapp Gateway.gateway.networking.k8s.io/x" \
   "append apps/hello/app/configmap.yaml '---\napiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata:
   name: x\nspec:\n  gatewayClassName: traefik\n  listeners: []\n'"
+refuses cluster-issuer-in-app "$inapp ClusterIssuer.cert-manager.io/x" \
+  "append apps/hello/app/configmap.yaml '---\napiVersion: cert-manager.io/v1\nkind: ClusterIssuer\nmetadata:
+  name: x\nspec:\n  selfSigned: {}\n'"
+refuses certificate-request-in-app "$inapp CertificateRequest.cert-manager.io/x" \
+  "append apps/hello/app/configmap.yaml '---\napiVersion: cert-manager.io/v1\nkind: CertificateRequest\nmetadata:
+  name: x\nspec:\n  request: eA==\n  issuerRef: {kind: ClusterIssuer, name: public}\n'"
+refuses policy-binding-in-app "$inapp ValidatingAdmissionPolicyBinding.admissionregistration.k8s.io/x" \
+  "append apps/hello/app/configmap.yaml '---\napiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding\nmetadata:\n  name: x\nspec:\n  policyName: x\n  validationActions: [Audit]\n'"
 refuses gateway-in-platform "hosts come only from tenants' edges" \
   "append platform/reloader/app/kustomization.yaml '  - ./gw.yaml\n'
    append platform/reloader/app/gw.yaml '---\napiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata:

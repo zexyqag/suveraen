@@ -28,7 +28,13 @@ quotas+=',QUOTA_SERVICES,QUOTA_STORAGE,QUOTA_VOLUMES'
 hard='count/configmaps,count/jobs.batch,count/secrets,limits.ephemeral-storage,limits.memory'
 hard+=',persistentvolumeclaims,pods,requests.cpu,requests.ephemeral-storage,requests.memory,requests.storage'
 hard+=',services,services.loadbalancers,services.nodeports'
-export quotas hard
+# kustomize gives the target namespace to every kind it doesn't know, cluster-wide ones too, so what an app may
+# create is a list of namespaced kinds; certificates and issuers come only from edges and the platform.
+appkinds='ConfigMap,Secret,Service,ServiceAccount,PersistentVolumeClaim,LimitRange,ResourceQuota,Namespace'
+appkinds+=',Role.rbac.authorization.k8s.io,RoleBinding.rbac.authorization.k8s.io,NetworkPolicy.networking.k8s.io'
+appkinds+=',OCIRepository.source.toolkit.fluxcd.io,HelmRelease.helm.toolkit.fluxcd.io'
+appkinds+=',HTTPRoute.gateway.networking.k8s.io'
+export quotas hard appkinds
 
 # A whole Kubernetes quantity in thousandths of its unit, so CPU's "m" compares too.
 quantity() {
@@ -329,9 +335,12 @@ for dir in kubernetes/clusters/*/; do
           or .spec.serviceAccountName != "flux-deployer" or .spec.install.crds != "Skip" or .spec.upgrade.crds != "Skip"
           or (.spec | has("targetNamespace") or has("storageNamespace"))) | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: app HelmReleases must run as flux-deployer in the app's namespace: $bad"
-        bad=$(yq ea '[select(.kind != null and .kind != "Namespace" and .metadata.namespace != strenv(name))
-          | .kind + "/" + .metadata.name] | .[]' "$file")
-        [ -z "$bad" ] || fail "$cluster/$name: apps create only objects in their own namespace: $bad"
+        bad=$(yq ea '[select(.kind != null)
+          | ((.kind + "." + (.apiVersion | sub("/?[^/]*$", ""))) | sub("[.]$", "")) as $k
+          | select(((strenv(appkinds) | split(",")) | any_c(. == $k) | not)
+            or ($k != "Namespace" and .metadata.namespace != strenv(name)))
+          | $k + "/" + .metadata.name] | .[]' "$file")
+        [ -z "$bad" ] || fail "$cluster/$name: an app creates only ${appkinds//,/, }; in its own namespace: $bad"
         yq ea -e '[select(.kind == "Namespace")] | (length == 1 and .[0].metadata.name == strenv(name)
           and .[0].metadata.labels."suveraen/tier" == "app" and .[0].metadata.labels."suveraen/tenant" == strenv(t))' \
           "$file" >/dev/null \
@@ -342,9 +351,6 @@ for dir in kubernetes/clusters/*/; do
           | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: app role bindings may only give flux-app or the app's own roles to its" \
           "own accounts: $bad"
-        bad=$(yq ea '[select(.kind == "Gateway" or .kind == "ListenerSet" or .kind == "ReferenceGrant"
-          or .kind == "Certificate" or .kind == "Issuer") | .kind + "/" + .metadata.name] | .[]' "$file")
-        [ -z "$bad" ] || fail "$cluster/$name: an app's hosts and certificates come from its edges: $bad"
         yq ea -e '[select(.kind == "NetworkPolicy" and .metadata.name == "default-deny")] | (length == 1
           and (.[0].spec.podSelector | length) == 0 and (.[0].spec.policyTypes | sort | join(",")) == "Egress,Ingress"
           and (.[0].spec | (has("ingress") or has("egress")) | not))' "$file" >/dev/null \
