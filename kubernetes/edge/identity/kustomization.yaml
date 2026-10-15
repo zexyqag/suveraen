@@ -1,0 +1,24 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../base
+patches:
+  - target:
+      kind: Gateway
+    patch: |-
+      - op: replace
+        path: /spec/listeners/0/hostname
+        value: ${HOST}.${TENANT_DOMAIN}
+  - target:
+      kind: Certificate
+    patch: |-
+      - op: replace
+        path: /spec/dnsNames/0
+        value: ${HOST}.${TENANT_DOMAIN}
+  - target:
+      kind: HTTPRoute
+    patch: |-
+      - op: replace
+        path: /spec/hostnames/0
+        value: ${HOST}.${TENANT_DOMAIN}

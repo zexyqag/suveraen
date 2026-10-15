@@ -1,0 +1,12 @@
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: tenant-alpha
+  labels:
+    suveraen/tenant: alpha
+spec:
+  path: ./kubernetes/clusters/test/tenants/alpha/apps
+  postBuild:
+    substitute:
+      TENANT: alpha

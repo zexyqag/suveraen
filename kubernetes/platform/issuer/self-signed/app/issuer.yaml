@@ -14,7 +14,7 @@ metadata:
   namespace: cert-manager
 spec:
   isCA: true
-  commonName: ${DOMAIN} test CA
+  commonName: test CA
   secretName: public-ca
   privateKey:
     algorithm: ECDSA

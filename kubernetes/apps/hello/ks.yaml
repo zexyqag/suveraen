@@ -1,20 +1,33 @@
 ---
-# The smallest app built from the template; the test cluster runs it to prove the template end to end.
+# The smallest app built from the template; the test tenants run it to prove the template end to end.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
-  name: hello
+  name: ${TENANT}-hello
 spec:
   path: ./kubernetes/apps/hello/app
-  targetNamespace: hello
+  targetNamespace: ${TENANT}-hello
   components:
     - ../../../components/app
-    - ../../../components/route
   dependsOn:
     - name: policies
-    - name: gateway
   postBuild:
     substitute:
       APP: hello
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-hello-edge-hello
+spec:
+  path: ./kubernetes/edge/app
+  dependsOn:
+    - name: ${TENANT}-hello
+    - name: gateway
+    - name: issuer
+  postBuild:
+    substitute:
+      APP: hello
+      EDGE: hello
       HOST: hello
       ROUTE_PORT: "9898"

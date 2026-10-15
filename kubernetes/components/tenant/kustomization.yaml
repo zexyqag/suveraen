@@ -1,0 +1,30 @@
+---
+# What every Flux Kustomization a tenant lists runs with: the Flux defaults, the tenant's label on everything it
+# applies, and the tenant's own Secret next to the cluster's settings. Never the cluster's secrets.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+components:
+  - ../defaults
+patches:
+  - target:
+      group: kustomize.toolkit.fluxcd.io
+      kind: Kustomization
+    patch: |-
+      apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      metadata:
+        name: _
+        labels:
+          suveraen/tenant: ${TENANT}
+      spec:
+        commonMetadata:
+          labels:
+            suveraen/tenant: ${TENANT}
+        postBuild:
+          substitute:
+            TENANT: ${TENANT}
+          substituteFrom:
+            - kind: ConfigMap
+              name: cluster-settings
+            - kind: Secret
+              name: tenant-${TENANT}

@@ -1,6 +1,7 @@
 ---
 # What the Kustomizations a cluster directory lists run with: the Flux defaults, and the cluster's own settings and
-# secrets to substitute from.
+# secrets to substitute from. A tenant's own Kustomization (labelled suveraen/tenant) substitutes only its inline
+# values; its apps get the tenant's sources from components/tenant.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 components:
@@ -9,6 +10,7 @@ patches:
   - target:
       group: kustomize.toolkit.fluxcd.io
       kind: Kustomization
+      labelSelector: "!suveraen/tenant"
     patch: |-
       apiVersion: kustomize.toolkit.fluxcd.io/v1
       kind: Kustomization

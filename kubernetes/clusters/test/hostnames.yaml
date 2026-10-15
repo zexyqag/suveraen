@@ -1,0 +1,11 @@
+---
+# Who may serve each name: a tenant, or one app namespace of a tenant. The longest matching entry decides. An entry
+# is added only once the tenant has shown it holds the domain. Encrypted on every cluster but a test one.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hostnames
+data:
+  example.test: alpha
+  one.test: alpha-hello
+  org.test: bravo

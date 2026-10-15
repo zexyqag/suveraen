@@ -2,12 +2,15 @@
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: wildcard
+  name: ${TENANT}-${APP}-${EDGE}
   namespace: gateway
 spec:
-  secretName: wildcard-tls
+  secretName: ${TENANT}-${APP}-${EDGE}-tls
+  secretTemplate:
+    labels:
+      suveraen/tenant: ${TENANT}
   dnsNames:
-    - "*.${DOMAIN}"
+    - _
   privateKey:
     algorithm: ECDSA
     size: 256

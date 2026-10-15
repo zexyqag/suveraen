@@ -28,7 +28,7 @@ spec:
       sendAnonymousUsage: false
     api:
       dashboard: false
-    # Routes come only through the Gateway API, from namespaces the gateway admits.
+    # Routes come only through the Gateway API, to the Gateways of tenants' hosts (kubernetes/edge).
     ingressClass:
       enabled: false
     providers:
@@ -38,9 +38,6 @@ spec:
         enabled: false
       kubernetesGateway:
         enabled: true
-        gateways:
-          - name: public
-            namespace: gateway
         # Routes elsewhere can't point at Traefik's own services, such as its API.
         crossProviderNamespaces: [gateway]
     gateway:

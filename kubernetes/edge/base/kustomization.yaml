@@ -1,0 +1,11 @@
+---
+# One host of a tenant's app, named by its key, EDGE. In the gateway namespace, which no app's account reaches: a
+# listener for that host alone, which takes routes only from the app's namespace, and a certificate for that one
+# name. In the app's namespace: the route, and the opening for the routed port. The zone sets the host.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./gateway.yaml
+  - ./certificate.yaml
+  - ./httproute.yaml
+  - ./networkpolicy.yaml

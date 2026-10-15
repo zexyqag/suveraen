@@ -3,7 +3,8 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: from-gateway
+  name: from-gateway-${EDGE}
+  namespace: ${TENANT}-${APP}
 spec:
   podSelector: {}
   policyTypes: [Ingress]

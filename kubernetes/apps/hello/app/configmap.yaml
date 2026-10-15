@@ -4,4 +4,4 @@ kind: ConfigMap
 metadata:
   name: hello
 data:
-  PODINFO_UI_MESSAGE: hello from ${DOMAIN}
+  PODINFO_UI_MESSAGE: hello from ${TENANT} at ${TENANT_DOMAIN}

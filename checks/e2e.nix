@@ -2,7 +2,8 @@
 # kubernetes/clusters/test from a signed commit on a git server inside the test. Every Kustomization and
 # HelmRelease becomes Ready and no pod is refused; every route answers through the host firewall, ServiceLB,
 # the gateway and the app's network policy with a certificate from the cluster's own CA, and port 80
-# redirects there; the example app restarts when its settings change; and an unsigned commit is never applied.
+# redirects there; each tenant's app answers on its hosts with that tenant's own settings and restarts when they
+# change; and an unsigned commit is never applied.
 {
   pkgs,
   module,
@@ -76,6 +77,7 @@ pkgs.testers.runNixOSTest {
       server = nodes.server.networking.primaryIPAddress;
     in
     ''
+      import base64
       import json
 
       start_all()
@@ -149,12 +151,42 @@ pkgs.testers.runNixOSTest {
                   ).split()
                   assert redirect == ["301", f"https://{host}/"], redirect
 
-          hello = "curl -fsS --cacert /tmp/ca.crt --resolve hello.example.test:443:${server} https://hello.example.test/"
+          # A tenant's own Kustomization is tenant-<id>, labelled with its ID.
+          tenants = sorted(
+              k["metadata"]["labels"]["suveraen/tenant"]
+              for k in json.loads(server.succeed("kubectl -n flux-system get kustomization -l suveraen/tenant -o json"))["items"]
+              if k["metadata"]["name"] == "tenant-" + k["metadata"]["labels"]["suveraen/tenant"]
+          )
+          assert len(tenants) >= 2, tenants
+          first = tenants[0]
 
-          with subtest("The example app gets the cluster's settings and restarts when they change"):
-              forge.succeed(f"{hello} | grep -F 'hello from example.test'")
-              server.succeed("""kubectl -n hello patch configmap hello --type merge -p '{"data":{"PODINFO_UI_MESSAGE":"changed"}}'""")
-              forge.wait_until_succeeds(f"{hello} | grep -F changed", timeout=180)
+          def get(cmd):
+              return json.loads(server.succeed(f"{cmd} -o json"))
+
+          def hosts(tenant):
+              return sorted(
+                  h
+                  for r in get(f"kubectl get httproute -A -l suveraen/tenant={tenant}")["items"]
+                  for h in r["spec"]["hostnames"]
+              )
+
+          def fetch(host):
+              return f"curl -fsS --cacert /tmp/ca.crt --resolve {host}:443:${server} https://{host}/"
+
+          with subtest("Each tenant's app answers on every one of its hosts with that tenant's own settings"):
+              for tenant in tenants:
+                  secret = get(f"kubectl -n flux-system get secret tenant-{tenant}")["data"]
+                  domain = base64.b64decode(secret["TENANT_DOMAIN"]).decode()
+                  assert hosts(tenant), tenant
+                  for host in hosts(tenant):
+                      forge.succeed(f"{fetch(host)} | grep -F 'hello from {tenant} at {domain}'")
+
+          with subtest("An app restarts when its settings change"):
+              server.succeed(
+                  f"kubectl -n {first}-hello patch configmap hello --type merge"
+                  """ -p '{"data":{"PODINFO_UI_MESSAGE":"changed"}}'"""
+              )
+              forge.wait_until_succeeds(f"{fetch(hosts(first)[0])} | grep -F changed", timeout=180)
 
           with subtest("An unsigned commit is never applied"):
               forge.succeed(
@@ -173,7 +205,7 @@ pkgs.testers.runNixOSTest {
               server.succeed(
                   f"kubectl -n flux-system get gitrepository suveraen -o jsonpath='{{.status.artifact.revision}}' | grep -F {signed}"
               )
-              server.succeed("kubectl -n hello get deployment hello")
+              server.succeed(f"kubectl -n {first}-hello get deployment hello")
       except Exception:
           diagnose()
           raise

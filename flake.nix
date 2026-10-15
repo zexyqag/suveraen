@@ -79,6 +79,10 @@
           inherit pkgs;
           kubernetes = ./kubernetes;
         };
+        render-cases = import ./checks/render-cases.nix {
+          inherit pkgs;
+          kubernetes = ./kubernetes;
+        };
 
         vm = import ./checks/vm.nix {
           inherit pkgs;

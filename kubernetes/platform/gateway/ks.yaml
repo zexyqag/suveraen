@@ -10,7 +10,6 @@ spec:
     - ../../../components/publish
   dependsOn:
     - name: gateway-api
-    - name: issuer
   postBuild:
     substitute:
       NAMESPACE: gateway
