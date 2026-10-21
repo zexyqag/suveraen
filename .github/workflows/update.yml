@@ -27,14 +27,21 @@ jobs:
           persist-credentials: false
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       - run: nix flake update
-      - run: nix flake check -L
       - id: lock
         run: |
           echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git diff --quiet flake.lock || echo "lock=$(base64 -w0 flake.lock)" >> "$GITHUB_OUTPUT"
 
-  push:
+  check:
     needs: update
+    if: needs.update.outputs.lock != ''
+    uses: ./.github/workflows/checks.yml
+    with:
+      ref: ${{ needs.update.outputs.base }}
+      lock: ${{ needs.update.outputs.lock }}
+
+  push:
+    needs: [update, check]
     if: needs.update.outputs.lock != ''
     runs-on: ubuntu-latest
     permissions:

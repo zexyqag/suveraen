@@ -1,0 +1,56 @@
+name: checks
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ""
+      lock:
+        description: A flake.lock, base64-encoded, to check instead of the committed one.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    outputs:
+      names: ${{ steps.names.outputs.names }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - if: inputs.lock != ''
+        env:
+          LOCK: ${{ inputs.lock }}
+        run: base64 -d <<< "$LOCK" > flake.lock
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - run: nix flake check --no-build
+      - id: names
+        run: echo "names=$(nix eval --json .#checks.x86_64-linux --apply builtins.attrNames)" >> "$GITHUB_OUTPUT"
+
+  # One runner per check: VM tests sharing a runner's cores and disk slow each other past their timeouts.
+  build:
+    needs: list
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        name: ${{ fromJSON(needs.list.outputs.names) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - if: inputs.lock != ''
+        env:
+          LOCK: ${{ inputs.lock }}
+        run: base64 -d <<< "$LOCK" > flake.lock
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      - env:
+          CHECK: ${{ matrix.name }}
+        run: nix build -L --no-link ".#checks.x86_64-linux.$CHECK"
