@@ -52,6 +52,8 @@ spec:
         runAsNonRoot: true
         runAsUser: 65534
         runAsGroup: 65534
+        fsGroup: 65534
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
     service:
@@ -65,3 +67,8 @@ spec:
         type: emptyDir
         globalMounts:
           - path: /tmp
+      data:
+        type: persistentVolumeClaim
+        existingClaim: data
+        globalMounts:
+          - path: /data

@@ -1,0 +1,16 @@
+---
+# VolSync publishes its chart only in a Helm repository, so it comes from the release's commit.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: volsync
+  namespace: flux-system
+spec:
+  interval: 12h
+  url: https://github.com/backube/volsync
+  ref:
+    # v0.16.0
+    branch: release-0.16
+    commit: 22b97b0717c74f328853d92877151392ff5ecb42
+  sparseCheckout:
+    - helm/volsync

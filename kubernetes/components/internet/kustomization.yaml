@@ -1,7 +1,7 @@
 ---
 # The one way to the internet from a tenant's namespace: web ports anywhere but the cluster's own pods, Services and
 # nodes and link-local addresses, for pods labelled suveraen/egress=internet, which only the platform's backup jobs
-# may carry (platform/policies/egress-labels).
+# and movers may carry (platform/policies/egress-labels).
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:

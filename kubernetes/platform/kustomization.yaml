@@ -15,3 +15,4 @@ resources:
   - ./ceph/ks.yaml
   - ./cloudnative-pg/ks.yaml
   - ./pg-catalog/ks.yaml
+  - ./volsync/ks.yaml

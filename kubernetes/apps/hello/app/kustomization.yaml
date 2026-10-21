@@ -4,5 +4,6 @@ kind: Kustomization
 resources:
   - ./configmap.yaml
   - ./db.yaml
+  - ./volsync.yaml
   - ./ocirepository.yaml
   - ./helmrelease.yaml

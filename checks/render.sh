@@ -34,6 +34,8 @@ appkinds='ConfigMap,Secret,Service,ServiceAccount,PersistentVolumeClaim,LimitRan
 appkinds+=',Role.rbac.authorization.k8s.io,RoleBinding.rbac.authorization.k8s.io,NetworkPolicy.networking.k8s.io'
 appkinds+=',OCIRepository.source.toolkit.fluxcd.io,HelmRelease.helm.toolkit.fluxcd.io'
 appkinds+=',HTTPRoute.gateway.networking.k8s.io'
+# Copies of an app's volume (components/volsync).
+appkinds+=',ReplicationSource.volsync.backube,ReplicationDestination.volsync.backube'
 # The tenant's PostgreSQL also claims its bucket, tells Barman where to archive and copies the bucket off-site.
 pgkinds=',ObjectBucketClaim.objectbucket.io,ObjectStore.barmancloud.cnpg.io,CronJob.batch,Job.batch'
 export quotas hard appkinds
@@ -397,6 +399,27 @@ for dir in kubernetes/clusters/*/; do
           and .[0].metadata.labels."suveraen/app" == strenv(app))' "$file" >/dev/null \
           || fail "$cluster/$name: an app's namespace is $name, labelled suveraen/tier=app, suveraen/tenant=$t and" \
             "suveraen/app=$app"
+        # An app's volume is copied as components/volsync has it, as the app's own user, into its own prefix at
+        # both providers.
+        bad=$(yq ea '[select(.kind == "Namespace" and .metadata.annotations."volsync.backube/privileged-movers" != null)
+          | .metadata.name] | .[]' "$file")
+        [ -z "$bad" ] || fail "$cluster/$name: VolSync's movers run as the app's user, never privileged: $bad"
+        copies=$(yq ea '[select(.kind == "ReplicationSource" or .kind == "ReplicationDestination") | .kind + " "
+          + .metadata.name + " " + .spec.restic.repository + " " + (.spec.sourcePVC // "-") + " "
+          + (.spec.restic.moverSecurityContext.runAsNonRoot // false | tostring)] | sort | join(",")' "$file")
+        if [ -n "$copies" ]; then
+          [ "$copies" = "ReplicationDestination data volsync-1 - true,ReplicationSource data-1 volsync-1 data true,$(
+            )ReplicationSource data-2 volsync-2 data true" ] \
+            || fail "$cluster/$name: an app's volume is copied by components/volsync alone, as a user that isn't" \
+              "root: $copies"
+          vars=$w/$name.vars.yaml
+          for n in 1 2; do
+            repository="s3:$(yq ".BACKUP_${n}_ENDPOINT" "$vars")/$(yq ".BACKUP_${n}_BUCKET_PREFIX" "$vars")$t/volsync/$app"
+            [ "$(yq ea "[select(.kind == \"Secret\" and .metadata.name == \"volsync-$n\")
+              | .stringData.RESTIC_REPOSITORY // \"-\"] | join(\",\")" "$file")" = "$repository" ] \
+              || fail "$cluster/$name: copies of $app's volume go to $repository, from Secret volsync-$n"
+          done
+        fi
         if [ "$app" = postgres ]; then
           # The tenant's own bucket, kept when its claim goes, which Barman writes to in the cluster's object store only.
           [ "$(yq ea '[select(.kind == "ObjectBucketClaim") | .metadata.name + " " + .spec.bucketName + " "

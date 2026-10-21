@@ -1,0 +1,45 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: volsync
+  namespace: flux-system
+spec:
+  interval: 1h
+  serviceAccountName: helm-controller
+  targetNamespace: volsync
+  releaseName: volsync
+  chart:
+    spec:
+      chart: ./helm/volsync
+      sourceRef:
+        kind: GitRepository
+        name: volsync
+      reconcileStrategy: Revision
+  install:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 2m
+  upgrade:
+    remediation:
+      retries: 3
+  values:
+    # The chart's CRDs are templates: never turned off, or every copy's schedule would go with them.
+    manageCRDs: true
+    # The controller's image is also restic's mover, the only one apps use.
+    image:
+      repository: quay.io/backube/volsync
+      tag: "0.16.0"
+    restic:
+      repository: quay.io/backube/volsync
+      tag: "0.16.0"
+  postRenderers:
+    - kustomize:
+        patches:
+          - target:
+              kind: Deployment
+              name: volsync
+            patch: |-
+              - op: add
+                path: /spec/template/spec/priorityClassName
+                value: platform

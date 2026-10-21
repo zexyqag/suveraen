@@ -67,7 +67,10 @@ other() { # a second app like hello, which bravo also runs
   sed -i 's/hello/other/g; s/HELLO/OTHER/g' apps/other/ks.yaml apps/other/app/*.yaml apps/other/db/*.yaml
   sed -i 's|  - ../../../../../apps/hello/ks.yaml|&\n  - ../../../../../apps/other/ks.yaml|' \
     $T/bravo/apps/kustomization.yaml
-  append $T/bravo/secrets.yaml '  OTHER_DB_PASSWORD: x\n'
+  append $T/bravo/secrets.yaml '  OTHER_DB_PASSWORD: x\n  OTHER_RESTIC_PASSWORD: x\n'
+  for n in 1 2; do
+    append $T/bravo/secrets.yaml "  OTHER_BACKUP_${n}_ACCESS_KEY_ID: x\n  OTHER_BACKUP_${n}_SECRET_ACCESS_KEY: x\n"
+  done
 }
 knob() { yq -i ".spec.postBuild.substitute.$1 = \"$2\"" "$T/bravo/tenant.yaml"; }
 export -f append np encsecret encmap prod other knob
@@ -431,6 +434,21 @@ refuses offsite-one-provider "the two providers' endpoints differ" \
   "yq -i '.data.BACKUP_2_ENDPOINT = .data.BACKUP_1_ENDPOINT' clusters/test/settings.yaml"
 refuses offsite-plain-http "prod: the providers' endpoints are https" \
   "$real; yq -i '.data.BACKUP_2_ENDPOINT = \"http://s3.two.test\"' clusters/prod/settings.yaml"
+V=apps/hello/app/volsync.yaml
+volsync="an app's volume is copied by components/volsync alone, as a user that isn't root"
+refuses volsync-other-prefix "copies of hello's volume go to s3:http://s3-1.test/test-" \
+  "sed -i 's|volsync/\${APP}|volsync/other|' $V"
+refuses volsync-other-bucket "copies of hello's volume go to s3:http://s3-2.test/test-bravo/volsync/hello" \
+  "sed -i 's|\${BACKUP_2_BUCKET_PREFIX}\${TENANT}|\${BACKUP_2_BUCKET_PREFIX}alpha|' $V"
+refuses volsync-other-key "kubernetes/apps/hello: an app reads only its own keys, not POSTGRES_BACKUP_1_ACCESS_KEY_ID" \
+  "sed -i 's/HELLO_BACKUP_1_ACCESS_KEY_ID/POSTGRES_BACKUP_1_ACCESS_KEY_ID/' $V"
+refuses volsync-root-mover "$volsync" \
+  "yq -i '(select(.kind == \"ReplicationSource\") | .spec.restic.moverSecurityContext.runAsNonRoot) = false' \
+  components/volsync/volume.yaml"
+refuses volsync-other-source "$volsync" \
+  "yq -i '(select(.kind == \"ReplicationSource\") | .spec.sourcePVC) = \"other\"' components/volsync/volume.yaml"
+refuses volsync-privileged "VolSync's movers run as the app's user, never privileged" \
+  "yq -i '.metadata.annotations.\"volsync.backube/privileged-movers\" = \"true\"' components/app/namespace.yaml"
 
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"

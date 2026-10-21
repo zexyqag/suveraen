@@ -1,0 +1,7 @@
+---
+# Copies of apps' volumes (VolSync): restic repositories at both providers, and new volumes filled from them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./gitrepository.yaml
+  - ./helmrelease.yaml

@@ -1,0 +1,127 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: ceph-block
+  resources:
+    requests:
+      storage: ${DATA_SIZE}
+  dataSourceRef:
+    apiGroup: volsync.backube
+    kind: ReplicationDestination
+    name: data
+---
+apiVersion: volsync.backube/v1alpha1
+kind: ReplicationDestination
+metadata:
+  name: data
+spec:
+  trigger:
+    manual: ${DATA_RESTORE}
+  restic:
+    repository: volsync-1
+    copyMethod: Snapshot
+    capacity: ${DATA_SIZE}
+    accessModes: [ReadWriteOnce]
+    storageClassName: ceph-block
+    volumeSnapshotClassName: ceph-block
+    cacheCapacity: 256Mi
+    cacheStorageClassName: ceph-block
+    moverSecurityContext:
+      runAsNonRoot: true
+      runAsUser: ${DATA_UID}
+      runAsGroup: ${DATA_UID}
+      fsGroup: ${DATA_UID}
+      seccompProfile:
+        type: RuntimeDefault
+    moverPodLabels:
+      suveraen/egress: internet
+    moverResources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+        ephemeral-storage: 64Mi
+      limits:
+        memory: 256Mi
+        ephemeral-storage: 256Mi
+---
+apiVersion: volsync.backube/v1alpha1
+kind: ReplicationSource
+metadata:
+  name: data-1
+spec:
+  sourcePVC: data
+  trigger:
+    schedule: ${DATA_SCHEDULE_1}
+  restic:
+    repository: volsync-1
+    copyMethod: Snapshot
+    storageClassName: ceph-block
+    volumeSnapshotClassName: ceph-block
+    cacheCapacity: 256Mi
+    cacheStorageClassName: ceph-block
+    pruneIntervalDays: 7
+    retain:
+      hourly: 24
+      daily: 7
+      weekly: 5
+    moverSecurityContext:
+      runAsNonRoot: true
+      runAsUser: ${DATA_UID}
+      runAsGroup: ${DATA_UID}
+      fsGroup: ${DATA_UID}
+      seccompProfile:
+        type: RuntimeDefault
+    moverPodLabels:
+      suveraen/egress: internet
+    moverResources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+        ephemeral-storage: 64Mi
+      limits:
+        memory: 256Mi
+        ephemeral-storage: 256Mi
+---
+apiVersion: volsync.backube/v1alpha1
+kind: ReplicationSource
+metadata:
+  name: data-2
+spec:
+  sourcePVC: data
+  trigger:
+    schedule: ${DATA_SCHEDULE_2}
+  restic:
+    repository: volsync-2
+    copyMethod: Snapshot
+    storageClassName: ceph-block
+    volumeSnapshotClassName: ceph-block
+    cacheCapacity: 256Mi
+    cacheStorageClassName: ceph-block
+    pruneIntervalDays: 7
+    retain:
+      hourly: 24
+      daily: 7
+      weekly: 5
+    moverSecurityContext:
+      runAsNonRoot: true
+      runAsUser: ${DATA_UID}
+      runAsGroup: ${DATA_UID}
+      fsGroup: ${DATA_UID}
+      seccompProfile:
+        type: RuntimeDefault
+    moverPodLabels:
+      suveraen/egress: internet
+    moverResources:
+      requests:
+        cpu: 10m
+        memory: 64Mi
+        ephemeral-storage: 64Mi
+      limits:
+        memory: 256Mi
+        ephemeral-storage: 256Mi

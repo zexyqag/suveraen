@@ -10,24 +10,33 @@ spec:
   components:
     - ../../../components/app
     - ../../../components/db-client
+    - ../../../components/volsync
   dependsOn:
     - name: policies
+    - name: volsync
+    - name: ceph
     - name: ${TENANT}-hello-db
   postBuild:
     substitute:
       APP: hello
       QUOTA_CPU: ${HELLO_QUOTA_CPU:=100m}
-      QUOTA_MEMORY: ${HELLO_QUOTA_MEMORY:=256Mi}
+      # The app and up to three movers, whose volumes and caches come to four times the volume and 768Mi.
+      QUOTA_MEMORY: ${HELLO_QUOTA_MEMORY:=1Gi}
       QUOTA_EPHEMERAL_STORAGE: ${HELLO_QUOTA_EPHEMERAL_STORAGE:=1Gi}
-      QUOTA_STORAGE: ${HELLO_QUOTA_STORAGE:=0Gi}
+      QUOTA_STORAGE: ${HELLO_QUOTA_STORAGE:=5Gi}
       # Flux reads a substituted value that looks like a number back as one, which a Kustomization refuses, so a
       # tenant can resize only quantities with a unit.
-      QUOTA_VOLUMES: "0"
-      QUOTA_PODS: "4"
+      QUOTA_VOLUMES: "8"
+      QUOTA_PODS: "6"
       QUOTA_SERVICES: "2"
       QUOTA_SECRETS: "10"
       QUOTA_CONFIGMAPS: "4"
-      QUOTA_JOBS: "0"
+      QUOTA_JOBS: "3"
+      DATA_SIZE: ${HELLO_DATA_SIZE:=1Gi}
+      DATA_UID: "65534"
+      DATA_SCHEDULE_1: ${HELLO_DATA_SCHEDULE_1:=17 * * * *}
+      DATA_SCHEDULE_2: ${HELLO_DATA_SCHEDULE_2:=47 * * * *}
+      DATA_RESTORE: ${HELLO_DATA_RESTORE:=once}
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization

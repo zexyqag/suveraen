@@ -1,8 +1,8 @@
 ---
 # Two pod labels open a way out of a tenant's namespace: suveraen/egress to the internet (components/internet) and
 # suveraen/object-store to the cluster's object store (apps/postgres). An app's charts, which run as its namespace's
-# deployer, must not hand them to their own pods: only the backup jobs the platform runs carry them, made by Flux,
-# the job and CronJob controllers or CloudNativePG.
+# deployer, must not hand them to their own pods: only the backup jobs and movers the platform runs carry them, made
+# by Flux, the job and CronJob controllers, CloudNativePG or VolSync.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -47,7 +47,7 @@ spec:
         request.resource.resource == 'pods' ? ['system:serviceaccount:kube-system:job-controller',
         'system:serviceaccount:cloudnative-pg:cloudnative-pg'] :
         request.resource.resource == 'jobs' ? ['system:serviceaccount:kube-system:cronjob-controller',
-        'system:serviceaccount:cloudnative-pg:cloudnative-pg',
+        'system:serviceaccount:cloudnative-pg:cloudnative-pg', 'system:serviceaccount:volsync:volsync',
         'system:serviceaccount:flux-system:kustomize-controller'] :
         request.resource.resource == 'cronjobs' ? ['system:serviceaccount:flux-system:kustomize-controller'] : []
   validations:

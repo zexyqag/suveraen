@@ -1,0 +1,14 @@
+---
+# An app's volume, data, which VolSync copies with restic to both providers, encrypted with the app's own password,
+# and fills from provider 1's latest copy when it is made: an app's first volume starts empty, a lost one comes back.
+# The app's Secrets volsync-1 and volsync-2 hold its keys, which reach only volsync/<app>/ in the tenant's bucket at
+# each provider. The movers run as the app's user and are the namespace's only pods that reach the internet.
+#
+# To bring a lost volume back, a release sets <APP>_DATA_RESTORE to a new value, which restores the latest copy
+# again; then the operator deletes PVC data, once nothing mounts it, and Flux makes it anew from that restore.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ./volume.yaml
+components:
+  - ../internet
