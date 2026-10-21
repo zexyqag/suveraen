@@ -11,10 +11,23 @@
     adminKeys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN9QsUU2i+9+MwdvtxOsPVD6L24UHYJXVJRI2oe+9oHP example"
     ];
-    storage.systemDisks = [
-      "/dev/disk/by-id/nvme-example-0"
-      "/dev/disk/by-id/nvme-example-1"
-    ];
+    storage = {
+      systemDisks = [
+        "/dev/disk/by-id/nvme-example-0"
+        "/dev/disk/by-id/nvme-example-1"
+      ];
+      # Half the slots in use: while the cluster is one node, a system disk holds the DBs of at most two OSDs.
+      ceph = {
+        disks = map (i: "/dev/disk/by-id/ata-example-hdd-${toString i}") [
+          0
+          1
+          2
+          3
+        ];
+        dbSlots = 8;
+        dbSize = "150G";
+      };
+    };
     network = {
       ipv4 = "203.0.113.10/32";
       ipv4Gateway = "203.0.113.1";

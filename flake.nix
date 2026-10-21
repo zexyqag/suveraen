@@ -32,14 +32,15 @@
         text = builtins.readFile ./release/approve.sh;
       };
 
-      build =
+      machine =
         host:
         (nixpkgs.lib.nixosSystem {
           modules = [
             self.nixosModules.default
             host
           ];
-        }).config.system.build.toplevel;
+        }).config.system.build;
+      build = host: (machine host).toplevel;
     in
     {
       nixosModules.default = {
@@ -99,6 +100,9 @@
           inherit pkgs;
           module = self.nixosModules.default;
         };
+
+        # disko installs the layout onto blank disks in a VM and boots it.
+        storage = (machine ./checks/storage.nix).installTest;
       };
     };
 }

@@ -1,6 +1,8 @@
 # Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and
 # pointed at the repository, out of reach of namespace admins, pods held to the restricted Pod
-# Security Standard, secrets encrypted at rest with secretbox and only SSH and web ports open. An
+# Security Standard, secrets encrypted at rest with secretbox and only SSH and web ports open. Ceph's
+# disks have stable names, their DB partitions take turns between two disks, the kernel maps and
+# decrypts Ceph's volumes without loading modules, and k3s keeps no volumes of its own. An
 # app's charts reach only its own namespace and can neither widen who may act there nor publish
 # ports, no namespace leaves restricted Pod Security, and no Service takes external IPs. A tenant's
 # namespaces, names in flux-system and hosts are its own, Gateways, certificates and ACME orders stay
@@ -316,6 +318,23 @@ pkgs.testers.runNixOSTest {
               "kubectl -n flux-system get kustomization cluster -o jsonpath='{.spec.path}' | grep -F '${path}'"
           )
           server.wait_until_succeeds("kubectl -n flux-system get secret sops-age", timeout=300)
+
+      with subtest("Ceph's disks have stable names and DB partitions on alternate disks, and k3s keeps no volumes"):
+          server.wait_for_unit("osd-db-partitions.service")
+          for module in ["rbd", "dm_crypt"]:
+              server.succeed(f"grep -q '^{module} ' /proc/modules")
+          disks = ${builtins.toJSON nodes.server.suveraen.storage.ceph.disks}
+          assert len(disks) == 3, disks
+          for slot, disk in enumerate(disks):
+              server.succeed(f"test $(readlink -f /dev/disk/by-osd/osd{slot}) = $(readlink -f {disk})")
+              # The test's stand-ins for the two system disks.
+              server.succeed(
+                  f"test $(lsblk -no PKNAME $(readlink -f /dev/disk/by-partlabel/osd{slot}-db))"
+                  f" = $(basename $(readlink -f /dev/disk/by-id/virtio-db{slot % 2}))"
+              )
+          server.fail("test -e /dev/disk/by-osd/osd3")
+          server.succeed("test ! -e /var/lib/rancher/k3s/server/manifests/local-storage.yaml")
+          server.succeed("test -z \"$(kubectl get storageclass -o name)\"")
 
       with subtest("Rights in a namespace don't extend to Flux, and Flux acts there only with that namespace's own account"):
           for controller in ["kustomize-controller", "helm-controller", "notification-controller"]:

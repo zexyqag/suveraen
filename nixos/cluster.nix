@@ -143,8 +143,11 @@ in
       # Embedded etcd from the start, so more servers can join later.
       clusterInit = true;
       nodeIP = lib.concatStringsSep "," cfg.nodeIP;
-      # Ingress is managed through Flux like everything else.
-      disable = [ "traefik" ];
+      # Ingress is managed through Flux like everything else, and volumes come from Ceph, which keeps three copies.
+      disable = [
+        "traefik"
+        "local-storage"
+      ];
       extraFlags = [
         # These must match on every server and can't change once the cluster exists.
         "--secrets-encryption"
@@ -290,10 +293,11 @@ in
       access-control = map (cidr: "${cidr} allow") (podCIDRs ++ [ "${resolver}/32" ]);
     };
 
-    # Rook mounts Ceph block devices and file systems from the host kernel.
+    # Ceph's block devices map through the host kernel, and its OSDs open their disks with dm-crypt. The CSI plugin
+    # can't load modules from NixOS's module path, so they are loaded at boot.
     boot.kernelModules = [
       "rbd"
-      "ceph"
+      "dm_crypt"
     ];
 
     environment.systemPackages = [ pkgs.kubectl ];

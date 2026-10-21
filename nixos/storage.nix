@@ -38,12 +38,29 @@ let
     mountOptions = [ "umask=0077" ];
   };
 
+  # Raw partitions for BlueStore's DB, one per OSD slot, taking turns between the system disks. ceph-volume formats
+  # them itself, and kubernetes/platform/ceph finds them by these labels.
+  dbPartitions =
+    i:
+    lib.listToAttrs (
+      map
+        (
+          slot:
+          lib.nameValuePair "osd${toString slot}-db" {
+            size = cfg.ceph.dbSize;
+            label = "osd${toString slot}-db";
+            priority = 1100 + slot;
+          }
+        )
+        (lib.filter (slot: lib.mod slot (lib.length cfg.systemDisks) == i) (lib.range 0 (cfg.ceph.dbSlots - 1)))
+    );
+
   systemDisk = i: device: {
     type = "disk";
     inherit device;
     content = {
       type = "gpt";
-      partitions = {
+      partitions = dbPartitions i // {
         bios = {
           size = "1M";
           type = "EF02";
@@ -108,8 +125,8 @@ in
         "/dev/disk/by-id/nvme-SAMSUNG_B"
       ];
       description = ''
-        One disk, or two mirrored, for boot, the system and databases (pool `rpool`, mounted at /, /nix and /var).
-        They are wiped on install. Other disks are left alone for the cluster's storage (Ceph).
+        One disk, or two mirrored, for boot, the system and the cluster's own state (pool `rpool`), and the DBs of
+        Ceph's OSDs. They are wiped on install. Other disks are left alone for Ceph (ceph.disks).
       '';
     };
 
@@ -128,6 +145,63 @@ in
       description = "Space held back in the pool, so files can still be deleted when it is otherwise full.";
     };
 
+    ceph = {
+      disks = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        example = [
+          "/dev/disk/by-id/ata-HDD_A"
+          "/dev/disk/by-id/ata-HDD_B"
+        ];
+        description = ''
+          Disks Ceph takes as OSDs, in slot order. Slot N appears as /dev/disk/by-osd/osdN and keeps its BlueStore DB
+          on /dev/disk/by-partlabel/osdN-db, which is how kubernetes/platform/ceph names them, for slots osd0 to osd11.
+          Wipe a disk before it is listed: Ceph skips disks that hold anything.
+        '';
+      };
+
+      dbSlots = lib.mkOption {
+        type = lib.types.ints.between 0 12;
+        default = lib.length cfg.ceph.disks;
+        defaultText = lib.literalExpression "length config.suveraen.storage.ceph.disks";
+        description = ''
+          BlueStore DB partitions made on the system disks at install, taking turns between them. They can't be added
+          later, so reserve one for every disk the machine may ever give Ceph.
+        '';
+      };
+
+      dbSize = lib.mkOption {
+        type = lib.types.nullOr (lib.types.strMatching "[0-9]+[KMGT]");
+        default = null;
+        example = "150G";
+        description = "Size of each DB partition, about 1% of its disk.";
+      };
+    };
+
+    containerdQuota = lib.mkOption {
+      type = lib.types.str;
+      default = "64G";
+      description = "Most space container images and their writable layers may take.";
+    };
+
+    kubeletQuota = lib.mkOption {
+      type = lib.types.str;
+      default = "64G";
+      description = "Most space pods' emptyDir volumes and logs may take.";
+    };
+
+    etcdReservation = lib.mkOption {
+      type = lib.types.str;
+      default = "8G";
+      description = "Space kept for etcd and its snapshots, so it stays writable when pods fill the pool.";
+    };
+
+    rookReservation = lib.mkOption {
+      type = lib.types.str;
+      default = "8G";
+      description = "Space kept for the Ceph monitors' stores under /var/lib/rook, which also hold the OSDs' disk keys.";
+    };
+
     arcMax = lib.mkOption {
       type = lib.types.ints.positive;
       default = 4 * 1024 * 1024 * 1024;
@@ -144,6 +218,24 @@ in
           2
         ];
         message = "suveraen.storage.systemDisks needs one or two disks.";
+      }
+      {
+        assertion = cfg.ceph.dbSlots >= lib.length cfg.ceph.disks;
+        message = "suveraen.storage.ceph.dbSlots needs a DB partition for every disk in ceph.disks.";
+      }
+      {
+        assertion = cfg.ceph.dbSlots == 0 || cfg.ceph.dbSize != null;
+        message = "suveraen.storage.ceph.dbSize sets the size of the DB partitions.";
+      }
+      {
+        assertion = lib.all (lib.hasPrefix "/dev/disk/") cfg.ceph.disks;
+        message = "suveraen.storage.ceph.disks names disks by a stable link under /dev/disk/, such as by-id.";
+      }
+      {
+        # Encrypted OSDs with their DB elsewhere are LVM volumes, which come back after a reboot only with lvm2's udev
+        # rules on the host.
+        assertion = cfg.ceph.disks == [ ] || (config.suveraen.cluster.enable && config.services.lvm.enable);
+        message = "suveraen.storage.ceph.disks needs suveraen.cluster.enable and services.lvm.enable.";
       }
     ];
 
@@ -164,12 +256,26 @@ in
         };
       };
 
-      zpool.rpool = pool {
-        root = mounted "/" { };
-        nix = mounted "/nix" { };
-        var = mounted "/var" { };
-      };
+      # Outside rpool/var, so the hourly snapshots skip them, and bounded so a full disk of images or pods can't stop
+      # etcd or the monitors.
+      zpool.rpool = pool (
+        {
+          root = mounted "/" { };
+          nix = mounted "/nix" { };
+          var = mounted "/var" { };
+        }
+        // lib.optionalAttrs config.suveraen.cluster.enable {
+          containerd = mounted "/var/lib/rancher/k3s/agent/containerd" { quota = cfg.containerdQuota; };
+          kubelet = mounted "/var/lib/kubelet" { quota = cfg.kubeletQuota; };
+          etcd = mounted "/var/lib/rancher/k3s/server/db" { reservation = cfg.etcdReservation; };
+          rook = mounted "/var/lib/rook" { reservation = cfg.rookReservation; };
+        }
+      );
     };
+
+    services.udev.extraRules = lib.concatImapStrings (i: disk: ''
+      SUBSYSTEM=="block", SYMLINK=="${lib.removePrefix "/dev/" disk}", SYMLINK+="disk/by-osd/osd${toString (i - 1)}"
+    '') cfg.ceph.disks;
 
     # Both BIOS and UEFI boot; disko adds every disk with an EF02 partition to grub's devices.
     boot.loader.grub = {
@@ -203,9 +309,13 @@ in
         autosnap = true;
         autoprune = true;
       };
-      datasets."rpool/var" = {
-        useTemplate = [ "local" ];
-        recursive = true;
+      datasets = {
+        "rpool/var" = {
+          useTemplate = [ "local" ];
+          recursive = true;
+        };
+        # The monitors' stores alone hold the keys to the OSDs' disks.
+        "rpool/rook" = lib.mkIf config.suveraen.cluster.enable { useTemplate = [ "local" ]; };
       };
     };
 
