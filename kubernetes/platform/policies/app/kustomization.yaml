@@ -13,3 +13,5 @@ resources:
   - ./tenant-priority.yaml
   - ./postgres-clusters.yaml
   - ./egress-labels.yaml
+  - ./backup-keys.yaml
+  - ./backup-volumes.yaml

@@ -1,8 +1,9 @@
 ---
 # Two pod labels open a way out of a tenant's namespace: suveraen/egress to the internet (components/internet) and
 # suveraen/object-store to the cluster's object store (apps/postgres). An app's charts, which run as its namespace's
-# deployer, must not hand them to their own pods: only the backup jobs and movers the platform runs carry them, made
-# by Flux, the job and CronJob controllers, CloudNativePG or VolSync.
+# deployer, must not hand them to their own pods, nor change what a pod or job that carries one runs: only the backup
+# jobs and movers the platform runs carry them, made by Flux, the job and CronJob controllers, CloudNativePG or
+# VolSync. Others may still change such an object's metadata, as the garbage collector does.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -39,9 +40,14 @@ spec:
         request.resource.resource == 'pods' ? oldObject.metadata.?labels.orValue({}) :
         request.resource.resource == 'cronjobs' ? oldObject.spec.jobTemplate.spec.template.metadata.?labels.orValue({}) :
         oldObject.spec.template.metadata.?labels.orValue({})
-    - name: gains
+    - name: carried
       expression: >-
-        ['suveraen/egress', 'suveraen/object-store'].exists(k, k in variables.labels && !(k in variables.before))
+        ['suveraen/egress', 'suveraen/object-store'].exists(k, k in variables.labels || k in variables.before)
+    - name: unchanged
+      expression: >-
+        request.operation == 'UPDATE' && object.spec == oldObject.spec &&
+        ['suveraen/egress', 'suveraen/object-store'].all(k, (k in variables.labels) == (k in variables.before) &&
+        (!(k in variables.labels) || variables.labels[k] == variables.before[k]))
     - name: makers
       expression: >-
         request.resource.resource == 'pods' ? ['system:serviceaccount:kube-system:job-controller',
@@ -52,7 +58,7 @@ spec:
         request.resource.resource == 'cronjobs' ? ['system:serviceaccount:flux-system:kustomize-controller'] : []
   validations:
     - expression: >-
-        !variables.gains || request.userInfo.username in variables.makers ||
+        !variables.carried || variables.unchanged || request.userInfo.username in variables.makers ||
         'system:masters' in request.userInfo.groups
       message: only the platform's backup jobs and movers reach the internet or the object store from a tenant
 ---

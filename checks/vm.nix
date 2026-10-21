@@ -857,6 +857,37 @@ pkgs.testers.runNixOSTest {
               server.succeed(dry(labelled_pod("member", labels)))
           for kind in ["Deployment", "Job", "CronJob"]:
               server.succeed(f"{dry(template(kind, {'app': 'probe'}))} {deployer}")
+          # Nor may they change what a pod or job that carries one runs, or the keys its copies go with, or delete a
+          # volume that is copied off-site.
+          mover = labelled_pod("alpha-hello", {"suveraen/egress": "internet"})
+          server.succeed(f"echo {shlex.quote(json.dumps(mover))} | kubectl create -f - {by('kube-system:job-controller')}")
+          refused(f"kubectl -n alpha-hello set image pod/probe probe=busybox:musl {deployer}", "egress-labels")
+          refused(f"kubectl -n alpha-hello label pod probe suveraen/egress- {deployer}", "egress-labels")
+          server.succeed(f"kubectl -n alpha-hello annotate pod probe probe=x {deployer}")
+          server.succeed("kubectl -n alpha-hello delete pod probe --wait=false")
+          server.succeed(
+              "kubectl apply -f ${../kubernetes/platform/policies/app/backup-keys.yaml}"
+              " -f ${../kubernetes/platform/policies/app/backup-volumes.yaml}"
+              " && kubectl -n alpha-hello create secret generic offsite-1 --from-literal=RESTIC_REPOSITORY=s3:x"
+          )
+          refused(f"kubectl -n alpha-hello delete secret offsite-1 --dry-run=server {deployer}", "backup-keys")
+          refused(
+              f"kubectl -n alpha-hello patch secret offsite-1 -p '{{\"stringData\":{{\"RESTIC_REPOSITORY\":\"s3:y\"}}}}' {deployer}",
+              "backup-keys",
+          )
+          refused(f"kubectl -n alpha-hello create secret generic offsite-2 --dry-run=server {deployer}", "backup-keys")
+          server.succeed(f"kubectl -n alpha-hello create secret generic other --dry-run=server {deployer}")
+          volume = {
+              "apiVersion": "v1",
+              "kind": "PersistentVolumeClaim",
+              "metadata": {"name": "data", "namespace": "alpha-hello", "labels": {"suveraen/backup": "volsync"}},
+              "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}},
+          }
+          server.succeed(f"echo {shlex.quote(json.dumps(volume))} | kubectl create -f -")
+          refused(f"kubectl -n alpha-hello delete pvc data --dry-run=server {deployer}", "backup-volumes")
+          refused(f"kubectl -n alpha-hello label pvc data suveraen/backup- {deployer}", "backup-volumes")
+          server.succeed(f"kubectl -n alpha-hello annotate pvc data probe=x {deployer}")
+          server.succeed("kubectl -n alpha-hello delete pvc/data secret/offsite-1")
 
       with subtest("Clocks follow NTS servers"):
           for node in [server, watcher]:

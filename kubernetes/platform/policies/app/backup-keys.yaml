@@ -1,0 +1,35 @@
+---
+# The Secrets the backup jobs and movers read say where a tenant's copies go and with which keys. An app's charts may
+# change other Secrets in their namespace, but not these: one pointing elsewhere would send the tenant's data there.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: backup-keys
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [secrets]
+    namespaceSelector:
+      matchExpressions:
+        - key: suveraen/tenant
+          operator: Exists
+  matchConditions:
+    - name: backup-keys
+      expression: request.name in ['offsite', 'offsite-1', 'offsite-2']
+  validations:
+    - expression: >-
+        request.userInfo.username in ['system:serviceaccount:flux-system:kustomize-controller',
+        'system:serviceaccount:kube-system:namespace-controller'] || 'system:masters' in request.userInfo.groups
+      message: only Flux changes the keys a tenant's copies are made with
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: backup-keys
+spec:
+  policyName: backup-keys
+  validationActions: [Deny]

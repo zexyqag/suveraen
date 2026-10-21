@@ -1,0 +1,39 @@
+---
+# Volumes the platform copies off-site carry suveraen/backup. An app's charts may delete their own claims, but not
+# these, nor take the label off: a volume made anew would start from its last restore, and its copies would go on
+# without the data.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: backup-volumes
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [UPDATE, DELETE]
+        resources: [persistentvolumeclaims]
+    namespaceSelector:
+      matchExpressions:
+        - key: suveraen/tenant
+          operator: Exists
+  matchConditions:
+    - name: labelled
+      expression: oldObject.metadata.?labels[?'suveraen/backup'].hasValue()
+  validations:
+    - expression: >-
+        (request.operation == 'UPDATE' &&
+        object.metadata.?labels[?'suveraen/backup'] == oldObject.metadata.?labels[?'suveraen/backup']) ||
+        request.userInfo.username in ['system:serviceaccount:kube-system:namespace-controller',
+        'system:serviceaccount:kube-system:generic-garbage-collector',
+        'system:serviceaccount:cloudnative-pg:cloudnative-pg'] || 'system:masters' in request.userInfo.groups
+      message: only an admin deletes a volume that is copied off-site, or stops its copies
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: backup-volumes
+spec:
+  policyName: backup-volumes
+  validationActions: [Deny]
