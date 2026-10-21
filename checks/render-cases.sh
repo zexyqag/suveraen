@@ -344,8 +344,10 @@ refuses osd-unencrypted "$cc" "yq -i '.spec.storage.config.encryptedDevice = \"f
 refuses osd-device-unencrypted "$cc" \
   "yq -i '.spec.storage.devices[0].config.encryptedDevice = \"false\"' $P/cluster.yaml"
 refuses osd-db-mismatch "$cc" \
-  "yq -i '.spec.storage.devices[1].config.metadataDevice = \"/dev/disk/by-partlabel/osd2-db\"' $P/cluster.yaml"
-refuses osd-missing-slot "$cc" "yq -i 'del(.spec.storage.devices[11])' $P/cluster.yaml"
+  "yq -i '.spec.storage.devices[1].config.metadataDevice = \"/dev/disk/by-osd/osd2-db\"' $P/cluster.yaml"
+refuses osd-missing-slot "$cc" "yq -i 'del(.spec.storage.devices[5])' $P/cluster.yaml"
+refuses osd-partlabel-db "$cc" \
+  "sed -i 's|metadataDevice: /dev/disk/by-osd/osd0-db|metadataDevice: /dev/disk/by-partlabel/osd0-db|' $P/cluster.yaml"
 refuses osd-all-devices "$cc" "yq -i '.spec.storage.useAllDevices = true' $P/cluster.yaml"
 refuses osd-device-filter "$cc" "yq -i '.spec.storage.deviceFilter = \"^sd\"' $P/cluster.yaml"
 refuses msgr1-allowed "$cc" "yq -i '.spec.network.connections.requireMsgr2 = false' $P/cluster.yaml"

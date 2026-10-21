@@ -324,7 +324,7 @@ pkgs.testers.runNixOSTest {
           )
           server.wait_until_succeeds("kubectl -n flux-system get secret sops-age", timeout=300)
 
-      with subtest("Ceph's disks have stable names and DB partitions on alternate disks, and k3s keeps no volumes"):
+      with subtest("Ceph's disks have stable names and DB partitions on an array over both disks, and k3s keeps no volumes"):
           server.wait_for_unit("osd-db-partitions.service")
           for module in ["rbd", "dm_crypt"]:
               server.succeed(f"grep -q '^{module} ' /proc/modules")
@@ -332,11 +332,12 @@ pkgs.testers.runNixOSTest {
           assert len(disks) == 3, disks
           for slot, disk in enumerate(disks):
               server.succeed(f"test $(readlink -f /dev/disk/by-osd/osd{slot}) = $(readlink -f {disk})")
-              # The test's stand-ins for the two system disks.
-              server.succeed(
-                  f"test $(lsblk -no PKNAME $(readlink -f /dev/disk/by-partlabel/osd{slot}-db))"
-                  f" = $(basename $(readlink -f /dev/disk/by-id/virtio-db{slot % 2}))"
-              )
+              # On the array over the test's stand-ins for the two system disks.
+              below = server.succeed(f"lsblk -snro NAME,TYPE $(readlink -f /dev/disk/by-osd/osd{slot}-db)")
+              assert " raid1\n" in below, below
+              for half in range(2):
+                  name = server.succeed(f"basename $(readlink -f /dev/disk/by-id/virtio-db{half})").strip()
+                  assert f"{name} disk" in below, (slot, below)
           server.fail("test -e /dev/disk/by-osd/osd3")
           server.succeed("test ! -e /var/lib/rancher/k3s/server/manifests/local-storage.yaml")
           server.succeed("test -z \"$(kubectl get storageclass -o name)\"")

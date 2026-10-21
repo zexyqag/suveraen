@@ -16,7 +16,7 @@
         "/dev/disk/by-id/nvme-example-0"
         "/dev/disk/by-id/nvme-example-1"
       ];
-      # Half the slots in use: while the cluster is one node, a system disk holds the DBs of at most two OSDs.
+      # Slots for twice the disks the machine starts with; each system disk holds every DB.
       ceph = {
         disks = map (i: "/dev/disk/by-id/ata-example-hdd-${toString i}") [
           0

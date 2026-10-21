@@ -9,7 +9,7 @@ It runs on Kubernetes (k3s) over NixOS, built to start on one server and grow to
 ## Layout
 
 - `nixos/`: the server layer, NixOS modules configured under `suveraen.*`.
-  - `storage.nix`: one disk or two mirrored (ZFS) for the system and the cluster's own state, encrypted unless the machine must reboot unattended. Container images and pods get bounded space, etcd and Ceph's monitors reserved space. The other disks are Ceph's, each under a stable name with a partition for its OSD's database on the system disks, taking turns between them. Hourly snapshots, scrubs, health checks.
+  - `storage.nix`: one disk or two mirrored (ZFS) for the system and the cluster's own state, encrypted unless the machine must reboot unattended. Container images and pods' scratch space are bounded, etcd and Ceph's monitors reserved space. The other disks are Ceph's, each under a stable name with a partition for its OSD's database on the system disks, mirrored over both, so losing either costs no OSD. Hourly snapshots, scrubs, health checks.
   - `unlock.nix`: on encrypted machines, an SSH server during boot that takes the disk passphrase, also from keys that may do nothing else.
   - `network.nix`: static or DHCP IPv4, static IPv6.
   - `resolver.nix`: every machine resolves names itself with [Unbound](https://nlnetlabs.nl/projects/unbound/) (DNSSEC, no outside resolver), and so do the cluster's pods.

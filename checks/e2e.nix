@@ -606,10 +606,11 @@ pkgs.testers.runNixOSTest {
 
                   return walk(tree)
 
-              # Both the data and the DB are opened through dm-crypt.
+              # Both the data and the DB are opened through dm-crypt, the DB on the array over both system disks.
               for slot in range(len(disks)):
                   assert "crypt" in below(f"/dev/disk/by-osd/osd{slot}"), slot
-                  assert "crypt" in below(f"/dev/disk/by-partlabel/osd{slot}-db"), slot
+                  assert "crypt" in below(f"/dev/disk/by-osd/osd{slot}-db"), slot
+              server.succeed("mdadm --detail /dev/md/osd-db | grep -Eq 'Active Devices : 2'")
               domain = setting("CEPH_FAILURE_DOMAIN")
               rules = {r["rule_id"]: r["steps"] for r in ceph("osd crush rule dump")}
               pools = ceph("osd pool ls detail")

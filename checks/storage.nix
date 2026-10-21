@@ -1,7 +1,7 @@
-# A server's disk layout as disko installs it on two blank disks, booted: BlueStore DB partitions for Ceph's OSDs take
-# turns between the mirrored system disks, at their size and with nothing on them; k3s's and the monitors' datasets
-# are bounded or reserved as set and mounted outside rpool/var's snapshots; and containerd's dataset takes overlay
-# mounts, so k3s keeps its overlayfs snapshotter there.
+# A server's disk layout as disko installs it on two blank disks, booted: BlueStore DB partitions for Ceph's OSDs lie on
+# a RAID1 array over both system disks, at their size and with nothing on them, and all stay readable when one disk
+# fails; k3s's and the monitors' datasets are bounded or reserved as set and mounted outside rpool/var; and
+# containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter there.
 { lib, pkgs, ... }:
 let
   keys = import "${pkgs.path}/nixos/tests/ssh-keys.nix" pkgs;
@@ -60,12 +60,21 @@ in
   # Runs on the installed system once it has booted, from vda and vdb.
   disko.tests.extraChecks = ''
     machine.succeed("zpool status rpool | grep -qw mirror-0")
-    for slot, disk in [(0, "vda"), (2, "vda"), (1, "vdb"), (3, "vdb")]:
-        part = f"/dev/disk/by-partlabel/osd{slot}-db"
-        machine.succeed(f"test $(lsblk -no PKNAME $(readlink -f {part})) = {disk}")
+    machine.succeed("mdadm --detail /dev/md/osd-db | grep -Eq 'Raid Level : raid1'")
+    parts = [f"/dev/disk/by-osd/osd{slot}-db" for slot in range(4)]
+    for part in parts:
+        # Below it, the array and both disks.
+        below = machine.succeed(f"lsblk -snro NAME,TYPE $(readlink -f {part})").split("\n")
+        assert any(line.endswith(" raid1") for line in below), below
+        for disk in ["vda", "vdb"]:
+            assert f"{disk} disk" in below, (part, below)
         machine.succeed(f"test $(lsblk -bno SIZE {part}) = ${mib 64}")
         machine.succeed(f"test -z \"$(lsblk -no FSTYPE {part})\"")
-    machine.fail("test -e /dev/disk/by-partlabel/osd4-db")
+    machine.fail("test -e /dev/disk/by-osd/osd4-db")
+    machine.succeed("mdadm /dev/md/osd-db --fail $(mdadm --detail /dev/md/osd-db | grep -o '/dev/vdb[0-9]*')")
+    machine.succeed("mdadm --detail /dev/md/osd-db | grep -q degraded")
+    for part in parts:
+        machine.succeed(f"dd if={part} of=/dev/null bs=1M count=1 iflag=direct")
 
     for dataset, prop, value, path in [
         ("containerd", "quota", ${mib 512}, "/var/lib/rancher/k3s/agent/containerd"),

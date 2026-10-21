@@ -81,7 +81,8 @@ spec:
   disruptionManagement:
     managePodBudgets: true
   # The hosts decide by the links they make (suveraen.storage.ceph.disks); a slot a node lacks is skipped. Each OSD's
-  # database is a partition on a system disk, and block and database are both encrypted.
+  # database is a partition on the system disks, on both where there are two, and block and database are both
+  # encrypted.
   storage:
     useAllNodes: true
     useAllDevices: false
@@ -90,49 +91,49 @@ spec:
     devices:
       - name: /dev/disk/by-osd/osd0
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd0-db
+          metadataDevice: /dev/disk/by-osd/osd0-db
           deviceClass: hdd
       - name: /dev/disk/by-osd/osd1
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd1-db
+          metadataDevice: /dev/disk/by-osd/osd1-db
           deviceClass: hdd
       - name: /dev/disk/by-osd/osd2
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd2-db
+          metadataDevice: /dev/disk/by-osd/osd2-db
           deviceClass: hdd
       - name: /dev/disk/by-osd/osd3
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd3-db
+          metadataDevice: /dev/disk/by-osd/osd3-db
           deviceClass: hdd
       - name: /dev/disk/by-osd/osd4
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd4-db
+          metadataDevice: /dev/disk/by-osd/osd4-db
           deviceClass: hdd
       - name: /dev/disk/by-osd/osd5
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd5-db
+          metadataDevice: /dev/disk/by-osd/osd5-db
           deviceClass: hdd
       - name: /dev/disk/by-osd/osd6
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd6-db
+          metadataDevice: /dev/disk/by-osd/osd6-db
           deviceClass: hdd
       - name: /dev/disk/by-osd/osd7
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd7-db
+          metadataDevice: /dev/disk/by-osd/osd7-db
           deviceClass: hdd
       - name: /dev/disk/by-osd/osd8
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd8-db
+          metadataDevice: /dev/disk/by-osd/osd8-db
           deviceClass: hdd
       - name: /dev/disk/by-osd/osd9
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd9-db
+          metadataDevice: /dev/disk/by-osd/osd9-db
           deviceClass: hdd
       - name: /dev/disk/by-osd/osd10
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd10-db
+          metadataDevice: /dev/disk/by-osd/osd10-db
           deviceClass: hdd
       - name: /dev/disk/by-osd/osd11
         config:
-          metadataDevice: /dev/disk/by-partlabel/osd11-db
+          metadataDevice: /dev/disk/by-osd/osd11-db
           deviceClass: hdd

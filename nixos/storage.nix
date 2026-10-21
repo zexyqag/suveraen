@@ -38,29 +38,59 @@ let
     mountOptions = [ "umask=0077" ];
   };
 
-  # Raw partitions for BlueStore's DB, one per OSD slot, taking turns between the system disks. ceph-volume formats
-  # them itself, and kubernetes/platform/ceph finds them by these labels.
-  dbPartitions =
-    i:
-    lib.listToAttrs (
-      map
-        (
-          slot:
-          lib.nameValuePair "osd${toString slot}-db" {
-            size = cfg.ceph.dbSize;
-            label = "osd${toString slot}-db";
-            priority = 1100 + slot;
-          }
-        )
-        (lib.filter (slot: lib.mod slot (lib.length cfg.systemDisks) == i) (lib.range 0 (cfg.ceph.dbSlots - 1)))
-    );
+  # kubernetes/platform/ceph lists this many OSD slots.
+  maxSlots = 12;
+  slots = lib.range 0 (cfg.ceph.dbSlots - 1);
+
+  # Raw partitions for BlueStore's DB, one per OSD slot. ceph-volume formats them itself, and the cluster finds them
+  # as /dev/disk/by-osd/osdN-db. On two system disks they lie on a RAID1 array over a partition of each: an OSD dies
+  # with its DB, and with copies spread over the OSDs of one server, a disk taking half the DBs with it would take
+  # every copy of some data.
+  dbPartitions = lib.listToAttrs (
+    map (
+      slot:
+      lib.nameValuePair "osd${toString slot}-db" {
+        size = cfg.ceph.dbSize;
+        label = "osd${toString slot}-db";
+        priority = 1100 + slot;
+      }
+    ) slots
+  );
+
+  # Each disk's share of that array holds every DB, and room for the array's metadata (up to 128 MiB on large disks)
+  # and the partition table on it.
+  dbShare =
+    let
+      unit = lib.substring (lib.stringLength cfg.ceph.dbSize - 1) 1 cfg.ceph.dbSize;
+      kib =
+        lib.toInt (lib.removeSuffix unit cfg.ceph.dbSize)
+        * {
+          K = 1;
+          M = 1024;
+          G = 1024 * 1024;
+          T = 1024 * 1024 * 1024;
+        }
+        .${unit};
+    in
+    {
+      osd-db = {
+        size = "${toString (cfg.ceph.dbSlots * kib + 256 * 1024)}K";
+        priority = 1100;
+        content = {
+          type = "mdraid";
+          name = "osd-db";
+        };
+      };
+    };
+
+  dbOnArray = mirrored && slots != [ ];
 
   systemDisk = i: device: {
     type = "disk";
     inherit device;
     content = {
       type = "gpt";
-      partitions = dbPartitions i // {
+      partitions = (if dbOnArray then dbShare else dbPartitions) // {
         bios = {
           size = "1M";
           type = "EF02";
@@ -155,18 +185,18 @@ in
         ];
         description = ''
           Disks Ceph takes as OSDs, in slot order. Slot N appears as /dev/disk/by-osd/osdN and keeps its BlueStore DB
-          on /dev/disk/by-partlabel/osdN-db, which is how kubernetes/platform/ceph names them, for slots osd0 to osd11.
-          Wipe a disk before it is listed: Ceph skips disks that hold anything.
+          at /dev/disk/by-osd/osdN-db, which is how kubernetes/platform/ceph names them, for its ${toString maxSlots}
+          slots. Wipe a disk before it is listed: Ceph skips disks that hold anything.
         '';
       };
 
       dbSlots = lib.mkOption {
-        type = lib.types.ints.between 0 12;
+        type = lib.types.ints.between 0 maxSlots;
         default = lib.length cfg.ceph.disks;
         defaultText = lib.literalExpression "length config.suveraen.storage.ceph.disks";
         description = ''
-          BlueStore DB partitions made on the system disks at install, taking turns between them. They can't be added
-          later, so reserve one for every disk the machine may ever give Ceph.
+          BlueStore DB partitions made at install, on the system disk or mirrored over both. They can't be added later,
+          so reserve one for every disk the machine may ever give Ceph.
         '';
       };
 
@@ -174,7 +204,10 @@ in
         type = lib.types.nullOr (lib.types.strMatching "[0-9]+[KMGT]");
         default = null;
         example = "150G";
-        description = "Size of each DB partition, about 1% of its disk.";
+        description = ''
+          Size of each DB partition, about 1% of its disk. With two system disks each holds all of them, dbSlots times
+          this size.
+        '';
       };
     };
 
@@ -187,7 +220,7 @@ in
     kubeletQuota = lib.mkOption {
       type = lib.types.str;
       default = "64G";
-      description = "Most space pods' emptyDir volumes and logs may take.";
+      description = "Most space pods' emptyDir volumes and writable state under /var/lib/kubelet may take.";
     };
 
     etcdReservation = lib.mkOption {
@@ -246,18 +279,29 @@ in
         )
       );
 
-      # Metadata at the end, so firmware sees each half as a plain ESP.
-      mdadm = lib.optionalAttrs mirrored {
-        boot = {
-          type = "mdadm";
-          level = 1;
-          metadata = "1.0";
-          content = bootFilesystem;
+      mdadm =
+        lib.optionalAttrs mirrored {
+          # Metadata at the end, so firmware sees each half as a plain ESP.
+          boot = {
+            type = "mdadm";
+            level = 1;
+            metadata = "1.0";
+            content = bootFilesystem;
+          };
+        }
+        // lib.optionalAttrs dbOnArray {
+          osd-db = {
+            type = "mdadm";
+            level = 1;
+            content = {
+              type = "gpt";
+              partitions = dbPartitions;
+            };
+          };
         };
-      };
 
-      # Outside rpool/var, so the hourly snapshots skip them, and bounded so a full disk of images or pods can't stop
-      # etcd or the monitors.
+      # Apart from rpool/var and bounded, so a full disk of images or pods can't stop etcd or the monitors. Images and
+      # pods' state go without snapshots.
       zpool.rpool = pool (
         {
           root = mounted "/" { };
@@ -273,9 +317,14 @@ in
       );
     };
 
-    services.udev.extraRules = lib.concatImapStrings (i: disk: ''
-      SUBSYSTEM=="block", SYMLINK=="${lib.removePrefix "/dev/" disk}", SYMLINK+="disk/by-osd/osd${toString (i - 1)}"
-    '') cfg.ceph.disks;
+    services.udev.extraRules =
+      lib.concatImapStrings (i: disk: ''
+        SUBSYSTEM=="block", SYMLINK=="${lib.removePrefix "/dev/" disk}", SYMLINK+="disk/by-osd/osd${toString (i - 1)}"
+      '') cfg.ceph.disks
+      # udev makes no by-partlabel links for partitions on an array.
+      + ''
+        SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_PART_ENTRY_NAME}=="osd[0-9]*-db", SYMLINK+="disk/by-osd/$env{ID_PART_ENTRY_NAME}"
+      '';
 
     # Both BIOS and UEFI boot; disko adds every disk with an EF02 partition to grub's devices.
     boot.loader.grub = {
@@ -314,8 +363,10 @@ in
           useTemplate = [ "local" ];
           recursive = true;
         };
-        # The monitors' stores alone hold the keys to the OSDs' disks.
+        # The monitors' stores alone hold the keys to the OSDs' disks, and etcd the cluster's own state that Git can't
+        # make anew.
         "rpool/rook" = lib.mkIf config.suveraen.cluster.enable { useTemplate = [ "local" ]; };
+        "rpool/etcd" = lib.mkIf config.suveraen.cluster.enable { useTemplate = [ "local" ]; };
       };
     };
 
