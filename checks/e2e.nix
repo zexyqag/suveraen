@@ -30,7 +30,7 @@
 }:
 let
   inherit (pkgs) lib;
-  keys = import "${pkgs.path}/nixos/tests/ssh-keys.nix" pkgs;
+  keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
   # git-http-backend runs as cgit and refuses repositories someone else owns.
   asCgit = "runuser -u cgit -- env HOME=/srv/git";
 
@@ -46,7 +46,7 @@ let
   acmeZone = "acme.example.test";
   theirs = "org.test";
 
-  certs = import "${pkgs.path}/nixos/tests/common/acme/server/snakeoil-certs.nix";
+  certs = import (pkgs.path + "/nixos/tests/common/acme/server/snakeoil-certs.nix");
 
   # The two providers that keep the off-site copies, each at its own address on the internet node, on port 80.
   providers = [
@@ -200,7 +200,7 @@ pkgs.testers.runNixOSTest {
     in
     {
       imports = [
-        "${pkgs.path}/nixos/tests/common/acme/server"
+        (pkgs.path + "/nixos/tests/common/acme/server")
         s3
       ];
       systemd.services.pebble.serviceConfig.ExecStart = lib.mkForce (

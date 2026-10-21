@@ -8,7 +8,7 @@
 # backup with the same keys, and gets them back from it after losing them, while the guard keeps knot down.
 { pkgs, module }:
 let
-  keys = import "${pkgs.path}/nixos/tests/ssh-keys.nix" pkgs;
+  keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
   adminKey = keys.snakeOilEd25519PublicKey;
   transferKey = import ./transfer-key.nix pkgs;
 
@@ -38,7 +38,7 @@ let
   '';
 
   # A test ACME CA on the client.
-  certs = import "${pkgs.path}/nixos/tests/common/acme/server/snakeoil-certs.nix";
+  certs = import (pkgs.path + "/nixos/tests/common/acme/server/snakeoil-certs.nix");
   pebbleConfig = pkgs.writeText "pebble.json" (
     builtins.toJSON {
       pebble = {

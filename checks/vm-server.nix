@@ -63,7 +63,9 @@ in
     ) slots
     + ''
       udevadm settle
-      udevadm wait --timeout=60 ${lib.concatMapStringsSep " " (slot: "/dev/disk/by-osd/osd${toString slot}-db") slots}
+      udevadm wait --timeout=60 ${
+        lib.concatMapStringsSep " " (slot: "/dev/disk/by-osd/osd${toString slot}-db") slots
+      }
     '';
   };
 

@@ -4,7 +4,7 @@
 # containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter there.
 { lib, pkgs, ... }:
 let
-  keys = import "${pkgs.path}/nixos/tests/ssh-keys.nix" pkgs;
+  keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
   mib = n: toString (n * 1024 * 1024);
 in
 {

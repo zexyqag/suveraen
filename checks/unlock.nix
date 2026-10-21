@@ -2,7 +2,7 @@
 # boot, answers the passphrase prompt over SSH so the boot goes on, and can't log in afterwards.
 { pkgs, module }:
 let
-  keys = import "${pkgs.path}/nixos/tests/ssh-keys.nix" pkgs;
+  keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
   # nixpkgs' test keys for SSH during boot: a host key and a client key.
   bootKeys = pkgs.path + "/nixos/tests/initrd-network-ssh";
   passphrase = "unlock-test-passphrase";

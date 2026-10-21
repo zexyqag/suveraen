@@ -43,7 +43,7 @@ let
   '';
 
   # nixpkgs' well-known test keys: the ed25519 one signs releases, the other one isn't a signer.
-  keys = import "${pkgs.path}/nixos/tests/ssh-keys.nix" pkgs;
+  keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
   signer = keys.snakeOilEd25519PublicKey;
 
   # "en*" would also match eth1, the test network, through its alternative names.
