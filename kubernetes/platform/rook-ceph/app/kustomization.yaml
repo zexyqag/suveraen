@@ -1,0 +1,7 @@
+---
+# Rook, which runs Ceph from the CephCluster in platform/ceph, and the operator that runs Ceph's CSI drivers.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./ocirepository.yaml
+  - ./helmrelease.yaml

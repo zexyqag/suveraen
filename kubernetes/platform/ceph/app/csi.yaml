@@ -1,0 +1,32 @@
+---
+# What Rook's own operator.yaml sets up for the CSI operator; its drivers chart is published only to a Helm
+# repository, which nothing could pin. Only RBD: no shared file system yet.
+apiVersion: csi.ceph.io/v1
+kind: OperatorConfig
+metadata:
+  name: ceph-csi-operator-config
+  namespace: rook-ceph
+spec:
+  driverSpecDefaults:
+    imageSet:
+      name: rook-csi-operator-image-set-configmap
+    fsGroupPolicy: File
+    nodePlugin:
+      priorityClassName: platform
+      kubeletDirPath: /var/lib/kubelet
+    controllerPlugin:
+      priorityClassName: platform
+      deploymentStrategy:
+        type: Recreate
+---
+apiVersion: csi.ceph.io/v1
+kind: Driver
+metadata:
+  name: rook-ceph.rbd.csi.ceph.com
+  namespace: rook-ceph
+spec:
+  # Without it the snapshotter sidecar isn't deployed.
+  snapshotPolicy: volumeSnapshot
+  nodePlugin:
+    updateStrategy:
+      type: RollingUpdate

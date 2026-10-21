@@ -11,7 +11,10 @@
 # tenants' services nor the gateway's, and nothing outside reaches theirs; tenants can't take each other's
 # namespaces or hosts or keep Gateways outside the gateway namespace, and stay within their quota; a host's key
 # goes with its certificate; removing a tenant takes its Kustomizations, hosts, keys and pods but leaves its
-# namespaces, which then go by its label; and an unsigned commit is never applied.
+# namespaces, which then go by its label; and an unsigned commit is never applied. Ceph runs healthy with three
+# monitors and an encrypted OSD per disk, its DB on a partition of its own, three copies on every pool; block
+# volumes bind, snapshot and restore, and outlive their claims; the object store hands out buckets with keys of
+# their own to the pods allowed to reach it; and after a reboot Ceph comes back with its data.
 {
   pkgs,
   module,
@@ -40,7 +43,7 @@ in
 pkgs.testers.runNixOSTest {
   name = "suveraen-e2e";
   # Below the CI job's limit, so the waits in the script run out first and print what went wrong.
-  globalTimeout = 3300;
+  globalTimeout = 4200;
 
   nodes.forge = {
     # Read-only smart HTTP; Flux can't fetch over dumb HTTP or git://.
@@ -176,10 +179,11 @@ pkgs.testers.runNixOSTest {
         ./vm-server.nix
       ];
 
+      # Ceph's three monitors and three OSDs take about 4 GiB; its images take room the monitors want free.
       virtualisation = {
         cores = 4;
-        memorySize = 6144;
-        diskSize = 16384;
+        memorySize = 10240;
+        diskSize = 32768;
       };
 
       services.unbound.settings = {
@@ -297,9 +301,37 @@ pkgs.testers.runNixOSTest {
               "kubectl get clusterissuers,certificates,certificaterequests,orders,challenges -A",
               "kubectl -n cert-manager logs deploy/cert-manager --tail=100",
               "journalctl -u knot -u knot-acme-secret --no-pager | tail -n 50",
+              "kubectl get cephclusters,cephblockpools,cephobjectstores -A -o wide",
+              "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph}'",
+              "kubectl -n rook-ceph logs deploy/rook-ceph-operator --tail=100",
+              "kubectl -n rook-ceph logs -l app=rook-ceph-osd-prepare --tail=50 --all-containers",
+              "kubectl get pvc,volumesnapshots -A",
+              "lsblk -o NAME,TYPE,SIZE,PARTLABEL,FSTYPE",
+              "free -m",
+              "df -h /",
           ]:
               print(server.execute(cmd)[1])
           print(acme.execute("journalctl -u pebble -u knot --no-pager | tail -n 50")[1])
+          images()
+
+      # What each container runs, by digest: how images only known by tag here get pinned.
+      def images():
+          status, out = server.execute(
+              "kubectl get pods -A -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}"
+              "{.image}{\" \"}{.imageID}{\"\\n\"}{end}{end}' | sort -u"
+          )
+          print(out)
+
+      # QEMU's peak memory per machine, and what the runner has left.
+      def memory():
+          try:
+              for machine in machines:
+                  with open(f"/proc/{getattr(machine, 'pid', None)}/status") as status:
+                      print(machine.name, [line.strip() for line in status if line.startswith(("VmHWM", "VmRSS"))])
+              with open("/proc/meminfo") as meminfo:
+                  print([line.strip() for line in meminfo if line.startswith("MemAvailable")])
+          except Exception as e:
+              print("memory:", e)
 
       server.wait_for_unit("k3s.service")
       try:
@@ -313,9 +345,11 @@ pkgs.testers.runNixOSTest {
           with subtest("Every Kustomization and HelmRelease becomes Ready"):
               # The root Kustomization is Ready only once it has created the others, so --all covers them all.
               server.wait_until_succeeds(
-                  "kubectl -n flux-system wait kustomization --all --for=condition=Ready --timeout=0", timeout=1500
+                  "kubectl -n flux-system wait kustomization --all --for=condition=Ready --timeout=0", timeout=2700
               )
               server.succeed("kubectl wait helmrelease -A --all --for=condition=Ready --timeout=0")
+              images()
+              memory()
 
           with subtest("Both CAs know our accounts, and hosts got their certificates over DNS-01 through the ACME zone"):
               for issuer, directory in [("public", setting("ACME_SERVER")), ("standby", setting("ACME_STANDBY_SERVER"))]:
@@ -350,6 +384,11 @@ pkgs.testers.runNixOSTest {
                   if any(c["type"] == "Failed" and c["status"] == "True" for c in j.get("status", {}).get("conditions", []))
               ]
               assert not failed, failed
+              # No chart's claim waits for a class nobody gives it.
+              pending = [f"{c['metadata']['namespace']}/{c['metadata']['name']}" for c in items("pvc") if c["status"]["phase"] != "Bound"]
+              assert not pending, pending
+              classes = sorted(c["metadata"]["name"] for c in items("storageclasses"))
+              assert classes == ["ceph-block", "ceph-bucket"], classes
 
           with subtest("The platform's pods run at its priority, tenants' at theirs"):
               labels = {n["metadata"]["name"]: n["metadata"].get("labels", {}) for n in items("namespaces")}
@@ -362,6 +401,154 @@ pkgs.testers.runNixOSTest {
                   else:
                       continue
                   assert p["spec"].get("priorityClassName") == want, (p["metadata"]["name"], ns, p["spec"].get("priorityClassName"))
+
+          def ceph(args):
+              return json.loads(server.succeed(
+                  "kubectl -n rook-ceph exec deploy/rook-ceph-operator -- ceph --connect-timeout=10"
+                  f" --conf=/var/lib/rook/rook-ceph/rook-ceph.config {args} -f json"
+              ))
+
+          def apply(obj):
+              server.succeed(f"echo {shlex.quote(json.dumps(obj))} | kubectl apply -f -")
+
+          def finished(namespace, pod, timeout=600):
+              server.wait_until_succeeds(
+                  f"kubectl -n {namespace} get pod {pod} -o jsonpath='{{.status.phase}}' | grep -xE 'Succeeded|Failed'",
+                  timeout=timeout,
+              )
+              server.succeed(f"kubectl -n {namespace} get pod {pod} -o jsonpath='{{.status.phase}}' | grep -x Succeeded")
+              return server.succeed(f"kubectl -n {namespace} logs {pod}")
+
+          # A pod that meets the restricted standard, with the app's image, which has a shell and curl.
+          podinfo = server.succeed(
+              "kubectl get pods -A -o jsonpath='{.items[*].spec.containers[*].image}' | tr ' ' '\\n' | grep -m1 podinfo"
+          ).strip()
+
+          def restricted(namespace, name, command, labels={}, **spec):
+              return {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": {"name": name, "namespace": namespace, "labels": labels},
+                  "spec": {
+                      "restartPolicy": "Never",
+                      "securityContext": {
+                          "runAsNonRoot": True, "runAsUser": 65534, "runAsGroup": 65534, "fsGroup": 65534,
+                          "seccompProfile": {"type": "RuntimeDefault"},
+                      },
+                      "containers": [{
+                          "name": "probe",
+                          "image": podinfo,
+                          "command": ["sh", "-c", command],
+                          "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+                          "volumeMounts": spec.pop("mounts", []),
+                          "envFrom": spec.pop("env", []),
+                      }],
+                      **spec,
+                  },
+              }
+
+          with subtest("Ceph is healthy: three monitors, an encrypted OSD per disk with its DB apart, three copies everywhere"):
+              server.wait_until_succeeds(
+                  "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}' | grep -x HEALTH_OK",
+                  timeout=900,
+              )
+              disks = ${builtins.toJSON nodes.server.suveraen.storage.ceph.disks}
+              assert len(ceph("mon dump")["mons"]) == 3
+              osds = ceph("osd dump")["osds"]
+              assert len(osds) == len(disks) and all(o["up"] == 1 and o["in"] == 1 for o in osds), osds
+              assert sorted(ceph("osd crush class ls-osd hdd")) == sorted(o["osd"] for o in osds)
+              for meta in ceph("osd metadata"):
+                  assert meta["bluefs_dedicated_db"] == "1", meta
+
+              def below(device):
+                  tree = json.loads(server.succeed(f"lsblk -J -o NAME,TYPE {device}"))["blockdevices"][0]
+
+                  def walk(d):
+                      return [t for c in d.get("children", []) for t in [c["type"]] + walk(c)]
+
+                  return walk(tree)
+
+              # Both the data and the DB are opened through dm-crypt.
+              for slot in range(len(disks)):
+                  assert "crypt" in below(f"/dev/disk/by-osd/osd{slot}"), slot
+                  assert "crypt" in below(f"/dev/disk/by-partlabel/osd{slot}-db"), slot
+              domain = setting("CEPH_FAILURE_DOMAIN")
+              rules = {r["rule_id"]: r["steps"] for r in ceph("osd crush rule dump")}
+              pools = ceph("osd pool ls detail")
+              assert {".mgr", "block", "objects.rgw.buckets.data"} <= {p["pool_name"] for p in pools}, pools
+              for pool in pools:
+                  assert (pool["size"], pool["min_size"]) == (3, 2), pool
+                  assert any(step.get("type") == domain for step in rules[pool["crush_rule"]]), (pool, rules)
+
+          with subtest("A block volume binds, its snapshot restores, and it outlives its claim"):
+              server.succeed("kubectl create namespace volumes")
+
+              def claim(name, **spec):
+                  return {
+                      "apiVersion": "v1",
+                      "kind": "PersistentVolumeClaim",
+                      "metadata": {"name": name, "namespace": "volumes"},
+                      "spec": {
+                          "storageClassName": "ceph-block",
+                          "accessModes": ["ReadWriteOnce"],
+                          "resources": {"requests": {"storage": "1Gi"}},
+                      } | spec,
+                  }
+
+              def on(name, claim_name, command):
+                  return restricted(
+                      "volumes", name, command,
+                      mounts=[{"name": "data", "mountPath": "/data"}],
+                      volumes=[{"name": "data", "persistentVolumeClaim": {"claimName": claim_name}}],
+                  )
+
+              apply(claim("data"))
+              apply(on("writer", "data", "echo kept > /data/marker && sync"))
+              finished("volumes", "writer")
+              apply({
+                  "apiVersion": "snapshot.storage.k8s.io/v1",
+                  "kind": "VolumeSnapshot",
+                  "metadata": {"name": "data", "namespace": "volumes"},
+                  "spec": {"volumeSnapshotClassName": "ceph-block", "source": {"persistentVolumeClaimName": "data"}},
+              })
+              server.wait_until_succeeds(
+                  "kubectl -n volumes get volumesnapshot data -o jsonpath='{.status.readyToUse}' | grep -x true", timeout=300
+              )
+              apply(claim("restored", dataSource={"apiGroup": "snapshot.storage.k8s.io", "kind": "VolumeSnapshot", "name": "data"}))
+              apply(on("reader", "restored", "cat /data/marker"))
+              assert finished("volumes", "reader").strip() == "kept"
+              volume = server.succeed("kubectl -n volumes get pvc data -o jsonpath='{.spec.volumeName}'").strip()
+              server.succeed("kubectl -n volumes delete pod writer reader && kubectl -n volumes delete pvc data --timeout=120s")
+              server.wait_until_succeeds(
+                  f"kubectl get pv {volume} -o jsonpath='{{.status.phase}}' | grep -x Released", timeout=120
+              )
+
+          with subtest("The object store gives a claim a bucket and keys of its own, reached only by pods allowed to"):
+              # Tenants' database namespaces are the store's clients (platform/ceph); this one stands in for one.
+              server.succeed("kubectl create namespace objects && kubectl label namespace objects suveraen/app=postgres")
+              apply({
+                  "apiVersion": "objectbucket.io/v1alpha1",
+                  "kind": "ObjectBucketClaim",
+                  "metadata": {"name": "probe", "namespace": "objects"},
+                  "spec": {"bucketName": "probe", "storageClassName": "ceph-bucket"},
+              })
+              server.wait_until_succeeds(
+                  "kubectl -n objects get objectbucketclaim probe -o jsonpath='{.status.phase}' | grep -x Bound", timeout=600
+              )
+              s3 = (
+                  'curl -fsS -m 10 --aws-sigv4 "aws:amz:''${BUCKET_REGION:-us-east-1}:s3"'
+                  ' --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" "http://$BUCKET_HOST:$BUCKET_PORT/$BUCKET_NAME/marker"'
+              )
+              keys = [{"secretRef": {"name": "probe"}}, {"configMapRef": {"name": "probe"}}]
+              apply(restricted(
+                  "objects", "client", f"echo kept > /tmp/marker && {s3} -T /tmp/marker && {s3}",
+                  labels={"suveraen/object-store": "client"}, env=keys,
+              ))
+              assert finished("objects", "client").strip() == "kept"
+              apply(restricted("objects", "other", "sleep 600", env=keys))
+              server.succeed("kubectl -n objects wait pod other --for=condition=Ready --timeout=300s")
+              status, out = server.execute(f"kubectl -n objects exec other -- sh -c {shlex.quote(s3)} 2>&1")
+              assert status in [7, 28], (status, out)
 
           with subtest("Every route answers through the gateway with a certificate from the CA, and port 80 redirects there"):
               forge.succeed("curl -fsS --cacert ${caCert} https://acme.test:15000/roots/0 > /tmp/ca.crt")
@@ -607,6 +794,20 @@ pkgs.testers.runNixOSTest {
                   f"kubectl -n flux-system get gitrepository suveraen -o jsonpath='{{.status.artifact.revision}}' | grep -F {signed}"
               )
               server.succeed(f"kubectl -n {first}-hello get deployment hello")
+
+          with subtest("After a reboot Ceph comes back healthy, and the volumes with their data"):
+              server.shutdown()
+              server.start()
+              server.wait_for_unit("k3s.service")
+              apply(on("after", "restored", "cat /data/marker"))
+              assert finished("volumes", "after", timeout=1200).strip() == "kept"
+              server.wait_until_succeeds(
+                  "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}' | grep -x HEALTH_OK",
+                  timeout=900,
+              )
+              osds = ceph("osd dump")["osds"]
+              assert all(o["up"] == 1 for o in osds), osds
+          memory()
       except Exception:
           diagnose()
           raise

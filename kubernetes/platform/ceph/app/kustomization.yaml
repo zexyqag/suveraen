@@ -1,0 +1,13 @@
+---
+# One Ceph cluster for the whole platform: encrypted OSDs on the disks the hosts name, three copies of everything,
+# block volumes with snapshots and an object store. Every pool keeps the cluster's failure domain, the OSD while it
+# is one server and the host from three. Rook's objects here are never pruned: dropping one from Git leaves it running.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./cluster.yaml
+  - ./pools.yaml
+  - ./csi.yaml
+  - ./storageclasses.yaml
+  - ./objectstore.yaml
+  - ./networkpolicy.yaml

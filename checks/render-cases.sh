@@ -321,12 +321,61 @@ refuses privileged-other-namespace "$privileged: reloader" \
 refuses tenant-namespace-privileged "$privileged: alpha-hello" \
   "sed -i 's|    - ../../../components/app\$|&\n    - ../../../components/privileged|' apps/hello/ks.yaml"
 
+# Ceph.
+pools="every Ceph pool keeps 3 copies, needs 2 to write"
+P=platform/ceph/app
+refuses pool-size-two "$pools" "yq -i '.spec.replicated.size = 2' $P/pools.yaml"
+refuses pool-unsafe-replica "$pools" \
+  "yq -i '(select(.metadata.name == \"block\") | .spec.replicated.requireSafeReplicaSize) = false' $P/pools.yaml"
+refuses pool-min-size-one "$pools" "yq -i '.spec.dataPool.parameters.min_size = \"1\"' $P/objectstore.yaml"
+refuses pool-erasure-coded "$pools" \
+  "yq -i '.spec.dataPool.erasureCoded = {\"dataChunks\": 2, \"codingChunks\": 1}' $P/objectstore.yaml"
+refuses pool-crush-rule-fixed "$pools" "yq -i 'del(.spec.metadataPool.enableCrushUpdates)' $P/objectstore.yaml"
+refuses pool-rack "$pools" "yq -i '.spec.failureDomain = \"rack\"' $P/pools.yaml"
+refuses pools-mixed-failure-domain "every Ceph pool has the same failure domain" \
+  "yq -i '(select(.metadata.name == \"block\") | .spec.failureDomain) = \"host\"' $P/pools.yaml"
+cc="the CephCluster keeps its state in /var/lib/rook"
+refuses osd-unencrypted "$cc" "yq -i '.spec.storage.config.encryptedDevice = \"false\"' $P/cluster.yaml"
+refuses osd-device-unencrypted "$cc" \
+  "yq -i '.spec.storage.devices[0].config.encryptedDevice = \"false\"' $P/cluster.yaml"
+refuses osd-db-mismatch "$cc" \
+  "yq -i '.spec.storage.devices[1].config.metadataDevice = \"/dev/disk/by-partlabel/osd2-db\"' $P/cluster.yaml"
+refuses osd-missing-slot "$cc" "yq -i 'del(.spec.storage.devices[11])' $P/cluster.yaml"
+refuses osd-all-devices "$cc" "yq -i '.spec.storage.useAllDevices = true' $P/cluster.yaml"
+refuses osd-device-filter "$cc" "yq -i '.spec.storage.deviceFilter = \"^sd\"' $P/cluster.yaml"
+refuses msgr1-allowed "$cc" "yq -i '.spec.network.connections.requireMsgr2 = false' $P/cluster.yaml"
+refuses host-network-plain "$cc" "yq -i '.spec.network.provider = \"host\"' $P/cluster.yaml"
+refuses one-monitor "$cc" "yq -i '.spec.mon.count = 1' $P/cluster.yaml"
+refuses mons-share-node-with-host-domain "$cc" \
+  "yq -i '.data.CEPH_FAILURE_DOMAIN = \"host\"' clusters/test/settings.yaml"
+refuses osd-memory-burstable "$cc" "yq -i '.spec.resources.osd.requests.memory = \"512Mi\"' $P/cluster.yaml"
+refuses ceph-unsupported "$cc" "yq -i '.spec.cephVersion.allowUnsupported = true' $P/cluster.yaml"
+refuses ceph-prunable "Ceph's objects are never pruned: CephCluster/rook-ceph" \
+  "yq -i 'del(.metadata.annotations)' $P/cluster.yaml"
+refuses second-ceph-cluster "one CephCluster, rook-ceph/rook-ceph" \
+  "yq '.metadata.name = \"other\"' $P/cluster.yaml >$P/other.yaml && append $P/kustomization.yaml '  - ./other.yaml\n'"
+classes="storage classes are Ceph's, keep volumes their claims let go, and none is the default"
+refuses storageclass-default "$classes: ceph-block" \
+  "yq -i '(select(.metadata.name == \"ceph-block\")
+   | .metadata.annotations.\"storageclass.kubernetes.io/is-default-class\") = \"true\"' $P/storageclasses.yaml"
+refuses ceph-block-delete "$classes: ceph-block" \
+  "yq -i '(select(.metadata.name == \"ceph-block\") | .reclaimPolicy) = \"Delete\"' $P/storageclasses.yaml"
+refuses storageclass-local-path "$classes: local" \
+  "append $P/storageclasses.yaml '---\napiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: local
+provisioner: rancher.io/local-path\nreclaimPolicy: Retain\n'"
+refuses rook-ceph-partial-labels "$privileged: rook-ceph" \
+  "sed -i '/audit: privileged/d' components/privileged/kustomization.yaml"
+refuses rook-ceph-baseline "$privileged: rook-ceph" \
+  "sed -i 's/warn: privileged/warn: baseline/' components/privileged/kustomization.yaml"
+
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"
 renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
   sed -i 's/PODINFO_UI_MESSAGE: .*/PODINFO_UI_MESSAGE: \${HELLO_API_KEY:=none}/' apps/hello/app/configmap.yaml"
 renders two-apps "other"
 renders real-cluster "$real"
+renders failure-domain-host \
+  "yq -i '.data.CEPH_FAILURE_DOMAIN = \"host\" | .data.CEPH_DAEMONS_SHARE_NODE = \"false\"' clusters/test/settings.yaml"
 renders failover "sed -i 's|issuer/public/ks.yaml|issuer/failover/ks.yaml|' clusters/test/kustomization.yaml"
 renders real-cluster-failover \
   "$real; sed -i 's|issuer/public/ks.yaml|issuer/failover/ks.yaml|' clusters/prod/kustomization.yaml"

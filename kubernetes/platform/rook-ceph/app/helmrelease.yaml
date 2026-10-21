@@ -1,0 +1,60 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: rook-ceph
+  namespace: flux-system
+spec:
+  interval: 1h
+  serviceAccountName: helm-controller
+  targetNamespace: rook-ceph
+  releaseName: rook-ceph
+  chartRef:
+    kind: OCIRepository
+    name: rook-ceph
+  install:
+    crds: CreateReplace
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 2m
+  upgrade:
+    crds: CreateReplace
+    remediation:
+      retries: 3
+  values:
+    image:
+      repository: ghcr.io/rook/ceph
+      tag: v1.21.0@sha256:2c3a65786d3cc85ba15d7f258461c0bf392c6a6ee19dde8011259b8d34eeedd0
+    # Never turned off: the cluster's own objects would go with the CRDs.
+    crds:
+      enabled: true
+    priorityClassName: platform
+    csi:
+      # Rook connects the drivers to the cluster (CephConnection, ClientProfile).
+      createCsiOperatorResources: true
+      # The images the operator's defaults name, written out to be pinned.
+      cephcsi:
+        repository: quay.io/cephcsi/cephcsi
+        tag: v3.18.1
+      provisioner:
+        repository: registry.k8s.io/sig-storage/csi-provisioner
+        tag: v6.3.0
+      attacher:
+        repository: registry.k8s.io/sig-storage/csi-attacher
+        tag: v4.13.0
+      resizer:
+        repository: registry.k8s.io/sig-storage/csi-resizer
+        tag: v2.2.1
+      snapshotter:
+        repository: registry.k8s.io/sig-storage/csi-snapshotter
+        tag: v8.6.0
+      registrar:
+        repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
+        tag: v2.18.0
+    ceph-csi-operator:
+      controllerManager:
+        priorityClassName: platform
+        manager:
+          image:
+            repository: quay.io/cephcsi/ceph-csi-operator
+            tag: v1.1.0

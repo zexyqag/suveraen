@@ -1,0 +1,22 @@
+---
+# Only tenants' database namespaces reach the object store, and there only the pods marked as its clients.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: object-store-clients
+  namespace: rook-ceph
+spec:
+  podSelector:
+    matchLabels:
+      app: rook-ceph-rgw
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              suveraen/app: postgres
+          podSelector:
+            matchLabels:
+              suveraen/object-store: client
+      ports:
+        - port: 8080

@@ -1,0 +1,36 @@
+---
+# Ceph's own pool for the manager, which would otherwise spread over hosts the cluster may not have yet.
+apiVersion: ceph.rook.io/v1
+kind: CephBlockPool
+metadata:
+  name: builtin-mgr
+  namespace: rook-ceph
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  name: .mgr
+  failureDomain: ${CEPH_FAILURE_DOMAIN}
+  enableCrushUpdates: true
+  replicated:
+    size: 3
+    requireSafeReplicaSize: true
+  parameters:
+    min_size: "2"
+---
+# Every block volume, platform's and tenants' alike; per-tenant pools would be too many placement groups.
+apiVersion: ceph.rook.io/v1
+kind: CephBlockPool
+metadata:
+  name: block
+  namespace: rook-ceph
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  failureDomain: ${CEPH_FAILURE_DOMAIN}
+  enableCrushUpdates: true
+  replicated:
+    size: 3
+    requireSafeReplicaSize: true
+  parameters:
+    min_size: "2"
+    bulk: "true"

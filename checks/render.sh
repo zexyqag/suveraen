@@ -537,6 +537,74 @@ for dir in kubernetes/clusters/*/; do
         || fail "$cluster: $admitted serves $host, but the hostname map gives it to ${value:-nobody}"
     done <"$w/listeners"
   fi
+  # Ceph keeps three copies of everything, two needed to write, spread over the cluster's one failure domain: the OSD
+  # while it is one server, the host from three. No erasure coding.
+  pool='(P.failureDomain // "-") + " " + (P.replicated.size // 0 | tostring) + " "
+    + (P.replicated.requireSafeReplicaSize // false | tostring) + " " + (P.parameters.min_size // "-") + " "
+    + (P.enableCrushUpdates // false | tostring) + " " + (P | has("erasureCoded") | tostring)'
+  {
+    yq ea "[select(.kind == \"CephBlockPool\") | \"CephBlockPool/\" + .metadata.name + \" \"
+      + ${pool//P/.spec}] | .[]" "$rendered"/*.yaml
+    for part in metadata data; do
+      yq ea "[select(.kind == \"CephObjectStore\") | \"CephObjectStore/\" + .metadata.name + \"/$part \"
+        + ${pool//P/.spec.${part}Pool}] | .[]" "$rendered"/*.yaml
+    done
+  } >"$w/pools"
+  bad=$(awk '$2 !~ /^(osd|host)$/ || $3 != 3 || $4 != "true" || $5 != "2" || $6 != "true" || $7 != "false" {
+    print $1 }' "$w/pools" | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: every Ceph pool keeps 3 copies, needs 2 to write, lets Rook update its CRUSH rule" \
+    "and spreads over the OSD or the host, without erasure coding: $bad"
+  domain=$(cut -d' ' -f2 "$w/pools" | sort -u)
+  [ "$(wc -l <<<"$domain")" = 1 ] || fail "$cluster: every Ceph pool has the same failure domain:" $domain
+  ceph=$(yq ea '[select(.kind == "CephCluster")] | .[] | .metadata.namespace + "/" + .metadata.name' "$rendered"/*.yaml)
+  [ "$ceph" = rook-ceph/rook-ceph ] || fail "$cluster: one CephCluster, rook-ceph/rook-ceph"
+  # Daemons share a node only while copies spread over OSDs. The hosts name the disks (suveraen.storage.ceph); the
+  # cluster lists every slot they may give it, each with its own DB partition.
+  share=$([ "$domain" = osd ] && echo true || echo false)
+  devices=$(for n in $(seq 0 11); do
+    printf '/dev/disk/by-osd/osd%s:/dev/disk/by-partlabel/osd%s-db:hdd ' "$n" "$n"
+  done)
+  yq ea '[select(.kind == "CephCluster") | .spec] | .[0] | [
+    "dataDirHostPath " + .dataDirHostPath,
+    "allowUnsupported " + (.cephVersion.allowUnsupported // false | tostring),
+    "mons " + (.mon.count | tostring),
+    "monsShareNode " + (.mon.allowMultiplePerNode // false | tostring),
+    "mgrsShareNode " + (.mgr.allowMultiplePerNode // false | tostring),
+    "requireMsgr2 " + (.network.connections.requireMsgr2 // false | tostring),
+    "network " + (.network.provider // "pods") + "/" + (.network.connections.encryption.enabled // false | tostring),
+    "osdMemoryGuaranteed " + ((.resources.osd.requests.memory // "") == (.resources.osd.limits.memory // "-")
+      | tostring),
+    "useAllNodes " + (.storage.useAllNodes // false | tostring),
+    "nodes " + (.storage | has("nodes") | tostring),
+    "useAllDevices " + (.storage.useAllDevices // false | tostring),
+    "filters " + (.storage | has("deviceFilter") | tostring) + "/" + (.storage | has("devicePathFilter") | tostring),
+    "config " + (.storage.config | to_entries | map(.key + "=" + .value) | join(",")),
+    "devices " + ([.storage.devices[] | .name + ":" + (.config.metadataDevice // "-") + ":"
+      + (.config.deviceClass // "-") + (.config | keys | map(select(. != "metadataDevice" and . != "deviceClass"))
+      | map("+" + .) | join(""))] | join(" "))] | .[]' "$rendered"/*.yaml \
+    | sed 's|^network host/true$|network encrypted|; s|^network pods/.*$|network encrypted|' >"$w/cephcluster"
+  printf '%s\n' "dataDirHostPath /var/lib/rook" "allowUnsupported false" "mons 3" "monsShareNode $share" \
+    "mgrsShareNode $share" "requireMsgr2 true" "network encrypted" "osdMemoryGuaranteed true" "useAllNodes true" \
+    "nodes false" "useAllDevices false" "filters false/false" "config encryptedDevice=true" "devices ${devices% }" \
+    >"$w/cephcluster.want"
+  bad=$(diff "$w/cephcluster.want" "$w/cephcluster" | sed -n 's/^> //p' | paste -sd';' || true)
+  [ -z "$bad" ] || fail "$cluster: the CephCluster keeps its state in /var/lib/rook, runs a supported Ceph with three" \
+    "monitors, lets daemons share a node only while copies spread over OSDs, speaks msgr2 alone, encrypted when on" \
+    "the hosts' network, guarantees its OSDs their memory, and takes encrypted OSDs from every node on slots osd0 to" \
+    "osd11, each with its DB on its own partition: $bad"
+  # Dropping one from Git leaves it running: Rook would delete the cluster's data with it.
+  bad=$(yq ea '[select(.kind == "CephCluster" or .kind == "CephBlockPool" or .kind == "CephObjectStore")
+    | select(.metadata.annotations."kustomize.toolkit.fluxcd.io/prune" != "disabled") | .kind + "/" + .metadata.name]
+    | .[]' "$rendered"/*.yaml)
+  [ -z "$bad" ] || fail "$cluster: Ceph's objects are never pruned: $bad"
+  # Volumes outlive their claims, and a chart's claim without a class stays Pending.
+  bad=$(yq ea '[select(.kind == "StorageClass") | .metadata.name + " " + .provisioner + " "
+    + (.reclaimPolicy // "Delete") + " "
+    + (.metadata.annotations."storageclass.kubernetes.io/is-default-class" // "false")] | .[]' "$rendered"/*.yaml \
+    | awk '$2 !~ /^rook-ceph[.](rbd[.]csi[.]ceph[.]com|ceph[.]rook[.]io\/bucket)$/ || $3 != "Retain" || $4 != "false" {
+      print $1 }' | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: storage classes are Ceph's, keep volumes their claims let go, and none is the" \
+    "default: $bad"
   for issuer in public standby; do
     [ "$(yq ea "[select(.kind == \"ClusterIssuer\" and .metadata.name == \"$issuer\")] | length" "$rendered"/*.yaml)" \
       = 1 ] || fail "$cluster: the cluster has one ClusterIssuer public, which every host's certificate names, and" \

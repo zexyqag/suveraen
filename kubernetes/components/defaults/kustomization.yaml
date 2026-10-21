@@ -35,6 +35,15 @@ patches:
           - apiVersion: gateway.networking.k8s.io/v1
             kind: Gateway
             current: status.conditions.exists(c, c.type == 'Programmed' && c.status == 'True')
+          - apiVersion: ceph.rook.io/v1
+            kind: CephCluster
+            current: status.phase == 'Ready'
+          - apiVersion: ceph.rook.io/v1
+            kind: CephBlockPool
+            current: status.phase == 'Ready'
+          - apiVersion: ceph.rook.io/v1
+            kind: CephObjectStore
+            current: status.phase == 'Ready'
           - apiVersion: gateway.networking.k8s.io/v1
             kind: HTTPRoute
             current: >-

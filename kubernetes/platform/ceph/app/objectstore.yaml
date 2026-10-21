@@ -1,0 +1,39 @@
+---
+# Served in the cluster only, over plain HTTP at rook-ceph-rgw-objects.rook-ceph.svc: no certificate authority signs
+# for internal names here, and nodes reach each other through WireGuard.
+apiVersion: ceph.rook.io/v1
+kind: CephObjectStore
+metadata:
+  name: objects
+  namespace: rook-ceph
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  metadataPool:
+    failureDomain: ${CEPH_FAILURE_DOMAIN}
+    enableCrushUpdates: true
+    replicated:
+      size: 3
+      requireSafeReplicaSize: true
+    parameters:
+      min_size: "2"
+  dataPool:
+    failureDomain: ${CEPH_FAILURE_DOMAIN}
+    enableCrushUpdates: true
+    replicated:
+      size: 3
+      requireSafeReplicaSize: true
+    parameters:
+      min_size: "2"
+      bulk: "true"
+  preservePoolsOnDelete: true
+  gateway:
+    port: 80
+    instances: 1
+    priorityClassName: platform
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi

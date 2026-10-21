@@ -11,3 +11,5 @@ resources:
   - ./gateway/ks.yaml
   - ./reloader/ks.yaml
   - ./snapshot-controller/ks.yaml
+  - ./rook-ceph/ks.yaml
+  - ./ceph/ks.yaml

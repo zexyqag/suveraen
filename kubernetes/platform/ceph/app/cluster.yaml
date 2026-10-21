@@ -1,0 +1,138 @@
+---
+apiVersion: ceph.rook.io/v1
+kind: CephCluster
+metadata:
+  name: rook-ceph
+  namespace: rook-ceph
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  cephVersion:
+    image: quay.io/ceph/ceph:v20.2.4
+    allowUnsupported: false
+  dataDirHostPath: /var/lib/rook
+  security:
+    cephx:
+      # Kernel clients older than Linux 7.0 don't know the newer key type.
+      csi:
+        keyType: aes
+  # The monitors alone hold the OSDs' disk keys, so there are three even on one server.
+  mon:
+    count: 3
+    allowMultiplePerNode: ${CEPH_DAEMONS_SHARE_NODE}
+  mgr:
+    count: 1
+    allowMultiplePerNode: ${CEPH_DAEMONS_SHARE_NODE}
+    modules:
+      - name: rook
+        enabled: false
+  dashboard:
+    enabled: false
+  monitoring:
+    enabled: false
+    metricsDisabled: true
+  logCollector:
+    enabled: false
+  crashCollector:
+    disable: false
+  network:
+    connections:
+      requireMsgr2: true
+      # Between nodes the pod network already runs over WireGuard.
+      encryption:
+        enabled: false
+  priorityClassNames:
+    all: platform
+  resources:
+    # Ceph sizes the OSD's caches from its limit; requests match, so the OSDs are the last pods evicted.
+    osd:
+      requests:
+        cpu: 250m
+        memory: ${CEPH_OSD_MEMORY}
+      limits:
+        memory: ${CEPH_OSD_MEMORY}
+    mon:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
+    mgr:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
+  cephConfig:
+    global:
+      osd_pool_default_size: "3"
+      osd_pool_default_min_size: "2"
+  healthCheck:
+    # Raised for the older key type kernel clients need (security.cephx.csi).
+    muteHealthWarning:
+      AUTH_INSECURE_ROTATING_SERVICE_KEY_TYPE:
+        policy: mute
+      AUTH_INSECURE_CLIENT_KEY_TYPE:
+        policy: mute
+      AUTH_INSECURE_KEYS_ALLOWED:
+        policy: mute
+      AUTH_INSECURE_KEYS_CREATABLE:
+        policy: mute
+  disruptionManagement:
+    managePodBudgets: true
+  # The hosts decide by the links they make (suveraen.storage.ceph.disks); a slot a node lacks is skipped. Each OSD's
+  # database is a partition on a system disk, and block and database are both encrypted.
+  storage:
+    useAllNodes: true
+    useAllDevices: false
+    config:
+      encryptedDevice: "true"
+    devices:
+      - name: /dev/disk/by-osd/osd0
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd0-db
+          deviceClass: hdd
+      - name: /dev/disk/by-osd/osd1
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd1-db
+          deviceClass: hdd
+      - name: /dev/disk/by-osd/osd2
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd2-db
+          deviceClass: hdd
+      - name: /dev/disk/by-osd/osd3
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd3-db
+          deviceClass: hdd
+      - name: /dev/disk/by-osd/osd4
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd4-db
+          deviceClass: hdd
+      - name: /dev/disk/by-osd/osd5
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd5-db
+          deviceClass: hdd
+      - name: /dev/disk/by-osd/osd6
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd6-db
+          deviceClass: hdd
+      - name: /dev/disk/by-osd/osd7
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd7-db
+          deviceClass: hdd
+      - name: /dev/disk/by-osd/osd8
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd8-db
+          deviceClass: hdd
+      - name: /dev/disk/by-osd/osd9
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd9-db
+          deviceClass: hdd
+      - name: /dev/disk/by-osd/osd10
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd10-db
+          deviceClass: hdd
+      - name: /dev/disk/by-osd/osd11
+        config:
+          metadataDevice: /dev/disk/by-partlabel/osd11-db
+          deviceClass: hdd
