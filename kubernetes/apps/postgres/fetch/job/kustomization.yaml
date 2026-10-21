@@ -1,0 +1,15 @@
+---
+# The CronJob offsite's pod, which the outer component then turns to fetching.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ./job.yaml
+replacements:
+  - source:
+      kind: CronJob
+      name: offsite
+      fieldPath: spec.jobTemplate.spec.template
+    targets:
+      - select:
+          kind: Job
+        fieldPaths: [spec.template]

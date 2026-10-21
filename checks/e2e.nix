@@ -377,6 +377,7 @@ pkgs.testers.runNixOSTest {
       import re
       import shlex
       import time
+      from datetime import datetime
 
       def read(path, key):
           with open(path) as f:
@@ -940,8 +941,21 @@ pkgs.testers.runNixOSTest {
               secrets = f"${cluster}/tenants/{tenant}/secrets.yaml"
               return read(secrets, f"{app}_BACKUP_{n}_ACCESS_KEY_ID"), read(secrets, f"{app}_BACKUP_{n}_SECRET_ACCESS_KEY")
 
+          def stored_at(n, tenant, prefix):
+              # What the provider holds under a prefix: each file with its modification time.
+              data = f"/var/lib/s3-{n}/data/{bucket_at(n, tenant)}"
+              out = acme.succeed(f"cd {data} && find {prefix} -type f -printf '%p %T@\\n'")
+              return dict(line.split() for line in out.splitlines())
+
           def bucket_at(n, tenant):
               return setting(f"BACKUP_{n}_BUCKET_PREFIX") + tenant
+
+          def push(ns, job):
+              server.succeed(f"kubectl -n {ns} create job {job} --from=cronjob/offsite")
+              try:
+                  server.wait_until_succeeds(f"kubectl -n {ns} wait job {job} --for=condition=Complete --timeout=0", timeout=600)
+              finally:
+                  print(server.execute(f"kubectl -n {ns} logs job/{job} --tail=40")[1])
 
           with subtest("A tenant's bucket goes off-site to both providers, encrypted, where the cluster's keys can't remove a copy"):
               ns = f"{first}-postgres"
@@ -949,17 +963,19 @@ pkgs.testers.runNixOSTest {
                   assert setting(f"BACKUP_{n}_ENDPOINT") == f"http://s3-{n}.test", n
                   acme.wait_for_unit(f"s3-{n}-setup.service")
               archived(ns)
-              server.succeed(f"kubectl -n {ns} create job push --from=cronjob/offsite")
-              try:
-                  server.wait_until_succeeds(f"kubectl -n {ns} wait job push --for=condition=Complete --timeout=0", timeout=600)
-              finally:
-                  print(server.execute(f"kubectl -n {ns} logs job/push --tail=40")[1])
+              push(ns, "push")
+              with open("${kubernetes}/apps/postgres/ks.yaml") as template:
+                  days = re.search(r"POSTGRES_OFFSITE_LOCK:=(\d+)d", template.read())
+              assert days, "the template has no default lock"
+              lock = int(days.group(1))
+              first_copies = {}
               for n in providers:
                   root = (f"root-{n}", f"root-{n}-test-secret")
                   ours, bucket = keys_of(first, n), bucket_at(n, first)
                   # What the provider holds: rclone's encrypted files, under names it encrypted too.
                   data = f"/var/lib/s3-{n}/data/{bucket}"
-                  stored = acme.succeed(f"cd {data} && find postgres -type f").split()
+                  first_copies[n] = stored_at(n, first, "postgres")
+                  stored = sorted(first_copies[n])
                   assert stored, n
                   # Encrypted names are base32hex, which has neither "-" nor "w".
                   plain = [f for f in stored if re.search(r"postgres-g|wals", f.removeprefix("postgres/"))]
@@ -968,10 +984,16 @@ pkgs.testers.runNixOSTest {
                       f"cd {data} && find postgres -type f | while read -r f; do test \"$(head -c 6 \"$f\")\" = RCLONE || exit 1; done"
                   )
                   key = stored[0]
-                  status, out = at(n, root, f"s3api head-object --bucket {bucket} --key {key} --query '[ObjectLockMode,VersionId]' --output text")
+                  status, out = at(
+                      n, root, f"s3api head-object --bucket {bucket} --key {key}"
+                      " --query '[ObjectLockMode,ObjectLockRetainUntilDate,VersionId]' --output text"
+                  )
                   assert status == 0, out
-                  mode, version = out.split()
+                  mode, until, version = out.split()
                   assert mode == "COMPLIANCE", out
+                  # rclone's own lock, well beyond the bucket's one-day default.
+                  now = int(acme.succeed("date +%s"))
+                  assert datetime.fromisoformat(until).timestamp() > now + (lock - 1) * 86400, (out, lock)
                   # The cluster's key deletes nothing, shortens no lock, changes no bucket and reaches no other tenant's.
                   version = f"--bucket {bucket} --key {key} --version-id {version}"
                   refused_at(n, ours, f"s3api delete-object {version}")
@@ -1051,6 +1073,13 @@ pkgs.testers.runNixOSTest {
               assert status == 0 and out.strip() == "kept", out
               server.succeed(f"kubectl -n {first}-hello delete pod psql")
               recoverable(ns, "g2")
+              # The next push sends generation g2 alone, not g1 again, fetched back as it was.
+              push(ns, "push-g2")
+              for n in providers:
+                  now = stored_at(n, first, "postgres")
+                  assert {f: t for f, t in now.items() if f in first_copies[n]} == first_copies[n], n
+                  assert set(now) - set(first_copies[n]), n
+
 
           with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied"):
               ns = f"{first}-hello"

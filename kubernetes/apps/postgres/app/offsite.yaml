@@ -7,6 +7,9 @@ metadata:
 data:
   # How long each copy stays locked.
   LOCK: ${OFFSITE_LOCK}
+  GENERATION: ${GENERATION}
+  ORIGIN: ${ORIGIN}
+  RESTORE_FROM: ${RESTORE_FROM}
   ENDPOINT_1: ${BACKUP_1_ENDPOINT}
   REGION_1: ${BACKUP_1_REGION}
   PROVIDER_1: ${BACKUP_1_PROVIDER}
@@ -58,7 +61,8 @@ spec:
           containers:
             - name: rclone
               image: ghcr.io/rclone/rclone:1.75.2@sha256:2687085f718d3c628f7fdfb77c52a1d344332aed543110bb88088f2c70d43eb5
-              command: [sh, /scripts/offsite.sh, push]
+              command: [sh, /scripts/offsite.sh]
+              args: [push]
               envFrom:
                 - configMapRef:
                     name: offsite

@@ -1,0 +1,13 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fetch-${GENERATION}
+  annotations:
+    # A Job's pod can't change: Flux makes it anew, as when the CronJob's image moves on, and the fetch runs again.
+    kustomize.toolkit.fluxcd.io/force: enabled
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      containers: []
