@@ -1,6 +1,7 @@
 ---
 # A namespace that admits privileged pods gives whoever can start pods there root on the node, so no namespace
-# leaves the cluster's restricted default, whoever asks: this holds for Flux's own changes too.
+# leaves the cluster's restricted default, whoever asks: this holds for Flux's own changes too. The one exception is
+# rook-ceph, where Ceph's daemons and CSI plugins run on the nodes' disks and kernel (components/privileged).
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -17,8 +18,9 @@ spec:
     - expression: >-
         object.metadata.name == 'kube-system' || !has(object.metadata.labels) ||
         ['enforce', 'audit', 'warn'].all(mode, !(('pod-security.kubernetes.io/' + mode) in object.metadata.labels) ||
-        object.metadata.labels['pod-security.kubernetes.io/' + mode] == 'restricted')
-      message: namespaces keep the restricted Pod Security Standard
+        object.metadata.labels['pod-security.kubernetes.io/' + mode] ==
+        (object.metadata.name == 'rook-ceph' ? 'privileged' : 'restricted'))
+      message: namespaces keep the restricted Pod Security Standard; only rook-ceph, where Ceph runs, is privileged
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

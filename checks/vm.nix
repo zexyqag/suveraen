@@ -527,14 +527,21 @@ pkgs.testers.runNixOSTest {
           for line in ["open 6443", "open 10250", "closed 2379"]:
               assert line in ports, ports
 
-      with subtest("No namespace leaves the restricted Pod Security default, not even through Flux's own account"):
+      with subtest("No namespace but Ceph's leaves the restricted Pod Security default, not even through Flux's own account"):
           # After the probes above, whose namespace the test labels privileged itself.
           server.succeed("kubectl apply -f ${../kubernetes/platform/policies/app/pod-security-labels.yaml}")
+          flux = "--as=system:serviceaccount:flux-system:kustomize-controller"
           privileged = "kubectl label namespace member pod-security.kubernetes.io/enforce=privileged --dry-run=server"
           server.wait_until_fails(privileged)
-          out = server.fail(f"{privileged} 2>&1")
-          assert "pod-security-labels" in out, out
+          for cmd in [privileged, f"{privileged} {flux}"]:
+              out = server.fail(f"{cmd} 2>&1")
+              assert "pod-security-labels" in out, out
           server.succeed("kubectl label namespace member pod-security.kubernetes.io/enforce=restricted --dry-run=server")
+          server.succeed("kubectl create namespace rook-ceph")
+          for mode in ["enforce", "audit", "warn"]:
+              server.succeed(f"kubectl label namespace rook-ceph pod-security.kubernetes.io/{mode}=privileged --dry-run=server {flux}")
+              out = server.fail(f"kubectl label namespace rook-ceph pod-security.kubernetes.io/{mode}=baseline --dry-run=server 2>&1")
+              assert "pod-security-labels" in out, out
 
       with subtest("A tenant's namespaces, names and hosts are its own, and Gateways and certificates stay at the gateway"):
           server.succeed(

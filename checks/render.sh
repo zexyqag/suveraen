@@ -35,6 +35,8 @@ appkinds+=',Role.rbac.authorization.k8s.io,RoleBinding.rbac.authorization.k8s.io
 appkinds+=',OCIRepository.source.toolkit.fluxcd.io,HelmRelease.helm.toolkit.fluxcd.io'
 appkinds+=',HTTPRoute.gateway.networking.k8s.io'
 export quotas hard appkinds
+privileged=pod-security.kubernetes.io/audit=privileged,pod-security.kubernetes.io/enforce=privileged
+privileged+=,pod-security.kubernetes.io/warn=privileged
 
 # A whole Kubernetes quantity in thousandths of its unit, so CPU's "m" compares too.
 quantity() {
@@ -464,10 +466,13 @@ for dir in kubernetes/clusters/*/; do
           "own: $bad"
         ;;
     esac
-    bad=$(yq ea '[select(.kind == "Namespace")
-      | select(.metadata.labels // {} | keys | any_c(test("^pod-security.kubernetes.io/"))) | .metadata.name] | .[]' \
-      "$file")
-    [ -z "$bad" ] || fail "$cluster/$name: namespaces keep the cluster's restricted Pod Security default: $bad"
+    # Ceph's namespace alone runs privileged pods, all three modes saying so.
+    bad=$(yq ea '[select(.kind == "Namespace") | .metadata.name + " " + ((.metadata.labels // {}) | to_entries
+      | map(select(.key | test("^pod-security.kubernetes.io/")) | .key + "=" + .value) | sort | join(","))] | .[]' \
+      "$file" | awk -v ks="$name" -v ceph="$privileged" \
+        '$2 != "" && ($1 != "rook-ceph" || ks != "rook-ceph" || $2 != ceph) { print $1 }')
+    [ -z "$bad" ] || fail "$cluster/$name: namespaces keep the cluster's restricted Pod Security default; only" \
+      "rook-ceph, where Ceph runs, is privileged: $bad"
     bad=$(yq ea '[select((.kind == "OCIRepository" and .spec.ref.digest == null)
       or (.kind == "GitRepository" and .spec.ref.commit == null)) | .metadata.name] | .[]' "$file")
     [ -z "$bad" ] || fail "$cluster/$name: sources must be pinned to a digest or a commit: $bad"

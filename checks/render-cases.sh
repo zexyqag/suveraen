@@ -306,6 +306,13 @@ refuses np-empty-peer "a network policy rule without peers reaches everything: x
 refuses np-edge-ports-only "a network policy rule without peers reaches everything: from-gateway-hello" \
   "yq -i 'del(.spec.ingress[0].from)' edge/base/networkpolicy.yaml"
 
+# Pod Security.
+privileged="only rook-ceph, where Ceph runs, is privileged"
+refuses privileged-other-namespace "$privileged: reloader" \
+  "sed -i 's|    - ../../../components/platform\$|&\n    - ../../../components/privileged|' platform/reloader/ks.yaml"
+refuses tenant-namespace-privileged "$privileged: alpha-hello" \
+  "sed -i 's|    - ../../../components/app\$|&\n    - ../../../components/privileged|' apps/hello/ks.yaml"
+
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"
 renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'

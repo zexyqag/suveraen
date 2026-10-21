@@ -1,0 +1,17 @@
+---
+# Lets the namespace run privileged pods with host paths, as Ceph's daemons and its CSI node plugin need: root on the
+# node for whoever may start pods there. platform/policies admits it for rook-ceph alone.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      kind: Namespace
+    patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: _
+        labels:
+          pod-security.kubernetes.io/enforce: privileged
+          pod-security.kubernetes.io/audit: privileged
+          pod-security.kubernetes.io/warn: privileged
