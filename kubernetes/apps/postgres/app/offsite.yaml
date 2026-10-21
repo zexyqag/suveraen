@@ -1,0 +1,95 @@
+---
+# Where the copies go: one bucket per tenant at each of two providers, made with object lock at onboarding.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: offsite
+data:
+  # How long each copy stays locked.
+  LOCK: ${OFFSITE_LOCK}
+  ENDPOINT_1: ${BACKUP_1_ENDPOINT}
+  REGION_1: ${BACKUP_1_REGION}
+  PROVIDER_1: ${BACKUP_1_PROVIDER}
+  BUCKET_1: ${BACKUP_1_BUCKET_PREFIX}${TENANT}
+  ENDPOINT_2: ${BACKUP_2_ENDPOINT}
+  REGION_2: ${BACKUP_2_REGION}
+  PROVIDER_2: ${BACKUP_2_PROVIDER}
+  BUCKET_2: ${BACKUP_2_BUCKET_PREFIX}${TENANT}
+---
+# The tenant's keys at both providers, which list its bucket and write under postgres/ but never delete, and its
+# crypt password and salt.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: offsite
+stringData:
+  ACCESS_KEY_ID_1: ${POSTGRES_BACKUP_1_ACCESS_KEY_ID}
+  SECRET_ACCESS_KEY_1: ${POSTGRES_BACKUP_1_SECRET_ACCESS_KEY}
+  ACCESS_KEY_ID_2: ${POSTGRES_BACKUP_2_ACCESS_KEY_ID}
+  SECRET_ACCESS_KEY_2: ${POSTGRES_BACKUP_2_SECRET_ACCESS_KEY}
+  CRYPT_PASSWORD: ${POSTGRES_CRYPT_PASSWORD}
+  CRYPT_SALT: ${POSTGRES_CRYPT_SALT}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: offsite
+spec:
+  schedule: "${OFFSITE_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            suveraen/object-store: client
+            suveraen/egress: internet
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: rclone
+              image: ghcr.io/rclone/rclone:1.75.2@sha256:2687085f718d3c628f7fdfb77c52a1d344332aed543110bb88088f2c70d43eb5
+              command: [sh, /scripts/offsite.sh, push]
+              envFrom:
+                - configMapRef:
+                    name: offsite
+                - secretRef:
+                    name: offsite
+                - configMapRef:
+                    name: bucket
+                - secretRef:
+                    name: bucket
+              env:
+                - name: HOME
+                  value: /tmp
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: scripts
+              configMap:
+                name: offsite-script
+            - name: tmp
+              emptyDir: {}

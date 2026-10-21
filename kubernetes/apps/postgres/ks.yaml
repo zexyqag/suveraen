@@ -1,12 +1,14 @@
 ---
 # A tenant's PostgreSQL: one cluster for all its apps, its restore unit, in ${TENANT}-postgres. Each app with a
 # database adds its attachment, ${TENANT}-<app>-db (components/db). WAL and base backups go to the tenant's bucket in
-# the cluster's object store.
+# the cluster's object store, which CronJob offsite copies to both providers, encrypted with the tenant's own password.
 #
 # Every cluster archives under its generation, postgres-<GENERATION>, and is never pointed at another: CloudNativePG
 # reads a bootstrap only when it creates a cluster (platform/policies/postgres-clusters). To restore, a release sets
 # POSTGRES_GENERATION to the next one, POSTGRES_BOOTSTRAP to recovery and POSTGRES_ORIGIN to the generation to recover
-# from, then the operator deletes Cluster postgres and Flux makes it anew from that generation's backups.
+# from, then the operator deletes Cluster postgres and Flux makes it anew from that generation's backups. With
+# POSTGRES_RESTORE_FROM offsite-1 or offsite-2, as when the cluster's object store is lost, they come back from that
+# provider's encrypted copy first.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -16,6 +18,7 @@ spec:
   targetNamespace: ${TENANT}-postgres
   components:
     - ../../../components/app
+    - ../fetch/${POSTGRES_RESTORE_FROM:=none}
   dependsOn:
     - name: policies
     - name: cloudnative-pg
@@ -35,6 +38,11 @@ spec:
       QUOTA_JOBS: "8"
       BUCKET_SIZE: ${POSTGRES_BUCKET_SIZE:=100G}
       RETENTION: ${POSTGRES_RETENTION:=30d}
+      OFFSITE_SCHEDULE: ${POSTGRES_OFFSITE_SCHEDULE:=7-59/15 * * * *}
+      # The retention and a week of WAL before its oldest base backup.
+      OFFSITE_LOCK: ${POSTGRES_OFFSITE_LOCK:=40d}
+      GENERATION: ${POSTGRES_GENERATION:=g1}
+      ORIGIN: ${POSTGRES_ORIGIN:=g1}
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization

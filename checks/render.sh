@@ -34,8 +34,8 @@ appkinds='ConfigMap,Secret,Service,ServiceAccount,PersistentVolumeClaim,LimitRan
 appkinds+=',Role.rbac.authorization.k8s.io,RoleBinding.rbac.authorization.k8s.io,NetworkPolicy.networking.k8s.io'
 appkinds+=',OCIRepository.source.toolkit.fluxcd.io,HelmRelease.helm.toolkit.fluxcd.io'
 appkinds+=',HTTPRoute.gateway.networking.k8s.io'
-# The tenant's PostgreSQL also claims its bucket and tells Barman where to archive.
-pgkinds=',ObjectBucketClaim.objectbucket.io,ObjectStore.barmancloud.cnpg.io'
+# The tenant's PostgreSQL also claims its bucket, tells Barman where to archive and copies the bucket off-site.
+pgkinds=',ObjectBucketClaim.objectbucket.io,ObjectStore.barmancloud.cnpg.io,CronJob.batch,Job.batch'
 export quotas hard appkinds
 privileged=pod-security.kubernetes.io/audit=privileged,pod-security.kubernetes.io/enforce=privileged
 privileged+=,pod-security.kubernetes.io/warn=privileged
@@ -567,7 +567,19 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           | select([((.spec.ingress // [])[] | (.from // [])), ((.spec.egress // [])[] | (.to // []))]
             | any_c(length == 0 or any_c((keys | length) == 0))) | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: a network policy rule without peers reaches everything: $bad"
-        bad=$(yq ea '[select(.kind == "NetworkPolicy") | .metadata.name as $np
+        # The way to the internet is components/internet alone, for what the cluster's own ranges leave out.
+        vars=$w/$name.vars.yaml
+        v() { yq ".$1 // \"\"" "$vars"; }
+        want='{"egress":[{"ports":[{"port":80,"protocol":"TCP"},{"port":443,"protocol":"TCP"}],"to":[{"ipBlock":'
+        want+='{"cidr":"0.0.0.0/0","except":["'$(v POD_CIDR_V4)'","'$(v SERVICE_CIDR_V4)'","'$(v NODE_CIDR_V4)'",'
+        want+='"169.254.0.0/16"]}},{"ipBlock":{"cidr":"::/0","except":["'$(v POD_CIDR_V6)'","'$(v SERVICE_CIDR_V6)'","'
+        want+=$(v NODE_CIDR_V6)'","fe80::/10"]}}]}],"podSelector":{"matchLabels":{"suveraen/egress":"internet"}},'
+        want+='"policyTypes":["Egress"]}'
+        bad=$(yq ea -o=json -I=0 '[select(.kind == "NetworkPolicy" and .metadata.name == "internet")
+          | .spec | sort_keys(..)] | .[]' "$file" | grep -vxF "$want" || true)
+        [ -z "$bad" ] || fail "$cluster/$name: the network policy internet opens web ports to all but the cluster's own" \
+          "pods, Services and nodes, for pods labelled suveraen/egress=internet: $bad"
+        bad=$(yq ea '[select(.kind == "NetworkPolicy" and .metadata.name != "internet") | .metadata.name as $np
           | [.spec.ingress[]?.from[]?, .spec.egress[]?.to[]?] | .[]
           | {"np": $np, "ipblock": has("ipBlock"), "selector": has("namespaceSelector"),
             "expressions": ((.namespaceSelector // {}) | has("matchExpressions")),
@@ -754,6 +766,14 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       "$rendered/cluster.yaml")
     [ -z "$bad" ] || fail "$cluster: tenant secrets are encrypted in every value: $bad"
   fi
+
+  # Two copies off-site at two providers, which a real cluster reaches over TLS only.
+  backups=$(yq ea '[select(.kind == "ConfigMap" and .metadata.name == "cluster-settings")] | .[0].data
+    | (.BACKUP_1_ENDPOINT // "") + " " + (.BACKUP_2_ENDPOINT // "")' "$rendered/cluster.yaml")
+  read -r one two <<<"$backups"
+  [ -n "$two" ] && [ "$one" != "$two" ] || fail "$cluster: the two providers' endpoints differ: $backups"
+  [ "$testing" = true ] || [[ $one == https://* && $two == https://* ]] \
+    || fail "$cluster: the providers' endpoints are https: $backups"
 
   yq ea '[select(.kind == "ConfigMap" and .metadata.name == "cluster-settings")] | .[0].data // {} | keys | .[]' \
     "$rendered/cluster.yaml" >"$w/keys"

@@ -54,7 +54,8 @@ encmap() { # cluster directory
 prod() { # tenant ID
   mkdir -p clusters/prod/tenants
   cp clusters/test/settings.yaml clusters/test/secrets.yaml clusters/test/hostnames.yaml clusters/prod/
-  yq -i '.data.TEST_CLUSTER = "false" | .data.ACME_CA_BUNDLE = ""' clusters/prod/settings.yaml
+  yq -i '.data.TEST_CLUSTER = "false" | .data.ACME_CA_BUNDLE = "" | .data.BACKUP_1_ENDPOINT = "https://s3.one.test"
+    | .data.BACKUP_2_ENDPOINT = "https://s3.two.test"' clusters/prod/settings.yaml
   sed "s|./tenants/alpha|./tenants/$1|; /tenants\/bravo/d" clusters/test/kustomization.yaml \
     >clusters/prod/kustomization.yaml
   cp -r $T/alpha "clusters/prod/tenants/$1"
@@ -387,7 +388,7 @@ C=apps/postgres/cluster/cluster.yaml
 pg="a tenant's PostgreSQL is never pruned, has no superuser access"
 role="an app's role logs in with its Secret and nothing more"
 refuses attachment-without-postgres "nothing is named bravo-postgres-cluster" \
-  "sed -i '/apps\/postgres\/ks.yaml/d' $T/bravo/apps/kustomization.yaml"
+  "sed -i '/apps\/postgres\/ks.yaml/d' $T/bravo/apps/kustomization.yaml; sed -i '/POSTGRES_/d' $T/bravo/secrets.yaml"
 refuses attachment-other-dependency "an app's database is \${TENANT}-hello-db" \
   "yq -i '(select(documentIndex == 2) | .spec.dependsOn) += [{\"name\": \"\${TENANT}-postgres\"}]' apps/hello/ks.yaml"
 refuses attachment-other-key "kubernetes/apps/other: an app reads only its own keys, not HELLO_DB_PASSWORD" \
@@ -420,6 +421,17 @@ metadata:\n  name: x\nspec:\n  bucketName: x\n  storageClassName: ceph-bucket\n'
 refuses namespace-without-app "labelled suveraen/tier=app, suveraen/tenant=alpha and suveraen/app=" \
   "sed -i '/suveraen\/app: /d' components/app/namespace.yaml"
 
+# Off-site copies.
+internet="the network policy internet opens web ports to all but the cluster's own pods, Services and nodes"
+refuses internet-other-port "$internet" "sed -i 's/port: 443/port: 22/' components/internet/networkpolicy.yaml"
+refuses internet-link-local "$internet" "sed -i '/169.254.0.0/d' components/internet/networkpolicy.yaml"
+refuses internet-own-pods "$internet" "sed -i '/POD_CIDR_V6/d' components/internet/networkpolicy.yaml"
+refuses internet-for-all "$internet" "yq -i '.spec.podSelector = {}' components/internet/networkpolicy.yaml"
+refuses offsite-one-provider "the two providers' endpoints differ" \
+  "yq -i '.data.BACKUP_2_ENDPOINT = .data.BACKUP_1_ENDPOINT' clusters/test/settings.yaml"
+refuses offsite-plain-http "prod: the providers' endpoints are https" \
+  "$real; yq -i '.data.BACKUP_2_ENDPOINT = \"http://s3.two.test\"' clusters/prod/settings.yaml"
+
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"
 renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
@@ -427,6 +439,7 @@ renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
 renders two-apps "other"
 renders real-cluster "$real"
 renders recovery "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery"
+renders recovery-offsite "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery; knob POSTGRES_RESTORE_FROM offsite-2"
 renders failure-domain-host \
   "yq -i '.data.CEPH_FAILURE_DOMAIN = \"host\" | .data.CEPH_DAEMONS_SHARE_NODE = \"false\"' clusters/test/settings.yaml"
 renders failover "sed -i 's|issuer/public/ks.yaml|issuer/failover/ks.yaml|' clusters/test/kustomization.yaml"

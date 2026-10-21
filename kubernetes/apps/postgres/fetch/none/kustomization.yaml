@@ -1,0 +1,5 @@
+---
+# The cluster recovers, if at all, from what the tenant's bucket in the cluster holds.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources: []

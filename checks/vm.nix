@@ -814,6 +814,49 @@ pkgs.testers.runNixOSTest {
           assert out.strip() == "tenant", out
           server.succeed(dry(pod("member", "platform")))
 
+      with subtest("Only the platform's backup jobs reach out of a tenant's namespace, never its apps' charts"):
+          server.succeed(
+              "kubectl apply -f ${../kubernetes/platform/policies/app/egress-labels.yaml}"
+              " && kubectl -n alpha-hello create rolebinding flux-deployer --clusterrole=flux-app"
+              " --serviceaccount=alpha-hello:flux-deployer"
+          )
+
+          def labelled_pod(namespace, labels):
+              obj = pod(namespace)
+              obj["metadata"]["labels"] = labels
+              return obj
+
+          def template(kind, labels):
+              spec = {"metadata": {"labels": labels}, "spec": pod("alpha-hello")["spec"] | {"restartPolicy": "Never"}}
+              obj = {"metadata": {"name": "probe", "namespace": "alpha-hello"}}
+              if kind == "Deployment":
+                  spec["spec"]["restartPolicy"] = "Always"
+                  return obj | {"apiVersion": "apps/v1", "kind": kind, "spec": {
+                      "selector": {"matchLabels": labels}, "template": spec}}
+              if kind == "Job":
+                  return obj | {"apiVersion": "batch/v1", "kind": kind, "spec": {"template": spec}}
+              return obj | {"apiVersion": "batch/v1", "kind": kind, "spec": {
+                  "schedule": "0 0 * * *", "jobTemplate": {"spec": {"template": spec}}}}
+
+          def by(account):
+              return f"--as=system:serviceaccount:{account}"
+
+          deployer = by("alpha-hello:flux-deployer")
+          for label in ["suveraen/egress", "suveraen/object-store"]:
+              labels = {label: "x"}
+              refused(f"{dry(labelled_pod('alpha-hello', labels))} {deployer}", "egress-labels")
+              for kind in ["Deployment", "Job", "CronJob"]:
+                  refused(f"{dry(template(kind, labels))} {deployer}", "egress-labels")
+              # Jobs' pods, and the jobs Flux applies from the repository and CronJobs make.
+              server.succeed(f"{dry(labelled_pod('alpha-hello', labels))} {by('kube-system:job-controller')}")
+              server.succeed(f"{dry(template('Job', labels))} {by('flux-system:kustomize-controller')}")
+              server.succeed(f"{dry(template('Job', labels))} {by('kube-system:cronjob-controller')}")
+              server.succeed(f"{dry(template('CronJob', labels))} {by('flux-system:kustomize-controller')}")
+              # Outside tenants' namespaces nothing opens a way out for them.
+              server.succeed(dry(labelled_pod("member", labels)))
+          for kind in ["Deployment", "Job", "CronJob"]:
+              server.succeed(f"{dry(template(kind, {'app': 'probe'}))} {deployer}")
+
       with subtest("Clocks follow NTS servers"):
           for node in [server, watcher]:
               node.succeed("systemctl is-active chronyd")

@@ -1,0 +1,65 @@
+---
+# Two pod labels open a way out of a tenant's namespace: suveraen/egress to the internet (components/internet) and
+# suveraen/object-store to the cluster's object store (apps/postgres). An app's charts, which run as its namespace's
+# deployer, must not hand them to their own pods: only the backup jobs the platform runs carry them, made by Flux,
+# the job and CronJob controllers or CloudNativePG.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: egress-labels
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods, replicationcontrollers]
+      - apiGroups: [apps]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [deployments, statefulsets, daemonsets, replicasets]
+      - apiGroups: [batch]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [jobs, cronjobs]
+    namespaceSelector:
+      matchExpressions:
+        - key: suveraen/tenant
+          operator: Exists
+  variables:
+    - name: labels
+      expression: >-
+        request.resource.resource == 'pods' ? object.metadata.?labels.orValue({}) :
+        request.resource.resource == 'cronjobs' ? object.spec.jobTemplate.spec.template.metadata.?labels.orValue({}) :
+        object.spec.template.metadata.?labels.orValue({})
+    - name: before
+      expression: >-
+        oldObject == null ? {} :
+        request.resource.resource == 'pods' ? oldObject.metadata.?labels.orValue({}) :
+        request.resource.resource == 'cronjobs' ? oldObject.spec.jobTemplate.spec.template.metadata.?labels.orValue({}) :
+        oldObject.spec.template.metadata.?labels.orValue({})
+    - name: gains
+      expression: >-
+        ['suveraen/egress', 'suveraen/object-store'].exists(k, k in variables.labels && !(k in variables.before))
+    - name: makers
+      expression: >-
+        request.resource.resource == 'pods' ? ['system:serviceaccount:kube-system:job-controller',
+        'system:serviceaccount:cloudnative-pg:cloudnative-pg'] :
+        request.resource.resource == 'jobs' ? ['system:serviceaccount:kube-system:cronjob-controller',
+        'system:serviceaccount:cloudnative-pg:cloudnative-pg',
+        'system:serviceaccount:flux-system:kustomize-controller'] :
+        request.resource.resource == 'cronjobs' ? ['system:serviceaccount:flux-system:kustomize-controller'] : []
+  validations:
+    - expression: >-
+        !variables.gains || request.userInfo.username in variables.makers ||
+        'system:masters' in request.userInfo.groups
+      message: only the platform's backup jobs and movers reach the internet or the object store from a tenant
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: egress-labels
+spec:
+  policyName: egress-labels
+  validationActions: [Deny]

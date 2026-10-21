@@ -18,3 +18,20 @@ data:
   CEPH_OSD_MEMORY: 1152Mi
   # One instance per database cluster while there is one server.
   PG_INSTANCES: "1"
+  # The two providers that keep the off-site copies: stand-ins on the e2e's internet node, over plain HTTP. A real
+  # cluster's are at two independent companies, over https.
+  BACKUP_1_ENDPOINT: http://s3-1.test
+  BACKUP_1_REGION: us-east-1
+  BACKUP_1_PROVIDER: Other
+  BACKUP_1_BUCKET_PREFIX: test-
+  BACKUP_2_ENDPOINT: http://s3-2.test
+  BACKUP_2_REGION: us-east-1
+  BACKUP_2_PROVIDER: Other
+  BACKUP_2_BUCKET_PREFIX: test-
+  # The cluster's own ranges (nixos/cluster.nix) and its nodes, which the internet's network policy leaves out.
+  POD_CIDR_V4: 10.42.0.0/16
+  POD_CIDR_V6: fd42::/56
+  SERVICE_CIDR_V4: 10.43.0.0/16
+  SERVICE_CIDR_V6: fd43::/112
+  NODE_CIDR_V4: 192.168.1.3/32
+  NODE_CIDR_V6: fd00::2/128

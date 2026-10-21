@@ -12,3 +12,4 @@ resources:
   - ./hostnames.yaml
   - ./tenant-priority.yaml
   - ./postgres-clusters.yaml
+  - ./egress-labels.yaml

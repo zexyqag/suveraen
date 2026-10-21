@@ -5,3 +5,14 @@ resources:
   - ./objectbucketclaim.yaml
   - ./objectstore.yaml
   - ./networkpolicies.yaml
+  - ./offsite.yaml
+configMapGenerator:
+  - name: offsite-script
+    files:
+      - ./offsite.sh
+    options:
+      # A shell script: its variables are its own.
+      annotations:
+        kustomize.toolkit.fluxcd.io/substitute: disabled
+components:
+  - ../../../components/internet

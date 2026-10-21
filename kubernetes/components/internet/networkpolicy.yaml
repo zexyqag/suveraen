@@ -1,0 +1,31 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: internet
+spec:
+  podSelector:
+    matchLabels:
+      suveraen/egress: internet
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - ${POD_CIDR_V4}
+              - ${SERVICE_CIDR_V4}
+              - ${NODE_CIDR_V4}
+              - 169.254.0.0/16
+        - ipBlock:
+            cidr: "::/0"
+            except:
+              - "${POD_CIDR_V6}"
+              - "${SERVICE_CIDR_V6}"
+              - "${NODE_CIDR_V6}"
+              - "fe80::/10"
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443

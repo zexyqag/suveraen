@@ -17,6 +17,9 @@
 # their own to the pods allowed to reach it; and after a reboot Ceph comes back with its data. Each tenant's
 # PostgreSQL archives WAL and base backups to its own bucket, takes no restore while it runs, and lets each app reach
 # its own database alone, from its own namespace; a removed tenant's cluster and bucket go only with its namespaces.
+# The bucket goes off-site to two providers, encrypted with the tenant's own key, where the cluster's keys can neither
+# delete nor unlock a copy; and when the cluster's object store has lost it, a release brings the tenant's PostgreSQL
+# back from a provider's copy as a new generation, with its apps' data.
 {
   pkgs,
   module,
@@ -41,11 +44,101 @@ let
   theirs = "org.test";
 
   certs = import "${pkgs.path}/nixos/tests/common/acme/server/snakeoil-certs.nix";
+
+  # The two providers that keep the off-site copies, each at its own address on the internet node, on port 80.
+  providers = [
+    1
+    2
+  ];
+  s3Address = n: "192.168.1.10${toString n}";
+  # A provider as it is at onboarding: each tenant's bucket locked, and the tenant's key, which may list it and write
+  # copies under postgres/, but neither delete nor unlock them. The root keys are the provider's own, test stand-ins.
+  s3 =
+    { nodes, ... }:
+    {
+      boot.kernel.sysctl."net.ipv4.ip_nonlocal_bind" = 1;
+      networking.interfaces.eth1.ipv4.addresses = lib.mkAfter (
+        map (n: {
+          address = s3Address n;
+          prefixLength = 24;
+        }) providers
+      );
+      environment.systemPackages = [ pkgs.awscli2 ];
+      systemd.services = lib.listToAttrs (
+        lib.concatMap (
+          n:
+          let
+            name = "s3-${toString n}";
+            endpoint = "http://${s3Address n}";
+            root = "--access root-${toString n} --secret root-${toString n}-test-secret";
+            setup = pkgs.writeShellApplication {
+              name = "${name}-setup";
+              runtimeInputs = [
+                pkgs.awscli2
+                pkgs.versitygw
+                pkgs.yq-go
+                pkgs.jq
+                pkgs.curl
+              ];
+              text = ''
+                export AWS_ACCESS_KEY_ID=root-${toString n} AWS_SECRET_ACCESS_KEY=root-${toString n}-test-secret
+                export AWS_DEFAULT_REGION=us-east-1 AWS_ENDPOINT_URL=${endpoint} HOME=$RUNTIME_DIRECTORY
+                until curl -s -o /dev/null ${endpoint}; do sleep 1; done
+                prefix=$(yq .data.BACKUP_${toString n}_BUCKET_PREFIX ${clusterIn nodes}/settings.yaml)
+                for secrets in ${clusterIn nodes}/tenants/*/secrets.yaml; do
+                  bucket=$prefix$(basename "$(dirname "$secrets")")
+                  key=$(yq .stringData.POSTGRES_BACKUP_${toString n}_ACCESS_KEY_ID "$secrets")
+                  versitygw admin ${root} --endpoint-url ${endpoint} create-user --role user --access "$key" \
+                    --secret "$(yq .stringData.POSTGRES_BACKUP_${toString n}_SECRET_ACCESS_KEY "$secrets")"
+                  aws s3api create-bucket --bucket "$bucket" --object-lock-enabled-for-bucket
+                  aws s3api put-object-lock-configuration --bucket "$bucket" --object-lock-configuration \
+                    '{"ObjectLockEnabled": "Enabled", "Rule": {"DefaultRetention": {"Mode": "COMPLIANCE", "Days": 1}}}'
+                  aws s3api put-bucket-policy --bucket "$bucket" --policy "$(jq -cn --arg key "$key" --arg bucket "$bucket" '
+                    {Version: "2012-10-17", Statement: [
+                      {Effect: "Allow", Principal: {AWS: [$key]}, Action: ["s3:ListBucket"],
+                        Resource: ["arn:aws:s3:::\($bucket)"]},
+                      {Effect: "Allow", Principal: {AWS: [$key]},
+                        Action: ["s3:GetObject", "s3:PutObject", "s3:PutObjectRetention"],
+                        Resource: ["arn:aws:s3:::\($bucket)/postgres/*"]}]}')"
+                done
+              '';
+            };
+          in
+          [
+            (lib.nameValuePair name {
+              wantedBy = [ "multi-user.target" ];
+              serviceConfig = {
+                StateDirectory = map (dir: "${name}/${dir}") [
+                  "data"
+                  "versions"
+                  "iam"
+                ];
+                ExecStart =
+                  "${pkgs.versitygw}/bin/versitygw --port ${s3Address n}:80 ${root} --iam-dir /var/lib/${name}/iam"
+                  + " posix --versioning-dir /var/lib/${name}/versions /var/lib/${name}/data";
+              };
+            })
+            (lib.nameValuePair "${name}-setup" {
+              wantedBy = [ "multi-user.target" ];
+              requires = [ "${name}.service" ];
+              after = [ "${name}.service" ];
+              serviceConfig = {
+                Type = "oneshot";
+                RemainAfterExit = true;
+                RuntimeDirectory = "${name}-setup";
+                ExecStart = lib.getExe setup;
+              };
+            })
+          ]
+        ) providers
+      );
+      networking.firewall.allowedTCPPorts = [ 80 ];
+    };
 in
 pkgs.testers.runNixOSTest {
   name = "suveraen-e2e";
   # Below the CI job's limit, so the waits in the script run out first and print what went wrong.
-  globalTimeout = 4200;
+  globalTimeout = 6600;
 
   nodes.forge = {
     # Read-only smart HTTP; Flux can't fetch over dumb HTTP or git://.
@@ -88,7 +181,10 @@ pkgs.testers.runNixOSTest {
         };
     in
     {
-      imports = [ "${pkgs.path}/nixos/tests/common/acme/server" ];
+      imports = [
+        "${pkgs.path}/nixos/tests/common/acme/server"
+        s3
+      ];
       systemd.services.pebble.serviceConfig.ExecStart = lib.mkForce (
         lib.getExe (
           pebble "public" ''{"listenAddress": "0.0.0.0:443", "managementListenAddress": "0.0.0.0:15000"}''
@@ -196,7 +292,8 @@ pkgs.testers.runNixOSTest {
           local-data = [
             ''"forge.test. A ${nodes.forge.networking.primaryIPAddress}"''
             ''"acme.test. A ${nodes.acme.networking.primaryIPAddress}"''
-          ];
+          ]
+          ++ map (n: ''"s3-${toString n}.test. A ${s3Address n}"'') providers;
           # test. is one of Unbound's empty local zones, and isn't signed.
           local-zone = [ ''"test." transparent'' ];
           domain-insecure = [ "test." ];
@@ -258,18 +355,21 @@ pkgs.testers.runNixOSTest {
     in
     ''
       import base64
+      import ipaddress
       import json
       import os
       import re
       import shlex
+      import time
 
-      with open("${cluster}/settings.yaml") as f:
-          settings = f.read()
+      def read(path, key):
+          with open(path) as f:
+              value = re.search(rf"^  {key}: (\S+)$", f.read(), re.MULTILINE)
+          assert value, (path, key)
+          return value.group(1)
 
       def setting(key):
-          value = re.search(rf"^  {key}: (\S+)$", settings, re.MULTILINE)
-          assert value, key
-          return value.group(1)
+          return read("${cluster}/settings.yaml", key)
 
       # The test cluster trusts the test ACME CAs' servers through this CA.
       with open("${caCert}", "rb") as ca:
@@ -308,12 +408,13 @@ pkgs.testers.runNixOSTest {
               "kubectl -n rook-ceph logs deploy/rook-ceph-operator --tail=100",
               "kubectl -n rook-ceph logs -l app=rook-ceph-osd-prepare --tail=50 --all-containers",
               "kubectl get pvc,volumesnapshots -A",
+              "kubectl get clusters.postgresql.cnpg.io,backups.postgresql.cnpg.io,jobs -A",
               "lsblk -o NAME,TYPE,SIZE,PARTLABEL,FSTYPE",
               "free -m",
               "df -h /",
           ]:
               print(server.execute(cmd)[1])
-          print(acme.execute("journalctl -u pebble -u knot --no-pager | tail -n 50")[1])
+          print(acme.execute("journalctl -u pebble -u knot -u 's3-*' --no-pager | tail -n 80")[1])
           images()
 
       # What each container runs, by digest: how images only known by tag here get pinned.
@@ -405,6 +506,24 @@ pkgs.testers.runNixOSTest {
                   else:
                       continue
                   assert p["spec"].get("priorityClassName") == want, (p["metadata"]["name"], ns, p["spec"].get("priorityClassName"))
+
+          with subtest("The cluster's own ranges in its settings, which the way to the internet leaves out, hold its pods, Services and nodes"):
+              def within(address, kind):
+                  address = ipaddress.ip_address(address)
+                  assert address in ipaddress.ip_network(setting(f"{kind}_CIDR_V{address.version}")), (kind, address)
+
+              for p in items("pods"):
+                  if not p["spec"].get("hostNetwork"):
+                      for ip in p["status"].get("podIPs", []):
+                          within(ip["ip"], "POD")
+              for s in items("services"):
+                  for ip in s["spec"].get("clusterIPs", []):
+                      if ip != "None":
+                          within(ip, "SERVICE")
+              for n in items("nodes"):
+                  for address in n["status"]["addresses"]:
+                      if address["type"] == "InternalIP":
+                          within(address["address"], "NODE")
 
           def ceph(args):
               return json.loads(server.succeed(
@@ -732,27 +851,34 @@ pkgs.testers.runNixOSTest {
               apply(pod)
               server.succeed(f"kubectl -n {namespace} wait pod psql --for=condition=Ready --timeout=300s")
 
+          def archived(namespace):
+              # What was written so far, in a WAL segment of its own that is then archived.
+              local = f"kubectl -n {namespace} exec postgres-1 -c postgres -- psql -tAc"
+              count = int(server.succeed(f"{local} 'select archived_count from pg_stat_archiver'").strip())
+              server.succeed(
+                  f"{local} 'create table if not exists archived (at timestamptz); insert into archived values (now())'"
+                  f" && {local} 'select pg_switch_wal()'"
+              )
+              server.wait_until_succeeds(
+                  f"{local} 'select archived_count > {count} and failed_count = 0 from pg_stat_archiver' | grep -x t",
+                  timeout=300,
+              )
+
+          def recoverable(namespace, generation):
+              server.wait_until_succeeds(
+                  f"kubectl -n {namespace} get objectstore postgres"
+                  f" -o jsonpath='{{.status.serverRecoveryWindow.postgres-{generation}.firstRecoverabilityPoint}}' | grep .",
+                  timeout=600,
+              )
+
           with subtest("Each tenant's PostgreSQL archives its WAL and base backups to its own bucket"):
               for tenant in tenants:
                   ns = f"{tenant}-postgres"
                   server.succeed(
                       f"kubectl -n {ns} wait cluster postgres --for=condition=ContinuousArchiving --timeout=0"
                   )
-                  server.wait_until_succeeds(
-                      f"kubectl -n {ns} get objectstore postgres"
-                      " -o jsonpath='{.status.serverRecoveryWindow.postgres-g1.firstRecoverabilityPoint}' | grep .",
-                      timeout=600,
-                  )
-                  local = f"kubectl -n {ns} exec postgres-1 -c postgres -- psql -tAc"
-                  count = int(server.succeed(f"{local} 'select archived_count from pg_stat_archiver'").strip())
-                  server.succeed(
-                      f"{local} 'create table if not exists archived (at timestamptz); insert into archived values (now())'"
-                      f" && {local} 'select pg_switch_wal()'"
-                  )
-                  server.wait_until_succeeds(
-                      f"{local} 'select archived_count > {count} and failed_count = 0 from pg_stat_archiver' | grep -x t",
-                      timeout=300,
-                  )
+                  recoverable(ns, "g1")
+                  archived(ns)
 
           with subtest("An app reaches its own database alone, and only from its own namespace"):
               client(f"{first}-hello", "db")
@@ -779,6 +905,134 @@ pkgs.testers.runNixOSTest {
               patch = f"kubectl -n {first}-postgres patch cluster postgres --dry-run=server --type merge -p"
               denied_by(f"""{patch} '{{"spec":{{"bootstrap":{{"recovery":{{"source":"origin"}}}}}}}}'""",
                         policy("postgres-clusters"))
+
+          providers = ${builtins.toJSON (lib.genAttrs (map toString providers) s3Address)}
+
+          def at(n, keys, args):
+              key, secret = keys
+              return acme.execute(
+                  f"AWS_ACCESS_KEY_ID={key} AWS_SECRET_ACCESS_KEY={secret} AWS_DEFAULT_REGION=us-east-1"
+                  f" AWS_ENDPOINT_URL=http://{providers[n]} HOME=/tmp aws {args} 2>&1"
+              )
+
+          def refused_at(n, keys, args):
+              status, out = at(n, keys, args)
+              assert status != 0 and "AccessDenied" in out, (n, args, out)
+
+          def keys_of(tenant, n):
+              secrets = f"${cluster}/tenants/{tenant}/secrets.yaml"
+              return read(secrets, f"POSTGRES_BACKUP_{n}_ACCESS_KEY_ID"), read(secrets, f"POSTGRES_BACKUP_{n}_SECRET_ACCESS_KEY")
+
+          def bucket_at(n, tenant):
+              return setting(f"BACKUP_{n}_BUCKET_PREFIX") + tenant
+
+          with subtest("A tenant's bucket goes off-site to both providers, encrypted, where the cluster's keys can't remove a copy"):
+              ns = f"{first}-postgres"
+              for n in providers:
+                  assert setting(f"BACKUP_{n}_ENDPOINT") == f"http://s3-{n}.test", n
+                  acme.wait_for_unit(f"s3-{n}-setup.service")
+              archived(ns)
+              server.succeed(f"kubectl -n {ns} create job push --from=cronjob/offsite")
+              try:
+                  server.wait_until_succeeds(f"kubectl -n {ns} wait job push --for=condition=Complete --timeout=0", timeout=600)
+              finally:
+                  print(server.execute(f"kubectl -n {ns} logs job/push --tail=40")[1])
+              for n in providers:
+                  root = (f"root-{n}", f"root-{n}-test-secret")
+                  ours, bucket = keys_of(first, n), bucket_at(n, first)
+                  # What the provider holds: rclone's encrypted files, under names it encrypted too.
+                  data = f"/var/lib/s3-{n}/data/{bucket}"
+                  stored = acme.succeed(f"cd {data} && find postgres -type f").split()
+                  assert stored, n
+                  # Encrypted names are base32hex, which has neither "-" nor "w".
+                  plain = [f for f in stored if re.search(r"postgres-g|wals", f.removeprefix("postgres/"))]
+                  assert not plain, plain
+                  acme.succeed(
+                      f"cd {data} && find postgres -type f | while read -r f; do test \"$(head -c 6 \"$f\")\" = RCLONE || exit 1; done"
+                  )
+                  key = stored[0]
+                  status, out = at(n, root, f"s3api head-object --bucket {bucket} --key {key} --query '[ObjectLockMode,VersionId]' --output text")
+                  assert status == 0, out
+                  mode, version = out.split()
+                  assert mode == "COMPLIANCE", out
+                  # The cluster's key deletes nothing, shortens no lock, changes no bucket and reaches no other tenant's.
+                  version = f"--bucket {bucket} --key {key} --version-id {version}"
+                  refused_at(n, ours, f"s3api delete-object {version}")
+                  refused_at(n, ours, f"s3api delete-object --bucket {bucket} --key {key}")
+                  refused_at(n, ours, f"s3api put-object-retention {version} --retention"
+                             f" Mode=GOVERNANCE,RetainUntilDate=$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)")
+                  refused_at(n, ours, f"s3api put-object-lock-configuration --bucket {bucket} --object-lock-configuration"
+                             """ '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"GOVERNANCE","Days":1}}}'""")
+                  refused_at(n, ours, f"s3api delete-bucket-policy --bucket {bucket}")
+                  refused_at(n, ours, f"s3api list-objects-v2 --bucket {bucket_at(n, second)}")
+                  # Not even the provider's own key removes a locked copy.
+                  refused_at(n, root, f"s3api delete-object {version}")
+
+          def release(message, change):
+              forge.succeed(
+                  f"cd ${checkout} && {change}"
+                  " && ${asCgit} git -c user.name=test -c user.email=test@example.org -c gpg.format=ssh"
+                  f" -c user.signingkey=/srv/signer commit -q -a -S -m {message}"
+                  " && ${asCgit} git push -q /srv/git/suveraen.git main"
+              )
+              signed = forge.succeed("${asCgit} git -C /srv/git/suveraen.git rev-parse main").strip()
+              server.succeed(
+                  "kubectl -n flux-system annotate gitrepository suveraen --overwrite reconcile.fluxcd.io/requestedAt=$(date +%s)"
+              )
+              server.wait_until_succeeds(
+                  f"kubectl -n flux-system get gitrepository suveraen -o jsonpath='{{.status.artifact.revision}}' | grep -F {signed}",
+                  timeout=300,
+              )
+              return signed
+
+          with subtest("When the cluster's object store has lost a tenant's backups, a release brings its PostgreSQL back from a provider's copy"):
+              ns = f"{first}-postgres"
+              suspend = f"kubectl -n flux-system patch kustomization {first}-postgres-cluster --type merge -p"
+              server.succeed(f"""{suspend} '{{"spec":{{"suspend":true}}}}'""")
+              server.succeed(f"kubectl -n {ns} delete cluster postgres --timeout=300s")
+              # The tenant's bucket in the cluster loses all its backups.
+              wipe = restricted(
+                  ns, "wipe",
+                  "export HOME=/tmp RCLONE_CONFIG_RGW_TYPE=s3 RCLONE_CONFIG_RGW_PROVIDER=Ceph"
+                  ' RCLONE_CONFIG_RGW_ENDPOINT="http://$BUCKET_HOST:$BUCKET_PORT"'
+                  ' RCLONE_CONFIG_RGW_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" RCLONE_CONFIG_RGW_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"'
+                  ' && rclone purge "rgw:$BUCKET_NAME/postgres-g1" && test -z "$(rclone lsf -R "rgw:$BUCKET_NAME")"',
+                  labels={"suveraen/object-store": "client"},
+                  env=[{"secretRef": {"name": "bucket"}}, {"configMapRef": {"name": "bucket"}}],
+              )
+              wipe["spec"]["containers"][0] |= {
+                  "image": server.succeed(
+                      f"kubectl -n {ns} get cronjob offsite -o jsonpath='{{.spec.jobTemplate.spec.template.spec.containers[0].image}}'"
+                  ).strip(),
+                  "resources": {"requests": {"cpu": "10m", "memory": "64Mi"}, "limits": {"memory": "256Mi"}},
+              }
+              apply(wipe)
+              finished(ns, "wipe")
+              knobs = {"POSTGRES_GENERATION": "g2", "POSTGRES_BOOTSTRAP": "recovery", "POSTGRES_ORIGIN": "g1",
+                       "POSTGRES_RESTORE_FROM": "offsite-2"}
+              lines = "".join(f"      {k}: {v}\\n" for k, v in knobs.items())
+              release("restore", f"printf '{lines}' | ${asCgit} tee -a tenants/{first}/tenant.yaml >/dev/null")
+              # Generation g1 comes back from the provider into the tenant's bucket first.
+              server.wait_until_succeeds(f"kubectl -n {ns} wait job fetch-g2 --for=condition=Complete --timeout=0", timeout=600)
+              server.wait_until_succeeds(
+                  f"kubectl -n flux-system wait kustomization {first}-postgres --for=condition=Ready --timeout=0", timeout=600
+              )
+              server.succeed(f"""{suspend} '{{"spec":{{"suspend":false}}}}'""")
+              server.wait_until_succeeds(f"kubectl -n {ns} wait cluster postgres --for=condition=Ready --timeout=0", timeout=1200)
+              server.wait_until_succeeds(
+                  f"kubectl -n flux-system wait kustomization {first}-postgres-cluster --for=condition=Ready --timeout=0",
+                  timeout=600,
+              )
+              # With the app's data, which it reaches with its own credentials, and archiving as generation g2.
+              client(f"{first}-hello", "db")
+              for _ in range(60):
+                  status, out = psql(f"{first}-hello", "psql", "select v from probe")
+                  if status == 0:
+                      break
+                  time.sleep(5)
+              assert status == 0 and out.strip() == "kept", out
+              server.succeed(f"kubectl -n {first}-hello delete pod psql")
+              recoverable(ns, "g2")
 
           with subtest("The standby CA issues too, with our external account there"):
               standby = {
@@ -821,20 +1075,9 @@ pkgs.testers.runNixOSTest {
               theirs = hosts_of(second)
               namespaces = server.succeed(f"kubectl get namespace -l suveraen/tenant={second} -o name").split()
               assert theirs and namespaces, (theirs, namespaces)
-              forge.succeed(
-                  f"cd ${checkout} && ${asCgit} git rm -q -r tenants/{second}"
-                  f" && ${asCgit} sed -i '\\#^  - ./tenants/{second}$#d' kustomization.yaml"
-                  " && ${asCgit} git -c user.name=test -c user.email=test@example.org -c gpg.format=ssh"
-                  " -c user.signingkey=/srv/signer commit -q -a -S -m remove"
-                  " && ${asCgit} git push -q /srv/git/suveraen.git main"
-              )
-              signed = forge.succeed("${asCgit} git -C /srv/git/suveraen.git rev-parse main").strip()
-              server.succeed(
-                  "kubectl -n flux-system annotate gitrepository suveraen --overwrite reconcile.fluxcd.io/requestedAt=$(date +%s)"
-              )
-              server.wait_until_succeeds(
-                  f"kubectl -n flux-system get gitrepository suveraen -o jsonpath='{{.status.artifact.revision}}' | grep -F {signed}",
-                  timeout=300,
+              signed = release(
+                  "remove",
+                  f"${asCgit} git rm -q -r tenants/{second} && ${asCgit} sed -i '\\#^  - ./tenants/{second}$#d' kustomization.yaml",
               )
 
               def gone(what):
