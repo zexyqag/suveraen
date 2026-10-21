@@ -20,9 +20,10 @@ spec:
     substitute:
       APP: hello
       QUOTA_CPU: ${HELLO_QUOTA_CPU:=100m}
-      # The app and up to three movers, whose volumes and caches come to four times the volume and 768Mi.
+      # The app and up to three movers at 256Mi each.
       QUOTA_MEMORY: ${HELLO_QUOTA_MEMORY:=1Gi}
       QUOTA_EPHEMERAL_STORAGE: ${HELLO_QUOTA_EPHEMERAL_STORAGE:=1Gi}
+      # The volume and the three movers' copies of it, each mover with a 256Mi cache.
       QUOTA_STORAGE: ${HELLO_QUOTA_STORAGE:=5Gi}
       # Flux reads a substituted value that looks like a number back as one, which a Kustomization refuses, so a
       # tenant can resize only quantities with a unit.
@@ -36,7 +37,9 @@ spec:
       DATA_UID: "65534"
       DATA_SCHEDULE_1: ${HELLO_DATA_SCHEDULE_1:=17 * * * *}
       DATA_SCHEDULE_2: ${HELLO_DATA_SCHEDULE_2:=47 * * * *}
+      # A new value restores the latest copy again, from offsite-1 or offsite-2.
       DATA_RESTORE: ${HELLO_DATA_RESTORE:=once}
+      DATA_RESTORE_FROM: ${HELLO_DATA_RESTORE_FROM:=offsite-1}
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization

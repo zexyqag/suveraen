@@ -3,7 +3,7 @@
 apiVersion: v1
 kind: Secret
 metadata:
-  name: volsync-1
+  name: offsite-1
 stringData:
   RESTIC_REPOSITORY: s3:${BACKUP_1_ENDPOINT}/${BACKUP_1_BUCKET_PREFIX}${TENANT}/volsync/${APP}
   RESTIC_PASSWORD: ${HELLO_RESTIC_PASSWORD}
@@ -14,7 +14,7 @@ stringData:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: volsync-2
+  name: offsite-2
 stringData:
   RESTIC_REPOSITORY: s3:${BACKUP_2_ENDPOINT}/${BACKUP_2_BUCKET_PREFIX}${TENANT}/volsync/${APP}
   RESTIC_PASSWORD: ${HELLO_RESTIC_PASSWORD}

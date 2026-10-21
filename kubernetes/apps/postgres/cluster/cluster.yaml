@@ -23,10 +23,11 @@ spec:
     limits:
       memory: ${MEMORY}
   enableSuperuserAccess: false
-  # Its pods reach the object store (apps/postgres/app, platform/ceph).
+  # Its pods reach the object store (apps/postgres/app, platform/ceph), and its volumes are backed up by Barman.
   inheritedMetadata:
     labels:
       suveraen/object-store: client
+      suveraen/backup: postgres
   plugins:
     - name: barman-cloud.cloudnative-pg.io
       isWALArchiver: true

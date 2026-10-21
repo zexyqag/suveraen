@@ -1,14 +1,59 @@
 ---
 # An app's volume, data, which VolSync copies with restic to both providers, encrypted with the app's own password,
-# and fills from provider 1's latest copy when it is made: an app's first volume starts empty, a lost one comes back.
-# The app's Secrets volsync-1 and volsync-2 hold its keys, which reach only volsync/<app>/ in the tenant's bucket at
-# each provider. The movers run as the app's user and are the namespace's only pods that reach the internet.
-#
-# To bring a lost volume back, a release sets <APP>_DATA_RESTORE to a new value, which restores the latest copy
-# again; then the operator deletes PVC data, once nothing mounts it, and Flux makes it anew from that restore.
+# and which its charts can't delete (platform/policies/backup-volumes). A volume is filled from the latest restore
+# when it is made: the first one starts empty, and one made anew holds what that restore found, so a lost volume
+# comes back whole only once a release has restored the latest copy again. The app's Secrets offsite-1 and offsite-2
+# hold its keys, which reach only volsync/<app>/ in the tenant's bucket at each provider. The movers run as the app's
+# user and are the namespace's only pods that reach the internet.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:
   - ./volume.yaml
 components:
   - ../internet
+patches:
+  - target:
+      group: volsync.backube
+    patch: |-
+      apiVersion: volsync.backube/v1alpha1
+      kind: _
+      metadata:
+        name: _
+      spec:
+        restic:
+          copyMethod: Snapshot
+          storageClassName: ceph-block
+          volumeSnapshotClassName: ceph-block
+          cacheCapacity: ${DATA_CACHE_SIZE:=256Mi}
+          cacheStorageClassName: ceph-block
+          moverSecurityContext:
+            runAsNonRoot: true
+            runAsUser: ${DATA_UID}
+            runAsGroup: ${DATA_UID}
+            fsGroup: ${DATA_UID}
+            seccompProfile:
+              type: RuntimeDefault
+          moverPodLabels:
+            suveraen/egress: internet
+          moverResources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+              ephemeral-storage: 64Mi
+            limits:
+              memory: ${DATA_MOVER_MEMORY:=256Mi}
+              ephemeral-storage: 256Mi
+  - target:
+      kind: ReplicationSource
+    patch: |-
+      apiVersion: volsync.backube/v1alpha1
+      kind: ReplicationSource
+      metadata:
+        name: _
+      spec:
+        restic:
+          pruneIntervalDays: 7
+          retain:
+            hourly: 24
+            daily: 7
+            weekly: 5

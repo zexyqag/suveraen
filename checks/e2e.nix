@@ -53,9 +53,9 @@ let
   ];
   s3Address = n: "192.168.1.10${toString n}";
   # A provider as it is at onboarding: each tenant's bucket locked, and a key for each of the tenant's apps with copies
-  # there, which may list it and write under the app's own prefix: postgres/, whose copies it never deletes, or
-  # volsync/<app>/, where restic deletes what it prunes. None of them unlocks a copy, which outlives any delete for as
-  # long as it is locked. The root keys are the provider's own, test stand-ins.
+  # there, which may list and write under the app's own prefix alone: postgres/, whose copies it never deletes, or
+  # volsync/<app>/, where restic deletes what it prunes but never the repository's config or keys. None of them unlocks
+  # a copy, which outlives any delete for as long as it is locked. The root keys are the provider's own, test stand-ins.
   s3 =
     { nodes, ... }:
     {
@@ -100,16 +100,19 @@ let
                     versitygw admin ${root} --endpoint-url ${endpoint} create-user --role user --access "$key" \
                       --secret "$(yq ".stringData.''${app}_BACKUP_${toString n}_SECRET_ACCESS_KEY" "$secrets")"
                     if [ "$app" = POSTGRES ]; then
-                      path=postgres/ actions='["s3:GetObject", "s3:PutObject", "s3:PutObjectRetention"]'
+                      path=postgres/ actions='["s3:GetObject", "s3:PutObject", "s3:PutObjectRetention"]' pruned='[]'
                     else
-                      path=volsync/''${app,,}/ actions='["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]'
+                      path=volsync/''${app,,}/ actions='["s3:GetObject", "s3:PutObject"]'
+                      pruned='["data/", "index/", "snapshots/", "locks/"]'
                     fi
                     statements+=("$(jq -cn --arg key "$key" --arg bucket "$bucket" --arg path "$path" \
-                      --argjson actions "$actions" '[
+                      --argjson actions "$actions" --argjson pruned "$pruned" '[
                         {Effect: "Allow", Principal: {AWS: [$key]}, Action: ["s3:ListBucket"],
-                          Resource: ["arn:aws:s3:::\($bucket)"]},
+                          Resource: ["arn:aws:s3:::\($bucket)"], Condition: {StringLike: {"s3:prefix": ["\($path)*"]}}},
                         {Effect: "Allow", Principal: {AWS: [$key]}, Action: $actions,
-                          Resource: ["arn:aws:s3:::\($bucket)/\($path)*"]}]')")
+                          Resource: ["arn:aws:s3:::\($bucket)/\($path)*"]}]
+                        + if $pruned == [] then [] else [{Effect: "Allow", Principal: {AWS: [$key]},
+                          Action: ["s3:DeleteObject"], Resource: [$pruned[] | "arn:aws:s3:::\($bucket)/\($path)\(.)*"]}] end')")
                   done
                   aws s3api put-bucket-policy --bucket "$bucket" \
                     --policy "$(printf '%s\n' "''${statements[@]}" | jq -cs '{Version: "2012-10-17", Statement: add}')"
@@ -420,7 +423,7 @@ pkgs.testers.runNixOSTest {
               "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph}'",
               "kubectl -n rook-ceph logs deploy/rook-ceph-operator --tail=100",
               "kubectl -n rook-ceph logs -l app=rook-ceph-osd-prepare --tail=50 --all-containers",
-              "kubectl get pvc,volumesnapshots -A",
+              "kubectl get pv,pvc,volumesnapshots -A",
               "kubectl get clusters.postgresql.cnpg.io,backups.postgresql.cnpg.io,jobs -A",
               "kubectl get replicationsources,replicationdestinations -A -o wide",
               "kubectl logs -A -l app.kubernetes.io/created-by=volsync --tail=30 --prefix",
@@ -933,9 +936,9 @@ pkgs.testers.runNixOSTest {
               status, out = at(n, keys, args)
               assert status != 0 and "AccessDenied" in out, (n, args, out)
 
-          def keys_of(tenant, n):
+          def keys_of(tenant, n, app="POSTGRES"):
               secrets = f"${cluster}/tenants/{tenant}/secrets.yaml"
-              return read(secrets, f"POSTGRES_BACKUP_{n}_ACCESS_KEY_ID"), read(secrets, f"POSTGRES_BACKUP_{n}_SECRET_ACCESS_KEY")
+              return read(secrets, f"{app}_BACKUP_{n}_ACCESS_KEY_ID"), read(secrets, f"{app}_BACKUP_{n}_SECRET_ACCESS_KEY")
 
           def bucket_at(n, tenant):
               return setting(f"BACKUP_{n}_BUCKET_PREFIX") + tenant
@@ -978,6 +981,7 @@ pkgs.testers.runNixOSTest {
                   refused_at(n, ours, f"s3api put-object-lock-configuration --bucket {bucket} --object-lock-configuration"
                              """ '{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"GOVERNANCE","Days":1}}}'""")
                   refused_at(n, ours, f"s3api delete-bucket-policy --bucket {bucket}")
+                  refused_at(n, ours, f"s3api list-objects-v2 --bucket {bucket} --prefix volsync/")
                   refused_at(n, ours, f"s3api list-objects-v2 --bucket {bucket_at(n, second)}")
                   # Not even the provider's own key removes a locked copy.
                   refused_at(n, root, f"s3api delete-object {version}")
@@ -1048,9 +1052,9 @@ pkgs.testers.runNixOSTest {
               server.succeed(f"kubectl -n {first}-hello delete pod psql")
               recoverable(ns, "g2")
 
-          with subtest("An app's volume goes to both providers, encrypted, and comes back from them when it is lost"):
+          with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied"):
               ns = f"{first}-hello"
-              server.succeed(f"kubectl -n {ns} exec deploy/hello -- sh -c 'echo kept > /data/marker'")
+              server.succeed(f"kubectl -n {ns} exec deploy/hello -- sh -c 'echo kept > /data/marker && echo gone > /data/removed'")
 
               def sync(kind, name, value):
                   server.succeed(
@@ -1062,16 +1066,61 @@ pkgs.testers.runNixOSTest {
                       timeout=600,
                   )
 
+              def restore(value, provider):
+                  knobs = f"      HELLO_DATA_RESTORE: {value}\\n      HELLO_DATA_RESTORE_FROM: offsite-{provider}\\n"
+                  release(
+                      f"restore-volume-{value}",
+                      f"${asCgit} sed -i '/HELLO_DATA_RESTORE/d' tenants/{first}/tenant.yaml"
+                      f" && printf '{knobs}' | ${asCgit} tee -a tenants/{first}/tenant.yaml >/dev/null",
+                  )
+                  server.wait_until_succeeds(
+                      f"kubectl -n {ns} get replicationdestination data -o jsonpath='{{.status.lastManualSync}}' | grep -x {value}",
+                      timeout=600,
+                  )
+                  server.wait_until_succeeds(
+                      f"kubectl -n flux-system wait kustomization {ns} --for=condition=Ready --timeout=0", timeout=600
+                  )
+
               for n in providers:
-                  sync("replicationsource", f"data-{n}", "probe")
+                  sync("replicationsource", f"data-{n}", "first")
                   copies = f"/var/lib/s3-{n}/data/{bucket_at(n, first)}/volsync/hello"
                   acme.succeed(f"test -f {copies}/config && test -n \"$(find {copies}/data -type f)\" && ! grep -rq kept {copies}")
-              knob = "      HELLO_DATA_RESTORE: again\\n"
-              release("restore-volume", f"printf '{knob}' | ${asCgit} tee -a tenants/{first}/tenant.yaml >/dev/null")
-              server.wait_until_succeeds(
-                  f"kubectl -n {ns} get replicationdestination data -o jsonpath='{{.status.lastManualSync}}' | grep -x again",
-                  timeout=600,
-              )
+                  # The app's key reaches its own prefix alone, and can't take the repository's config or keys away.
+                  ours, bucket = keys_of(first, n, "HELLO"), bucket_at(n, first)
+                  refused_at(n, ours, f"s3api list-objects-v2 --bucket {bucket} --prefix postgres/")
+                  refused_at(n, ours, f"s3api delete-object --bucket {bucket} --key volsync/hello/config")
+                  key = acme.succeed(f"cd {copies}/.. && find hello/keys -type f | head -1").strip()
+                  refused_at(n, ours, f"s3api delete-object --bucket {bucket} --key volsync/{key}")
+
+              # Provider 1's copy, restored, holds both files.
+              restore("one", 1)
+              image = server.succeed(
+                  f"kubectl -n {ns} get replicationdestination data -o jsonpath='{{.status.latestImage.name}}'"
+              ).strip()
+              apply({
+                  "apiVersion": "v1",
+                  "kind": "PersistentVolumeClaim",
+                  "metadata": {"name": "restored", "namespace": ns},
+                  "spec": {
+                      "storageClassName": "ceph-block",
+                      "accessModes": ["ReadWriteOnce"],
+                      "resources": {"requests": {"storage": "1Gi"}},
+                      "dataSource": {"apiGroup": "snapshot.storage.k8s.io", "kind": "VolumeSnapshot", "name": image},
+                  },
+              })
+              apply(restricted(
+                  ns, "reader", "cat /data/marker /data/removed",
+                  mounts=[{"name": "data", "mountPath": "/data"}],
+                  volumes=[{"name": "data", "persistentVolumeClaim": {"claimName": "restored"}}],
+              ))
+              assert finished(ns, "reader").split() == ["kept", "gone"]
+              server.succeed(f"kubectl -n {ns} delete pod reader && kubectl -n {ns} delete pvc restored")
+
+              # A file deleted before the next copies is gone again from provider 2's copy, restored over the first.
+              server.succeed(f"kubectl -n {ns} exec deploy/hello -- rm /data/removed")
+              for n in providers:
+                  sync("replicationsource", f"data-{n}", "second")
+              restore("two", 2)
               # Once nothing mounts the lost volume, which its deletion waits for, Flux makes it anew from the restore.
               server.succeed(
                   f"kubectl -n {ns} scale deployment hello --replicas=0 && kubectl -n {ns} delete pvc data --timeout=300s"
@@ -1085,6 +1134,21 @@ pkgs.testers.runNixOSTest {
                   f" && kubectl -n {ns} rollout status deployment hello --timeout=300s"
               )
               assert server.succeed(f"kubectl -n {ns} exec deploy/hello -- cat /data/marker").strip() == "kept"
+              server.fail(f"kubectl -n {ns} exec deploy/hello -- test -e /data/removed")
+
+          with subtest("Nothing is left of the volumes copies and restores worked on, and tenants' volumes are backed up"):
+              server.wait_until_succeeds(
+                  "test -z \"$(kubectl get pv -o jsonpath='{.items[?(@.status.phase!=\"Bound\")].metadata.name}')\"",
+                  timeout=300,
+              )
+              # Each volume in a tenant's namespace is one the platform backs up, or one VolSync works on.
+              labels = {n["metadata"]["name"]: n["metadata"].get("labels", {}) for n in items("namespaces")}
+              for c in items("pvc"):
+                  meta = c["metadata"]
+                  if "suveraen/tenant" in labels[meta["namespace"]]:
+                      assert "suveraen/backup" in meta.get("labels", {}) or (
+                          meta.get("labels", {}).get("app.kubernetes.io/created-by") == "volsync"
+                      ), meta
 
           with subtest("The standby CA issues too, with our external account there"):
               standby = {

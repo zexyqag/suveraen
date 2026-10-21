@@ -400,26 +400,32 @@ for dir in kubernetes/clusters/*/; do
           || fail "$cluster/$name: an app's namespace is $name, labelled suveraen/tier=app, suveraen/tenant=$t and" \
             "suveraen/app=$app"
         # An app's volume is copied as components/volsync has it, as the app's own user, into its own prefix at
-        # both providers.
+        # both providers, and restored from either with the files deleted since gone.
         bad=$(yq ea '[select(.kind == "Namespace" and .metadata.annotations."volsync.backube/privileged-movers" != null)
           | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: VolSync's movers run as the app's user, never privileged: $bad"
         copies=$(yq ea '[select(.kind == "ReplicationSource" or .kind == "ReplicationDestination") | .kind + " "
           + .metadata.name + " " + .spec.restic.repository + " " + (.spec.sourcePVC // "-") + " "
-          + (.spec.restic.moverSecurityContext.runAsNonRoot // false | tostring)] | sort | join(",")' "$file")
+          + (.spec.restic.moverSecurityContext.runAsNonRoot // false | tostring) + " "
+          + (.spec.restic.enableFileDeletion // false | tostring)] | sort | join(",")' "$file")
         if [ -n "$copies" ]; then
-          [ "$copies" = "ReplicationDestination data volsync-1 - true,ReplicationSource data-1 volsync-1 data true,$(
-            )ReplicationSource data-2 volsync-2 data true" ] \
+          sources="ReplicationSource data-1 offsite-1 data true false,ReplicationSource data-2 offsite-2 data true false"
+          [[ $copies == "ReplicationDestination data offsite-"[12]" - true true,$sources" ]] \
             || fail "$cluster/$name: an app's volume is copied by components/volsync alone, as a user that isn't" \
-              "root: $copies"
+              "root, and restored from offsite-1 or offsite-2 with deletions: $copies"
           vars=$w/$name.vars.yaml
           for n in 1 2; do
             repository="s3:$(yq ".BACKUP_${n}_ENDPOINT" "$vars")/$(yq ".BACKUP_${n}_BUCKET_PREFIX" "$vars")$t/volsync/$app"
-            [ "$(yq ea "[select(.kind == \"Secret\" and .metadata.name == \"volsync-$n\")
+            [ "$(yq ea "[select(.kind == \"Secret\" and .metadata.name == \"offsite-$n\")
               | .stringData.RESTIC_REPOSITORY // \"-\"] | join(\",\")" "$file")" = "$repository" ] \
-              || fail "$cluster/$name: copies of $app's volume go to $repository, from Secret volsync-$n"
+              || fail "$cluster/$name: copies of $app's volume go to $repository, from Secret offsite-$n"
           done
         fi
+        # Volumes the platform makes are copied off-site or made anew by it, and never pruned.
+        bad=$(yq ea '[select(.kind == "PersistentVolumeClaim") | select(.metadata.labels."suveraen/backup" == null
+          or .metadata.annotations."kustomize.toolkit.fluxcd.io/prune" != "disabled") | .metadata.name] | .[]' "$file")
+        [ -z "$bad" ] || fail "$cluster/$name: an app's volumes say how they are backed up (suveraen/backup) and are" \
+          "never pruned: $bad"
         if [ "$app" = postgres ]; then
           # The tenant's own bucket, kept when its claim goes, which Barman writes to in the cluster's object store only.
           [ "$(yq ea '[select(.kind == "ObjectBucketClaim") | .metadata.name + " " + .spec.bucketName + " "
@@ -490,7 +496,8 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           "superuser " + (.spec.enableSuperuserAccess // false | tostring),
           "image " + (.spec | has("imageName") | tostring) + "/" + (.spec.imageCatalogRef.kind // "-") + "/"
             + (.spec.imageCatalogRef.name // "-"),
-          "storage " + (.spec.storage.storageClass // "-") + "/" + (.spec | has("walStorage") | tostring),
+          "storage " + (.spec.storage.storageClass // "-") + "/" + (.spec | has("walStorage") | tostring) + "/"
+            + (.spec.inheritedMetadata.labels."suveraen/backup" // "-"),
           "pg_hba " + (.spec.postgresql.pg_hba // [] | join(";")),
           "archive " + ([.spec.plugins[] | .name + ":" + (.isWALArchiver // false | tostring) + ":"
             + (.parameters | to_entries | map(.key + "=" + .value) | join("+"))] | join(";")),
@@ -498,13 +505,13 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
             + ":" + ([.spec.externalClusters[]? | select(.name == "origin") | .plugin.parameters.serverName]
             | join(","))] | .[]' "$file" | sed 's/^bootstrap initdb::$/bootstrap initdb/' >"$w/$name.pg"
         printf '%s\n' "prune disabled" "superuser false" "image false/ClusterImageCatalog/postgresql" \
-          "storage ceph-block/false" "pg_hba hostssl sameuser all all scram-sha-256;host all all all reject" \
+          "storage ceph-block/false/postgres" "pg_hba hostssl sameuser all all scram-sha-256;host all all all reject" \
           "archive barman-cloud.cloudnative-pg.io:true:barmanObjectName=postgres+serverName=postgres-$generation" \
           "bootstrap $from" >"$w/$name.pg.want"
         bad=$(diff "$w/$name.pg.want" "$w/$name.pg" | sed -n 's/^> //p' | paste -sd';' || true)
         [ -z "$bad" ] || fail "$cluster/$name: a tenant's PostgreSQL is never pruned, has no superuser access, takes" \
-          "its image from the catalog and its volume from ceph-block, lets each role reach its own database alone over" \
-          "TLS, and archives with Barman to postgres-$generation: $bad"
+          "its image from the catalog and its volume from ceph-block, labelled as Barman's to back up, lets each role" \
+          "reach its own database alone over TLS, and archives with Barman to postgres-$generation: $bad"
         ;;
       ./kubernetes/apps/*/db)
         app=$(basename "$(dirname "$path")")

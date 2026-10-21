@@ -47,6 +47,10 @@ patches:
           - apiVersion: objectbucket.io/v1alpha1
             kind: ObjectBucketClaim
             current: status.phase == 'Bound'
+          # Ready once the restore a release asked for has run, which a volume made anew is filled from.
+          - apiVersion: volsync.backube/v1alpha1
+            kind: ReplicationDestination
+            current: status.lastManualSync == spec.trigger.manual
           # Ready once it archives its WAL, so nothing builds on a database without backups.
           - apiVersion: postgresql.cnpg.io/v1
             kind: Cluster

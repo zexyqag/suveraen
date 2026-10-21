@@ -446,11 +446,17 @@ refuses volsync-other-bucket "copies of hello's volume go to s3:http://s3-2.test
   "sed -i 's|\${BACKUP_2_BUCKET_PREFIX}\${TENANT}|\${BACKUP_2_BUCKET_PREFIX}alpha|' $V"
 refuses volsync-other-key "kubernetes/apps/hello: an app reads only its own keys, not POSTGRES_BACKUP_1_ACCESS_KEY_ID" \
   "sed -i 's/HELLO_BACKUP_1_ACCESS_KEY_ID/POSTGRES_BACKUP_1_ACCESS_KEY_ID/' $V"
-refuses volsync-root-mover "$volsync" \
-  "yq -i '(select(.kind == \"ReplicationSource\") | .spec.restic.moverSecurityContext.runAsNonRoot) = false' \
-  components/volsync/volume.yaml"
+refuses volsync-root-mover "$volsync" "sed -i 's/runAsNonRoot: true/runAsNonRoot: false/' components/volsync/kustomization.yaml"
 refuses volsync-other-source "$volsync" \
   "yq -i '(select(.kind == \"ReplicationSource\") | .spec.sourcePVC) = \"other\"' components/volsync/volume.yaml"
+refuses volsync-restore-elsewhere "$volsync" "knob HELLO_DATA_RESTORE_FROM volsync-1"
+refuses volsync-restore-keeps-files "$volsync" \
+  "yq -i '(select(.kind == \"ReplicationDestination\") | .spec.restic.enableFileDeletion) = false' \
+  components/volsync/volume.yaml"
+refuses volume-unlabelled "an app's volumes say how they are backed up (suveraen/backup) and are never pruned: data" \
+  "yq -i '(select(.kind == \"PersistentVolumeClaim\") | .metadata.labels) = {}' components/volsync/volume.yaml"
+refuses volume-prunable "an app's volumes say how they are backed up (suveraen/backup) and are never pruned: data" \
+  "yq -i '(select(.kind == \"PersistentVolumeClaim\") | .metadata.annotations) = {}' components/volsync/volume.yaml"
 refuses volsync-privileged "VolSync's movers run as the app's user, never privileged" \
   "yq -i '.metadata.annotations.\"volsync.backube/privileged-movers\" = \"true\"' components/app/namespace.yaml"
 
@@ -462,6 +468,7 @@ renders two-apps "other"
 renders real-cluster "$real"
 renders recovery "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery"
 renders recovery-offsite "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery; knob POSTGRES_RESTORE_FROM offsite-2"
+renders volume-restore-offsite-2 "knob HELLO_DATA_RESTORE again; knob HELLO_DATA_RESTORE_FROM offsite-2"
 renders failure-domain-host \
   "yq -i '.data.CEPH_FAILURE_DOMAIN = \"host\" | .data.CEPH_DAEMONS_SHARE_NODE = \"false\"' clusters/test/settings.yaml"
 renders failover "sed -i 's|issuer/public/ks.yaml|issuer/failover/ks.yaml|' clusters/test/kustomization.yaml"
