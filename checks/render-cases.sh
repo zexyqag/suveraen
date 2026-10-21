@@ -416,6 +416,10 @@ refuses cluster-prunable "$pg" "yq -i 'del(.metadata.annotations)' $C"
 refuses cluster-local-storage "$pg" "yq -i '.spec.storage.storageClass = \"local-path\"' $C"
 refuses server-name-fixed "$pg" "knob POSTGRES_GENERATION g2; sed -i 's/postgres-\${GENERATION}\$/postgres-g1/' $C"
 refuses generation-format "generations are g<number>: gen2" "knob POSTGRES_GENERATION gen2"
+refuses postgres-quota-small "bravo-postgres's quota, 1Gi, can't hold 1 instances of 1Gi" \
+  "knob POSTGRES_QUOTA_MEMORY 1Gi; knob POSTGRES_MEMORY 1Gi"
+refuses postgres-quota-three "can't hold 3 instances of 512Mi" "yq -i '.data.PG_INSTANCES = \"3\"' clusters/test/settings.yaml
+  knob POSTGRES_QUOTA_MEMORY 2Gi"
 refuses recovery-same-generation "recovers from an earlier generation than its own, g1" \
   "knob POSTGRES_BOOTSTRAP recovery"
 refuses bucket-other-tenant "a tenant's bucket is bravo-postgres" \
@@ -434,6 +438,13 @@ refuses internet-other-port "$internet" "sed -i 's/port: 443/port: 22/' componen
 refuses internet-link-local "$internet" "sed -i '/169.254.0.0/d' components/internet/networkpolicy.yaml"
 refuses internet-own-pods "$internet" "sed -i '/POD_CIDR_V6/d' components/internet/networkpolicy.yaml"
 refuses internet-for-all "$internet" "yq -i '.spec.podSelector = {}' components/internet/networkpolicy.yaml"
+api="the network policy api-server opens the API server on the nodes to CloudNativePG's pods"
+refuses api-server-other-port "$api" "sed -i 's/port: 6443/port: 10250/' apps/postgres/app/networkpolicies.yaml"
+refuses api-server-all-pods "$api" \
+  "yq -i '(select(.metadata.name == \"api-server\") | .spec.podSelector) = {}' apps/postgres/app/networkpolicies.yaml"
+refuses api-server-in-app "$api, in a tenant's PostgreSQL alone" \
+  "yq 'select(.metadata.name == \"api-server\")' apps/postgres/app/networkpolicies.yaml >apps/hello/app/api.yaml
+  append apps/hello/app/kustomization.yaml '  - ./api.yaml\n'"
 refuses offsite-one-provider "the two providers' endpoints differ" \
   "yq -i '.data.BACKUP_2_ENDPOINT = .data.BACKUP_1_ENDPOINT' clusters/test/settings.yaml"
 refuses offsite-plain-http "prod: the providers' endpoints are https" \

@@ -512,6 +512,19 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
         [ -z "$bad" ] || fail "$cluster/$name: a tenant's PostgreSQL is never pruned, has no superuser access, takes" \
           "its image from the catalog and its volume from ceph-block, labelled as Barman's to back up, lets each role" \
           "reach its own database alone over TLS, and archives with Barman to postgres-$generation: $bad"
+        # Its namespace's quota holds every instance with its Barman sidecar, and a job copying the bucket.
+        app=$rendered/$t-postgres.yaml
+        instances=$(yq ea '[select(.kind == "Cluster")] | .[0].spec.instances' "$file")
+        memory=$(yq ea '[select(.kind == "Cluster")] | .[0].spec.resources.limits.memory' "$file")
+        sidecar=$(yq ea '[select(.kind == "ObjectStore")]
+          | .[0].spec.instanceSidecarConfiguration.resources.limits.memory' "$app")
+        job=$(yq ea '[select(.kind == "CronJob")]
+          | .[0].spec.jobTemplate.spec.template.spec.containers[0].resources.limits.memory' "$app")
+        quota=$(yq ea '[select(.kind == "ResourceQuota")] | .[0].spec.hard."limits.memory"' "$app")
+        need=$((instances * ($(quantity "$memory") + $(quantity "$sidecar")) + $(quantity "$job")))
+        [ "$need" -le "$(quantity "$quota")" ] \
+          || fail "$cluster/$name: $t-postgres's quota, $quota, can't hold $instances instances of $memory, each with a" \
+            "$sidecar sidecar, and a $job job"
         ;;
       ./kubernetes/apps/*/db)
         app=$(basename "$(dirname "$path")")
@@ -609,7 +622,17 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           | .spec | sort_keys(..)] | .[]' "$file" | grep -vxF "$want" || true)
         [ -z "$bad" ] || fail "$cluster/$name: the network policy internet opens web ports to all but the cluster's own" \
           "pods, Services and nodes, for pods labelled suveraen/egress=internet: $bad"
-        bad=$(yq ea '[select(.kind == "NetworkPolicy" and .metadata.name != "internet") | .metadata.name as $np
+        # The way to the API server on the nodes, for CloudNativePG's pods alone.
+        want='{"egress":[{"ports":[{"port":6443,"protocol":"TCP"}],"to":[{"ipBlock":{"cidr":"'$(v NODE_CIDR_V4)'"}},'
+        want+='{"ipBlock":{"cidr":"'$(v NODE_CIDR_V6)'"}}]}],"podSelector":{"matchExpressions":[{"key":"cnpg.io/cluster",'
+        want+='"operator":"Exists"}]},"policyTypes":["Egress"]}'
+        [ "$path" = ./kubernetes/apps/postgres/app ] || want=none
+        bad=$(yq ea -o=json -I=0 '[select(.kind == "NetworkPolicy" and .metadata.name == "api-server")
+          | .spec | sort_keys(..)] | .[]' "$file" | grep -vxF "$want" || true)
+        [ -z "$bad" ] || fail "$cluster/$name: the network policy api-server opens the API server on the nodes to" \
+          "CloudNativePG's pods, in a tenant's PostgreSQL alone: $bad"
+        bad=$(yq ea '[select(.kind == "NetworkPolicy" and .metadata.name != "internet" and .metadata.name != "api-server")
+          | .metadata.name as $np
           | [.spec.ingress[]?.from[]?, .spec.egress[]?.to[]?] | .[]
           | {"np": $np, "ipblock": has("ipBlock"), "selector": has("namespaceSelector"),
             "expressions": ((.namespaceSelector // {}) | has("matchExpressions")),

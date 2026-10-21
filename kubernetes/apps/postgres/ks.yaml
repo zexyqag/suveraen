@@ -25,7 +25,8 @@ spec:
     substitute:
       APP: postgres
       QUOTA_CPU: ${POSTGRES_QUOTA_CPU:=1000m}
-      QUOTA_MEMORY: ${POSTGRES_QUOTA_MEMORY:=2Gi}
+      # Three instances with their Barman sidecars, and a job copying the bucket.
+      QUOTA_MEMORY: ${POSTGRES_QUOTA_MEMORY:=3Gi}
       QUOTA_EPHEMERAL_STORAGE: ${POSTGRES_QUOTA_EPHEMERAL_STORAGE:=4Gi}
       QUOTA_STORAGE: ${POSTGRES_QUOTA_STORAGE:=40Gi}
       QUOTA_VOLUMES: "4"

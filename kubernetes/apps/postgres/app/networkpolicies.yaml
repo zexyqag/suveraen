@@ -41,3 +41,25 @@ spec:
               app: rook-ceph-rgw
       ports:
         - port: 8080
+---
+# CloudNativePG's instance managers, their Barman sidecars and its jobs talk to the API server on the nodes, which
+# the pods on other nodes reach through this.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-server
+spec:
+  podSelector:
+    matchExpressions:
+      - key: cnpg.io/cluster
+        operator: Exists
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: ${NODE_CIDR_V4}
+        - ipBlock:
+            cidr: "${NODE_CIDR_V6}"
+      ports:
+        - protocol: TCP
+          port: 6443
