@@ -658,11 +658,15 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       | .[]' "$file" | awk -v ks="$name" \
         '$2 != "-" && ($1 != "cloudnative-pg" || ks != "cloudnative-pg" || $2 != "true") { print $1 }')
     [ -z "$bad" ] || fail "$cluster/$name: only cloudnative-pg signs certificates for its own names: $bad"
-    # Images in what is rendered here, and the PostgreSQL images clusters take from catalogs.
+    # Images in what is rendered here, the PostgreSQL images clusters take from catalogs, Ceph's, and the tags charts
+    # are given.
     bad=$({
       yq ea '[select(.kind == "ClusterImageCatalog" or .kind == "ImageCatalog") | .spec.images[].image] | .[]' "$file"
       yq ea '[.spec.template.spec // .spec.jobTemplate.spec.template.spec // {}
         | ((.containers // []) + (.initContainers // []))[] | .image] | .[]' "$file"
+      yq ea '[select(.kind == "CephCluster") | .spec.cephVersion.image] | .[]' "$file"
+      yq ea '[select(.kind == "HelmRelease") | .spec.values // {} | .. | select(tag == "!!map" and has("tag")) | .tag
+        | tostring] | .[]' "$file"
     } | grep -vE '@sha256:[0-9a-f]{64}$' | sort -u | paste -sd' ' || true)
     [ -z "$bad" ] || fail "$cluster/$name: images are pinned by digest: $bad"
     # Helm repositories and buckets serve whatever they hold at the time, with nothing to pin them by.

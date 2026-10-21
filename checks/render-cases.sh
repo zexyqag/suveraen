@@ -385,6 +385,12 @@ refuses private-ca-tenant "$signs: alpha-hello" \
   "sed -i 's|    - ../../../components/app\$|&\n    - ../../../components/private-ca|' apps/hello/ks.yaml"
 refuses catalog-image-tag "images are pinned by digest: ghcr.io/cloudnative-pg/postgresql:18" \
   "sed -i 's/@sha256:[0-9a-f]*\$//' platform/pg-catalog/app/catalog.yaml"
+refuses ceph-image-tag "images are pinned by digest: quay.io/ceph/ceph:v20.2.4" \
+  "sed -i 's/@sha256:[0-9a-f]*\$//' platform/ceph/app/cluster.yaml"
+refuses chart-image-tag "images are pinned by digest: v3.18.1" \
+  "sed -i 's/tag: v3.18.1@sha256:[0-9a-f]*\$/tag: v3.18.1/' platform/rook-ceph/app/helmrelease.yaml"
+refuses chart-image-number "images are pinned by digest: 0.16" \
+  "sed -i '0,/tag: 0.16.0@sha256:[0-9a-f]*\$/s//tag: 0.16/' platform/volsync/app/helmrelease.yaml"
 refuses cronjob-image-tag "images are pinned by digest: busybox:1" \
   "append platform/reloader/app/helmrelease.yaml '---\napiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: x
   namespace: reloader\nspec:\n  schedule: \"0 0 * * *\"\n  jobTemplate:\n    spec:\n      template:\n        spec:

@@ -35,26 +35,26 @@ spec:
       # The images the operator's defaults name, written out to be pinned.
       cephcsi:
         repository: quay.io/cephcsi/cephcsi
-        tag: v3.18.1
+        tag: v3.18.1@sha256:a8c0653a9565049ee7b36a585753e5e0e8fe2e4e5a67e9db3a5f8d9d7e890635
       provisioner:
         repository: registry.k8s.io/sig-storage/csi-provisioner
-        tag: v6.3.0
+        tag: v6.3.0@sha256:a4b0b1a37605b7b04a293e136edf7006ec1786a8eb3f4e5a945f81d667dcc371
       attacher:
         repository: registry.k8s.io/sig-storage/csi-attacher
-        tag: v4.13.0
+        tag: v4.13.0@sha256:d1a26170efed45491074ca4545c81844eee2b9043fb885ac01fb4aed6f8b72d2
       resizer:
         repository: registry.k8s.io/sig-storage/csi-resizer
-        tag: v2.2.1
+        tag: v2.2.1@sha256:ea1d25e23479000c7e8eeb92d827df66258df4e482ca054c5e7ce3fc0f5c41a5
       snapshotter:
         repository: registry.k8s.io/sig-storage/csi-snapshotter
-        tag: v8.6.0
+        tag: v8.6.0@sha256:42af0929bcd60a43499825c078a60ff0534e08af8fbeb283aa391be40feb9f3e
       registrar:
         repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
-        tag: v2.18.0
+        tag: v2.18.0@sha256:b7fefd08651f00ac4df1a196ed4c621c2451fbb899297fe9fad9e36c667af0c0
     ceph-csi-operator:
       controllerManager:
         priorityClassName: platform
         manager:
           image:
             repository: quay.io/cephcsi/ceph-csi-operator
-            tag: v1.1.0
+            tag: v1.1.0@sha256:c42c95c36fa257266571ff7542c3e350bb93b152f8865538c8929eb2e2dbe7c6
