@@ -760,14 +760,15 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     | select(.metadata.annotations."kustomize.toolkit.fluxcd.io/prune" != "disabled") | .kind + "/" + .metadata.name]
     | .[]' "$rendered"/*.yaml)
   [ -z "$bad" ] || fail "$cluster: Ceph's objects are never pruned: $bad"
-  # Volumes outlive their claims, and a chart's claim without a class stays Pending.
+  # Volumes go with their claims, buckets stay, and a chart's claim without a class stays Pending.
   bad=$(yq ea '[select(.kind == "StorageClass") | .metadata.name + " " + .provisioner + " "
     + (.reclaimPolicy // "Delete") + " "
     + (.metadata.annotations."storageclass.kubernetes.io/is-default-class" // "false")] | .[]' "$rendered"/*.yaml \
-    | awk '$2 !~ /^rook-ceph[.](rbd[.]csi[.]ceph[.]com|ceph[.]rook[.]io\/bucket)$/ || $3 != "Retain" || $4 != "false" {
-      print $1 }' | paste -sd' ')
-  [ -z "$bad" ] || fail "$cluster: storage classes are Ceph's, keep volumes their claims let go, and none is the" \
-    "default: $bad"
+    | awk '{ volume = $2 == "rook-ceph.rbd.csi.ceph.com" && $3 == "Delete" }
+      { bucket = $2 == "rook-ceph.ceph.rook.io/bucket" && $3 == "Retain" }
+      !(volume || bucket) || $4 != "false" { print $1 }' | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: storage classes are Ceph's, volumes go with their claims and buckets stay, and" \
+    "none is the default: $bad"
   for issuer in public standby; do
     [ "$(yq ea "[select(.kind == \"ClusterIssuer\" and .metadata.name == \"$issuer\")] | length" "$rendered"/*.yaml)" \
       = 1 ] || fail "$cluster: the cluster has one ClusterIssuer public, which every host's certificate names, and" \

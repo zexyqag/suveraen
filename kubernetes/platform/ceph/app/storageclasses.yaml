@@ -1,6 +1,7 @@
 ---
-# Volumes outlive their claims, and nothing is the default: a chart's own claim stays Pending until the app's
-# template gives it a class.
+# A volume goes with its claim, so nothing a chart or a backup leaves behind fills the pool outside every quota, and
+# what an app keeps is copied off-site (platform/policies/backup-volumes). Nothing is the default: a chart's own claim
+# stays Pending until the app's template gives it a class.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -25,7 +26,7 @@ parameters:
   csi.storage.k8s.io/node-publish-secret-namespace: rook-ceph
   csi.storage.k8s.io/fstype: ext4
 allowVolumeExpansion: true
-reclaimPolicy: Retain
+reclaimPolicy: Delete
 ---
 apiVersion: snapshot.storage.k8s.io/v1
 kind: VolumeSnapshotClass
@@ -38,7 +39,8 @@ parameters:
   csi.storage.k8s.io/snapshotter-secret-namespace: rook-ceph
 deletionPolicy: Delete
 ---
-# A bucket per claim in the object store, with its own user and keys in a Secret next to the claim.
+# A bucket per claim in the object store, with its own user and keys in a Secret next to the claim. Buckets stay when
+# their claim goes: a tenant's holds its database's backups.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:

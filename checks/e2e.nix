@@ -619,7 +619,7 @@ pkgs.testers.runNixOSTest {
                   assert (pool["size"], pool["min_size"]) == (3, 2), pool
                   assert any(step.get("type") == domain for step in rules[pool["crush_rule"]]), (pool, rules)
 
-          with subtest("A block volume binds, its snapshot restores, and it outlives its claim"):
+          with subtest("A block volume binds, its snapshot restores, and it goes with its claim"):
               server.succeed("kubectl create namespace volumes")
 
               def claim(name, **spec):
@@ -658,9 +658,7 @@ pkgs.testers.runNixOSTest {
               assert finished("volumes", "reader").strip() == "kept"
               volume = server.succeed("kubectl -n volumes get pvc data -o jsonpath='{.spec.volumeName}'").strip()
               server.succeed("kubectl -n volumes delete pod writer reader && kubectl -n volumes delete pvc data --timeout=120s")
-              server.wait_until_succeeds(
-                  f"kubectl get pv {volume} -o jsonpath='{{.status.phase}}' | grep -x Released", timeout=120
-              )
+              server.wait_until_fails(f"kubectl get pv {volume}", timeout=120)
 
           with subtest("The object store gives a claim a bucket and keys of its own, reached only by pods allowed to"):
               # Tenants' database namespaces are the store's clients (platform/ceph); this one stands in for one.

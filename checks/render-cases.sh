@@ -361,12 +361,14 @@ refuses ceph-prunable "Ceph's objects are never pruned: CephCluster/rook-ceph" \
   "yq -i 'del(.metadata.annotations)' $P/cluster.yaml"
 refuses second-ceph-cluster "one CephCluster, rook-ceph/rook-ceph" \
   "yq '.metadata.name = \"other\"' $P/cluster.yaml >$P/other.yaml && append $P/kustomization.yaml '  - ./other.yaml\n'"
-classes="storage classes are Ceph's, keep volumes their claims let go, and none is the default"
+classes="storage classes are Ceph's, volumes go with their claims and buckets stay, and none is the default"
 refuses storageclass-default "$classes: ceph-block" \
   "yq -i '(select(.metadata.name == \"ceph-block\")
    | .metadata.annotations.\"storageclass.kubernetes.io/is-default-class\") = \"true\"' $P/storageclasses.yaml"
-refuses ceph-block-delete "$classes: ceph-block" \
-  "yq -i '(select(.metadata.name == \"ceph-block\") | .reclaimPolicy) = \"Delete\"' $P/storageclasses.yaml"
+refuses ceph-block-retain "$classes: ceph-block" \
+  "yq -i '(select(.metadata.name == \"ceph-block\") | .reclaimPolicy) = \"Retain\"' $P/storageclasses.yaml"
+refuses ceph-bucket-delete "$classes: ceph-bucket" \
+  "yq -i '(select(.metadata.name == \"ceph-bucket\") | .reclaimPolicy) = \"Delete\"' $P/storageclasses.yaml"
 refuses storageclass-local-path "$classes: local" \
   "append $P/storageclasses.yaml '---\napiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: local
 provisioner: rancher.io/local-path\nreclaimPolicy: Retain\n'"
