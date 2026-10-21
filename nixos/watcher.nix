@@ -38,7 +38,7 @@ in
 
     readers = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      example = [ "marty" ];
+      example = [ "phone" ];
       description = "ntfy accounts (phones) that may read alerts. Everything not granted here is denied.";
     };
 
