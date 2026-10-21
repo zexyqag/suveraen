@@ -1,20 +1,19 @@
-# Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and
-# pointed at the repository, out of reach of namespace admins, pods held to the restricted Pod
-# Security Standard, secrets encrypted at rest with secretbox and only SSH and web ports open. Ceph's
-# disks have stable names, their DB partitions take turns between two disks, the kernel maps and
-# decrypts Ceph's volumes without loading modules, and k3s keeps no volumes of its own. An
-# app's charts reach only its own namespace and can neither widen who may act there nor publish
-# ports, no namespace leaves restricted Pod Security, and no Service takes external IPs. A tenant's
-# namespaces, names in flux-system and hosts are its own, Gateways, certificates and ACME orders stay
-# in the gateway namespace, a tenant's PostgreSQL takes no restore while it runs, and the platform's pods
-# run at a priority no tenant's may ask for. Hosts and
-# pods resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
-# takes known publishers and keeps its account API, stats and attachments closed; the server's
-# alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
-# server falls back to a second channel when the watcher is gone. The server and its Flux only take
-# commits signed by a release signer, the server never goes back to an older one, and it alerts when
-# its configuration gets old. Wiped, the server comes back from an etcd snapshot with its token file
-# alone.
+# Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and pointed at the repository,
+# out of reach of namespace admins, pods held to the restricted Pod Security Standard, secrets encrypted at rest with
+# secretbox and only SSH and web ports open. Ceph's disks have stable names, their DB partitions lie on an array over
+# both system disks, the kernel maps and decrypts Ceph's volumes without loading modules, and k3s keeps no volumes of
+# its own. An app's charts reach only its own namespace and can neither widen who may act there nor publish ports, no
+# namespace but Ceph's leaves restricted Pod Security, and no Service takes external IPs. A tenant's namespaces, names
+# in flux-system and hosts are its own, Gateways, certificates and ACME orders stay in the gateway namespace, Issuers
+# sign a namespace's own names only where the platform allows a private CA, a tenant's PostgreSQL takes no restore while
+# it runs, and the platform's pods run at a priority no tenant's may ask for. Only the platform's backup jobs and movers
+# reach out of a tenant's namespace, and its apps' charts can change neither what they run nor the keys their copies go
+# with, nor delete a volume that is copied off-site. Hosts and pods resolve names through the node's own resolver, and
+# clocks use NTS. The watcher's ntfy only takes known publishers and keeps its account API, stats and attachments
+# closed; the server's alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
+# server falls back to a second channel when the watcher is gone. The server and its Flux only take commits signed by a
+# release signer, the server never goes back to an older one, and it alerts when its configuration gets old. Wiped, the
+# server comes back from an etcd snapshot with its token file alone.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";

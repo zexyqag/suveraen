@@ -1,26 +1,28 @@
 # Boots a server built from the same modules as a real one, with internet access, and lets Flux deploy
-# kubernetes/clusters/test from a signed commit on a git server inside the test, with two test ACME CAs and a
-# nameserver standing in for the internet's. Every Kustomization and HelmRelease becomes Ready, every Secret
-# is stored encrypted with secretbox, no pod is refused and no job fails; both CAs know our accounts, and every
-# host's certificate comes over DNS-01, its challenge answered in our ACME zone through the node's Knot and
-# removed again, also where an organisation's own DNS points the challenge there; the standby CA, which requires
-# our external account, issues too; every route answers through the host firewall, ServiceLB, the gateway and
-# the app's network policy with a certificate from the CA, and port 80 redirects there; the platform's pods run
-# ahead of tenants'. Each tenant runs in exactly the namespaces its manifest asks for, and hello answers on each
-# of its hosts with that tenant's own settings and restarts when they change; a tenant's pods reach neither other
-# tenants' services nor the gateway's, and nothing outside reaches theirs; tenants can't take each other's
-# namespaces or hosts or keep Gateways outside the gateway namespace, and stay within their quota; a host's key
-# goes with its certificate; removing a tenant takes its Kustomizations, hosts, keys and pods but leaves its
-# namespaces, which then go by its label; and an unsigned commit is never applied. Ceph runs healthy with three
-# monitors and an encrypted OSD per disk, its DB on a partition of its own, three copies on every pool; block
-# volumes bind, snapshot and restore, and outlive their claims; the object store hands out buckets with keys of
-# their own to the pods allowed to reach it; and after a reboot Ceph comes back with its data. Each tenant's
-# PostgreSQL archives WAL and base backups to its own bucket, takes no restore while it runs, and lets each app reach
-# its own database alone, from its own namespace; a removed tenant's cluster and bucket go only with its namespaces.
-# The bucket goes off-site to two providers, encrypted with the tenant's own key, where the cluster's keys can neither
-# delete nor unlock a copy; and when the cluster's object store has lost it, a release brings the tenant's PostgreSQL
-# back from a provider's copy as a new generation, with its apps' data. An app's volume goes to both providers too,
-# encrypted with the app's own password, and comes back from them when it is lost.
+# kubernetes/clusters/test from a signed commit on a git server inside the test, with two test ACME CAs and a nameserver
+# standing in for the internet's. Every Kustomization and HelmRelease becomes Ready, every Secret is stored encrypted
+# with secretbox, no pod is refused and no job fails; both CAs know our accounts, and every host's certificate comes
+# over DNS-01, its challenge answered in our ACME zone through the node's Knot and removed again, also where an
+# organisation's own DNS points the challenge there; the standby CA, which requires our external account, issues too;
+# every route answers through the host firewall, ServiceLB, the gateway and the app's network policy with a certificate
+# from the CA, and port 80 redirects there; the platform's pods run ahead of tenants'. Each tenant runs in exactly the
+# namespaces its manifest asks for, and hello answers on each of its hosts with that tenant's own settings and restarts
+# when they change; a tenant's pods reach neither other tenants' services nor the gateway's, and nothing outside reaches
+# theirs; tenants can't take each other's namespaces or hosts or keep Gateways outside the gateway namespace, and stay
+# within their quota; a host's key goes with its certificate; removing a tenant takes its Kustomizations, hosts, keys
+# and pods but leaves its namespaces, which then go by its label; and an unsigned commit is never applied. Ceph runs
+# healthy with three monitors and an encrypted OSD per disk, its DB on a partition of its own mirrored over both system
+# disks, three copies on every pool; block volumes bind, snapshot and restore, and go with their claims; the object
+# store hands out buckets with keys of their own to the pods allowed to reach it; and after a reboot Ceph comes back
+# with its data. Each tenant's PostgreSQL archives WAL and base backups to its own bucket, takes no restore while it
+# runs, and lets each app reach its own database alone, from its own namespace; a removed tenant's cluster and bucket go
+# only with its namespaces. The bucket's running generation goes off-site to two providers, encrypted with the tenant's
+# own key and locked for as long as the template says, where the cluster's keys can neither delete nor unlock a copy,
+# nor reach another app's; when the cluster's object store has lost it, a release brings the tenant's PostgreSQL back
+# from a provider's copy as a new generation, with its apps' data, and later copies leave the old generation's alone. An
+# app's volume goes to both providers too, encrypted with the app's own password, and comes back from either as it was
+# copied, without the files deleted before; nothing is left of the volumes copies and restores worked on, and every
+# volume in a tenant's namespace is backed up or VolSync's.
 {
   pkgs,
   module,
@@ -444,16 +446,14 @@ pkgs.testers.runNixOSTest {
           )
           print(out)
 
-      # QEMU's peak memory per machine, and what the runner has left.
+      # QEMU's peak memory per running machine, and what the runner has left.
       def memory():
-          try:
-              for machine in machines:
-                  with open(f"/proc/{getattr(machine, 'pid', None)}/status") as status:
+          for machine in machines_qemu:
+              if machine.pid is not None:
+                  with open(f"/proc/{machine.pid}/status") as status:
                       print(machine.name, [line.strip() for line in status if line.startswith(("VmHWM", "VmRSS"))])
-              with open("/proc/meminfo") as meminfo:
-                  print([line.strip() for line in meminfo if line.startswith("MemAvailable")])
-          except Exception as e:
-              print("memory:", e)
+          with open("/proc/meminfo") as meminfo:
+              print([line.strip() for line in meminfo if line.startswith("MemAvailable")])
 
       server.wait_for_unit("k3s.service")
       try:
@@ -1079,7 +1079,6 @@ pkgs.testers.runNixOSTest {
                   now = stored_at(n, first, "postgres")
                   assert {f: t for f, t in now.items() if f in first_copies[n]} == first_copies[n], n
                   assert set(now) - set(first_copies[n]), n
-
 
           with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied"):
               ns = f"{first}-hello"
