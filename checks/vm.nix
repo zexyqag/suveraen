@@ -698,6 +698,27 @@ pkgs.testers.runNixOSTest {
           )
           refused(dry(certificate(None, "cert-manager", isCA=True, commonName="test CA")), "edge-objects")
 
+          # Where the platform allows a private CA, a self-signed or CA Issuer signs the namespace's own internal names,
+          # which the hostname map doesn't judge; ACME Issuers and ClusterIssuers don't sign there, nor Issuers elsewhere.
+          server.succeed("kubectl create namespace private && kubectl label namespace private suveraen/private-ca=true")
+
+          def issuer(namespace, **spec):
+              meta = {"name": "probe", "namespace": namespace}
+              return {"apiVersion": "cert-manager.io/v1", "kind": "Issuer", "metadata": meta, "spec": spec}
+
+          own = {"group": "cert-manager.io", "kind": "Issuer", "name": "probe"}
+          server.succeed(dry(issuer("private", selfSigned={})))
+          server.succeed(dry(issuer("private", ca={"secretName": "probe-ca"})))
+          server.succeed(dry(certificate(None, "private", commonName="barman-cloud-client", issuerRef=own)))
+          server.succeed(dry(certificate(None, "private", dnsNames=["barman-cloud"], issuerRef=own)))
+          server.succeed(dry(request("private") | {"spec": {"request": "eA==", "issuerRef": own}}))
+          acme = {"server": "https://acme.test/dir", "privateKeySecretRef": {"name": "probe"}}
+          refused(dry(issuer("private", acme=acme)), "edge-objects")
+          refused(dry(certificate(None, "private", dnsNames=["hello.example.test"])), "edge-objects")
+          refused(dry(certificate("alpha", dnsNames=["hello.example.test"], issuerRef=own)), "edge-objects")
+          refused(dry(certificate("alpha", "alpha-hello", dnsNames=["hello.example.test"], issuerRef=own)), "edge-objects")
+          refused(dry(namespace("alpha-ca", "alpha", tier="app", **{"private-ca": "true"})), "tenant-namespaces")
+
           # Each host belongs to whom the longest matching entry of the hostname map names: a tenant, or one namespace.
           refused(dry(gateway("bravo", "hello.example.test", "bravo-hello")), "hostnames")
           server.succeed(dry(gateway("bravo", "hello.org.test", "bravo-hello")))

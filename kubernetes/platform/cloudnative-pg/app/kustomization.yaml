@@ -1,0 +1,8 @@
+---
+# The operator that runs each tenant's PostgreSQL cluster (apps/postgres), and the plugin that archives their WAL and
+# base backups to the object store. The plugin must share the operator's namespace.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./ocirepository.yaml
+  - ./helmrelease.yaml

@@ -389,6 +389,8 @@ pkgs.testers.runNixOSTest {
               assert not pending, pending
               classes = sorted(c["metadata"]["name"] for c in items("storageclasses"))
               assert classes == ["ceph-block", "ceph-bucket"], classes
+              # The Barman plugin's certificates for its connection with the operator, from its own namespace's CA.
+              server.succeed("kubectl -n cloudnative-pg wait certificate --all --for=condition=Ready --timeout=0")
 
           with subtest("The platform's pods run at its priority, tenants' at theirs"):
               labels = {n["metadata"]["name"]: n["metadata"].get("labels", {}) for n in items("namespaces")}

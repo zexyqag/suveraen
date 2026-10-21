@@ -1,0 +1,15 @@
+---
+# Lets the namespace sign certificates for its own internal names with a CA of its own, as the Barman plugin's chart
+# does for its connection with the CloudNativePG operator. platform/policies admits such Issuers nowhere else.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      kind: Namespace
+    patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: _
+        labels:
+          suveraen/private-ca: "true"

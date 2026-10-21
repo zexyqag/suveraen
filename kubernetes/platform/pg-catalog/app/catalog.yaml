@@ -1,0 +1,11 @@
+---
+# The PostgreSQL image every tenant's cluster runs, by major version (cloudnative-pg/artifacts, image-catalogs
+# catalog-minimal-trixie.yaml). Clusters name the catalog, never an image of their own.
+apiVersion: postgresql.cnpg.io/v1
+kind: ClusterImageCatalog
+metadata:
+  name: postgresql
+spec:
+  images:
+    - major: 18
+      image: ghcr.io/cloudnative-pg/postgresql:18.6-202610190957-minimal-trixie@sha256:0675340b02be838319b9b6f323c206693e519dcd62ec729d539be9f46bb7a2f9

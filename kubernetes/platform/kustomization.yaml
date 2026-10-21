@@ -13,3 +13,5 @@ resources:
   - ./snapshot-controller/ks.yaml
   - ./rook-ceph/ks.yaml
   - ./ceph/ks.yaml
+  - ./cloudnative-pg/ks.yaml
+  - ./pg-catalog/ks.yaml

@@ -23,8 +23,8 @@ spec:
       message: namespaces named <tenant>-<app> carry that tenant's label, and no other namespace carries one
     - expression: >-
         variables.tenant == '' || (object.metadata.?labels[?'suveraen/tier'].orValue('') == 'app' &&
-        !('suveraen/publish' in object.metadata.labels))
-      message: a tenant's namespaces are app namespaces and never publish ports
+        !('suveraen/publish' in object.metadata.labels) && !('suveraen/private-ca' in object.metadata.labels))
+      message: a tenant's namespaces are app namespaces and never publish ports or sign certificates
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

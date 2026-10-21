@@ -368,6 +368,19 @@ refuses rook-ceph-partial-labels "$privileged: rook-ceph" \
 refuses rook-ceph-baseline "$privileged: rook-ceph" \
   "sed -i 's/warn: privileged/warn: baseline/' components/privileged/kustomization.yaml"
 
+# Databases' platform.
+signs="only cloudnative-pg signs certificates for its own names"
+refuses private-ca-elsewhere "$signs: reloader" \
+  "sed -i 's|    - ../../../components/platform\$|&\n    - ../../../components/private-ca|' platform/reloader/ks.yaml"
+refuses private-ca-tenant "$signs: alpha-hello" \
+  "sed -i 's|    - ../../../components/app\$|&\n    - ../../../components/private-ca|' apps/hello/ks.yaml"
+refuses catalog-image-tag "images are pinned by digest: ghcr.io/cloudnative-pg/postgresql:18" \
+  "sed -i 's/@sha256:[0-9a-f]*\$//' platform/pg-catalog/app/catalog.yaml"
+refuses cronjob-image-tag "images are pinned by digest: busybox:1" \
+  "append platform/reloader/app/helmrelease.yaml '---\napiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: x
+  namespace: reloader\nspec:\n  schedule: \"0 0 * * *\"\n  jobTemplate:\n    spec:\n      template:\n        spec:
+          restartPolicy: Never\n          containers:\n            - name: x\n              image: busybox:1\n'"
+
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"
 renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'

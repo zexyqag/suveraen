@@ -473,6 +473,17 @@ for dir in kubernetes/clusters/*/; do
         '$2 != "" && ($1 != "rook-ceph" || ks != "rook-ceph" || $2 != ceph) { print $1 }')
     [ -z "$bad" ] || fail "$cluster/$name: namespaces keep the cluster's restricted Pod Security default; only" \
       "rook-ceph, where Ceph runs, is privileged: $bad"
+    bad=$(yq ea '[select(.kind == "Namespace") | .metadata.name + " " + (.metadata.labels."suveraen/private-ca" // "-")]
+      | .[]' "$file" | awk -v ks="$name" \
+        '$2 != "-" && ($1 != "cloudnative-pg" || ks != "cloudnative-pg" || $2 != "true") { print $1 }')
+    [ -z "$bad" ] || fail "$cluster/$name: only cloudnative-pg signs certificates for its own names: $bad"
+    # Images in what is rendered here, and the PostgreSQL images clusters take from catalogs.
+    bad=$({
+      yq ea '[select(.kind == "ClusterImageCatalog" or .kind == "ImageCatalog") | .spec.images[].image] | .[]' "$file"
+      yq ea '[.spec.template.spec // .spec.jobTemplate.spec.template.spec // {}
+        | ((.containers // []) + (.initContainers // []))[] | .image] | .[]' "$file"
+    } | grep -vE '@sha256:[0-9a-f]{64}$' | sort -u | paste -sd' ' || true)
+    [ -z "$bad" ] || fail "$cluster/$name: images are pinned by digest: $bad"
     # Helm repositories and buckets serve whatever they hold at the time, with nothing to pin them by.
     bad=$(yq ea '[select((.kind == "OCIRepository" and .spec.ref.digest == null)
       or (.kind == "GitRepository" and .spec.ref.commit == null)

@@ -2,7 +2,7 @@
 # Gateway API merges every route for a name, and Traefik serves the first Gateway that claims it, so each name has one
 # owner, set in the cluster's hostname map (ConfigMap hostnames in flux-system): a tenant, or one app namespace of a
 # tenant. The longest matching entry decides. Objects in the gateway namespace name their tenant in a label;
-# elsewhere the namespace's label does.
+# elsewhere the namespace's label does. Certificates from a namespace's own Issuer name no public host (edge-objects).
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -22,6 +22,11 @@ spec:
         apiVersions: ["*"]
         operations: [CREATE, UPDATE]
         resources: [certificates]
+  matchConditions:
+    - name: public-certificates
+      expression: >-
+        request.resource.resource != 'certificates' ||
+        object.spec.?issuerRef.?kind.orValue('Issuer') == 'ClusterIssuer'
   variables:
     - name: map
       expression: params.?data.orValue({})
