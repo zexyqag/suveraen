@@ -1,0 +1,7 @@
+---
+# Volume snapshots, which k3s doesn't ship: their CRDs and the controller that hands them to the CSI driver.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./ocirepository.yaml
+  - ./helmrelease.yaml
