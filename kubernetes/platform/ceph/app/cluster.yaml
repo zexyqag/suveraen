@@ -21,7 +21,7 @@ spec:
     count: 3
     allowMultiplePerNode: ${CEPH_DAEMONS_SHARE_NODE}
   mgr:
-    count: 1
+    count: ${CEPH_MGR_COUNT}
     allowMultiplePerNode: ${CEPH_DAEMONS_SHARE_NODE}
     modules:
       - name: rook

@@ -29,7 +29,7 @@ spec:
   preservePoolsOnDelete: true
   gateway:
     port: 80
-    instances: 1
+    instances: ${CEPH_RGW_INSTANCES}
     priorityClassName: platform
     resources:
       requests:

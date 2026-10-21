@@ -486,8 +486,8 @@ renders real-cluster "$real"
 renders recovery "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery"
 renders recovery-offsite "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery; knob POSTGRES_RESTORE_FROM offsite-2"
 renders volume-restore-offsite-2 "knob HELLO_DATA_RESTORE again; knob HELLO_DATA_RESTORE_FROM offsite-2"
-renders failure-domain-host \
-  "yq -i '.data.CEPH_FAILURE_DOMAIN = \"host\" | .data.CEPH_DAEMONS_SHARE_NODE = \"false\"' clusters/test/settings.yaml"
+renders failure-domain-host "yq -i '.data.CEPH_FAILURE_DOMAIN = \"host\" | .data.CEPH_DAEMONS_SHARE_NODE = \"false\"
+  | .data.CEPH_MGR_COUNT = \"2\" | .data.CEPH_RGW_INSTANCES = \"2\" | .data.PG_INSTANCES = \"3\"' clusters/test/settings.yaml"
 renders failover "sed -i 's|issuer/public/ks.yaml|issuer/failover/ks.yaml|' clusters/test/kustomization.yaml"
 renders real-cluster-failover \
   "$real; sed -i 's|issuer/public/ks.yaml|issuer/failover/ks.yaml|' clusters/prod/kustomization.yaml"
