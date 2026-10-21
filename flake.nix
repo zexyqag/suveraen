@@ -32,15 +32,28 @@
         text = builtins.readFile ./release/approve.sh;
       };
 
-      machine =
+      config =
         host:
         (nixpkgs.lib.nixosSystem {
           modules = [
             self.nixosModules.default
             host
           ];
-        }).config.system.build;
+        }).config;
+      machine = host: (config host).system.build;
       build = host: (machine host).toplevel;
+
+      # What render checks each cluster's settings against: the ranges the servers give k3s.
+      ranges =
+        let
+          cluster = (config ./checks/server.nix).suveraen.cluster;
+          named =
+            kind: cidrs:
+            map (cidr: "${kind}_CIDR_V${if pkgs.lib.hasInfix ":" cidr then "6" else "4"}=${cidr}") cidrs;
+        in
+        pkgs.lib.concatStringsSep " " (
+          named "POD" cluster.podCIDRs ++ named "SERVICE" cluster.serviceCIDRs
+        );
     in
     {
       nixosModules.default = {
@@ -78,11 +91,11 @@
         ns = build ./checks/ns.nix;
         approve = import ./checks/approve.nix { inherit pkgs approve; };
         render = import ./checks/render.nix {
-          inherit pkgs;
+          inherit pkgs ranges;
           kubernetes = ./kubernetes;
         };
         render-cases = import ./checks/render-cases.nix {
-          inherit pkgs;
+          inherit pkgs ranges;
           kubernetes = ./kubernetes;
         };
 

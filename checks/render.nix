@@ -1,6 +1,10 @@
 # Renders every cluster under kubernetes/clusters the way Flux would, offline, and checks the rules Flux itself
 # wouldn't catch (render.sh).
-{ pkgs, kubernetes }:
+{
+  pkgs,
+  kubernetes,
+  ranges,
+}:
 pkgs.runCommand "render"
   {
     nativeBuildInputs = [
@@ -9,6 +13,6 @@ pkgs.runCommand "render"
     ];
   }
   ''
-    export HOME=$TMPDIR
+    export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges}
     bash ${./render.sh} ${kubernetes} $out
   ''

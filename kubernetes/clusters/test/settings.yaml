@@ -31,7 +31,8 @@ data:
   BACKUP_2_REGION: us-east-1
   BACKUP_2_PROVIDER: Other
   BACKUP_2_BUCKET_PREFIX: test-
-  # The cluster's own ranges (nixos/cluster.nix) and its nodes, which the internet's network policy leaves out.
+  # The cluster's own ranges, as nixos/cluster.nix gives them to k3s, and its nodes, which the internet's network
+  # policy leaves out.
   POD_CIDR_V4: 10.42.0.0/16
   POD_CIDR_V6: fd42::/56
   SERVICE_CIDR_V4: 10.43.0.0/16

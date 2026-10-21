@@ -1,6 +1,10 @@
 # Breaks copies of kubernetes/ in ways render.sh must refuse, and checks that it refuses each for the intended reason
 # (render-cases.sh).
-{ pkgs, kubernetes }:
+{
+  pkgs,
+  kubernetes,
+  ranges,
+}:
 pkgs.runCommand "render-cases"
   {
     nativeBuildInputs = [
@@ -10,6 +14,6 @@ pkgs.runCommand "render-cases"
   }
   ''
     set -o pipefail
-    export HOME=$TMPDIR
+    export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges}
     bash ${./render-cases.sh} ${./render.sh} ${kubernetes} | tee $out
   ''

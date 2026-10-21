@@ -2,8 +2,9 @@
 # other Kustomizations create: the cluster's, each tenant's, then the tenant's apps and hosts. Each gets the values
 # its own sources hold, a stand-in for each encrypted one, and strict substitution. Then checks the rules Flux itself
 # wouldn't catch, on what was rendered rather than on what a file says.
-# Usage: render.sh <kubernetes directory> <output directory>
+# Usage: CLUSTER_RANGES=<the servers' ranges> render.sh <kubernetes directory> <output directory>
 set -euo pipefail
+: "${CLUSTER_RANGES:?the ranges the servers give k3s (nixos/cluster.nix), as <setting>=<range> words}"
 out=$(realpath -m "$2")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -235,6 +236,13 @@ for dir in kubernetes/clusters/*/; do
     | .[0].data.TEST_CLUSTER // ""' "$rendered/cluster.yaml")
   [ "$testing" = true ] || [ "$testing" = false ] \
     || fail "$cluster: cluster-settings says whether its tenants are stand-ins, TEST_CLUSTER \"true\" or \"false\""
+  # Network policies leave the cluster's own ranges out by its settings, so they must be its servers'.
+  for range in $CLUSTER_RANGES; do
+    setting=$(yq ea "[select(.kind == \"ConfigMap\" and .metadata.name == \"cluster-settings\")]
+      | .[0].data.${range%%=*} // \"\"" "$rendered/cluster.yaml")
+    [ "$setting" = "${range#*=}" ] \
+      || fail "$cluster: cluster-settings sets ${range%%=*} to ${range#*=}, as the servers give k3s (nixos/cluster.nix)"
+  done
 
   yq ea "[select($fluxks and .spec.sourceRef.name == \"suveraen\") | .metadata.name] | .[]" "$rendered/cluster.yaml" \
     | sed 's/^/cluster /' >"$w/queue"

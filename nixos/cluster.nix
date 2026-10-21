@@ -52,11 +52,7 @@ let
     }
   );
 
-  inherit (cfg) podCIDRs;
-  serviceCIDRs = [
-    "10.43.0.0/16"
-    "fd43::/112"
-  ];
+  inherit (cfg) podCIDRs serviceCIDRs;
 
   # Named after its keys, so a changed list replaces the Secret instead of leaving removed keys in it.
   signersSecret = "release-signers-${
@@ -109,6 +105,17 @@ in
         "fd42::/56"
       ];
       description = "The pods' address ranges, fixed when the cluster is created.";
+    };
+
+    serviceCIDRs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      readOnly = true;
+      internal = true;
+      default = [
+        "10.43.0.0/16"
+        "fd43::/112"
+      ];
+      description = "The Services' address ranges, fixed when the cluster is created.";
     };
 
     nodeServices = lib.mkOption {

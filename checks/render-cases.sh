@@ -451,6 +451,8 @@ refuses api-server-all-pods "$api" \
 refuses api-server-in-app "$api, in a tenant's PostgreSQL alone" \
   "yq 'select(.metadata.name == \"api-server\")' apps/postgres/app/networkpolicies.yaml >apps/hello/app/api.yaml
   append apps/hello/app/kustomization.yaml '  - ./api.yaml\n'"
+refuses pod-range-other "test: cluster-settings sets POD_CIDR_V4 to 10.42.0.0/16" \
+  "yq -i '.data.POD_CIDR_V4 = \"10.44.0.0/16\"' clusters/test/settings.yaml"
 refuses offsite-one-provider "the two providers' endpoints differ" \
   "yq -i '.data.BACKUP_2_ENDPOINT = .data.BACKUP_1_ENDPOINT' clusters/test/settings.yaml"
 refuses offsite-plain-http "prod: the providers' endpoints are https" \
