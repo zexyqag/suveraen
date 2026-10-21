@@ -1,0 +1,60 @@
+---
+# A tenant's PostgreSQL: one cluster for all its apps, its restore unit, in ${TENANT}-postgres. Each app with a
+# database adds its attachment, ${TENANT}-<app>-db (components/db). WAL and base backups go to the tenant's bucket in
+# the cluster's object store.
+#
+# Every cluster archives under its generation, postgres-<GENERATION>, and is never pointed at another: CloudNativePG
+# reads a bootstrap only when it creates a cluster (platform/policies/postgres-clusters). To restore, a release sets
+# POSTGRES_GENERATION to the next one, POSTGRES_BOOTSTRAP to recovery and POSTGRES_ORIGIN to the generation to recover
+# from, then the operator deletes Cluster postgres and Flux makes it anew from that generation's backups.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-postgres
+spec:
+  path: ./kubernetes/apps/postgres/app
+  targetNamespace: ${TENANT}-postgres
+  components:
+    - ../../../components/app
+  dependsOn:
+    - name: policies
+    - name: cloudnative-pg
+    - name: ceph
+  postBuild:
+    substitute:
+      APP: postgres
+      QUOTA_CPU: ${POSTGRES_QUOTA_CPU:=1000m}
+      QUOTA_MEMORY: ${POSTGRES_QUOTA_MEMORY:=2Gi}
+      QUOTA_EPHEMERAL_STORAGE: ${POSTGRES_QUOTA_EPHEMERAL_STORAGE:=4Gi}
+      QUOTA_STORAGE: ${POSTGRES_QUOTA_STORAGE:=40Gi}
+      QUOTA_VOLUMES: "4"
+      QUOTA_PODS: "8"
+      QUOTA_SERVICES: "4"
+      QUOTA_SECRETS: "32"
+      QUOTA_CONFIGMAPS: "16"
+      QUOTA_JOBS: "8"
+      BUCKET_SIZE: ${POSTGRES_BUCKET_SIZE:=100G}
+      RETENTION: ${POSTGRES_RETENTION:=30d}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-postgres-cluster
+spec:
+  path: ./kubernetes/apps/postgres/cluster
+  targetNamespace: ${TENANT}-postgres
+  components:
+    - ../bootstrap/${POSTGRES_BOOTSTRAP:=initdb}
+  dependsOn:
+    - name: ${TENANT}-postgres
+    - name: pg-catalog
+  postBuild:
+    substitute:
+      APP: postgres
+      GENERATION: ${POSTGRES_GENERATION:=g1}
+      ORIGIN: ${POSTGRES_ORIGIN:=g1}
+      SIZE: ${POSTGRES_STORAGE_SIZE:=10Gi}
+      CPU: ${POSTGRES_CPU:=100m}
+      MEMORY: ${POSTGRES_MEMORY:=512Mi}
+      # Weekly; CloudNativePG's schedules have seconds.
+      BASE_SCHEDULE: ${POSTGRES_BASE_SCHEDULE:=0 17 3 * * 0}

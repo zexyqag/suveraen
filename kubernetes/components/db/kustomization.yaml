@@ -1,0 +1,9 @@
+---
+# An app's own database and role in its tenant's PostgreSQL cluster (apps/postgres), made by CloudNativePG from the
+# app's attachment, ${TENANT}-<app>-db. The role logs in with the password from Secret <app>-db, reaches only its own
+# database (the cluster's pg_hba) and only from the app's namespace, and may do nothing beyond its database. Neither
+# is dropped when the attachment goes.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ./database.yaml

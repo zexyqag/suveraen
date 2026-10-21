@@ -1,0 +1,23 @@
+---
+# A cluster recovered from generation ORIGIN's base backup and WAL in the tenant's bucket, up to the last WAL there.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      kind: Cluster
+    patch: |-
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      metadata:
+        name: _
+      spec:
+        bootstrap:
+          recovery:
+            source: origin
+        externalClusters:
+          - name: origin
+            plugin:
+              name: barman-cloud.cloudnative-pg.io
+              parameters:
+                barmanObjectName: postgres
+                serverName: postgres-${ORIGIN}

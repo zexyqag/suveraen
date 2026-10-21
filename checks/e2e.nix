@@ -14,7 +14,9 @@
 # namespaces, which then go by its label; and an unsigned commit is never applied. Ceph runs healthy with three
 # monitors and an encrypted OSD per disk, its DB on a partition of its own, three copies on every pool; block
 # volumes bind, snapshot and restore, and outlive their claims; the object store hands out buckets with keys of
-# their own to the pods allowed to reach it; and after a reboot Ceph comes back with its data.
+# their own to the pods allowed to reach it; and after a reboot Ceph comes back with its data. Each tenant's
+# PostgreSQL archives WAL and base backups to its own bucket, takes no restore while it runs, and lets each app reach
+# its own database alone, from its own namespace; a removed tenant's cluster and bucket go only with its namespaces.
 {
   pkgs,
   module,
@@ -705,6 +707,79 @@ pkgs.testers.runNixOSTest {
               denied_by(create(probe(home, priorityClassName="platform"), "--dry-run=server"), policy("tenant-priority"))
               denied_by(create(probe(home, {"limits": {"memory": "64Gi"}}), "--dry-run=server"), "exceeded quota")
 
+          def psql(namespace, pod, query, **conn):
+              # Connects as the app does, with the Secret its namespace holds unless told otherwise.
+              target = " ".join(f"{k}={v}" for k, v in conn.items())
+              return server.execute(
+                  f"kubectl -n {namespace} exec {pod} -- sh -c "
+                  + shlex.quote(
+                      'PGPASSWORD="$password" PGCONNECT_TIMEOUT=5 psql -tA -v ON_ERROR_STOP=1'
+                      f' "host=$host port=$port dbname=$dbname user=$username sslmode=$sslmode {target}" -c "{query}"'
+                  )
+                  + " 2>&1"
+              )
+
+          postgres_image = server.succeed(
+              "kubectl get clusterimagecatalog postgresql -o jsonpath='{.spec.images[0].image}'"
+          ).strip()
+
+          def client(namespace, secret):
+              pod = restricted(namespace, "psql", "sleep 3600", env=[{"secretRef": {"name": secret}}])
+              pod["spec"]["containers"][0] |= {
+                  "image": postgres_image,
+                  "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"memory": "96Mi"}},
+              }
+              apply(pod)
+              server.succeed(f"kubectl -n {namespace} wait pod psql --for=condition=Ready --timeout=300s")
+
+          with subtest("Each tenant's PostgreSQL archives its WAL and base backups to its own bucket"):
+              for tenant in tenants:
+                  ns = f"{tenant}-postgres"
+                  server.succeed(
+                      f"kubectl -n {ns} wait cluster postgres --for=condition=ContinuousArchiving --timeout=0"
+                  )
+                  server.wait_until_succeeds(
+                      f"kubectl -n {ns} get objectstore postgres"
+                      " -o jsonpath='{.status.serverRecoveryWindow.postgres-g1.firstRecoverabilityPoint}' | grep .",
+                      timeout=600,
+                  )
+                  local = f"kubectl -n {ns} exec postgres-1 -c postgres -- psql -tAc"
+                  count = int(server.succeed(f"{local} 'select archived_count from pg_stat_archiver'").strip())
+                  server.succeed(
+                      f"{local} 'create table if not exists archived (at timestamptz); insert into archived values (now())'"
+                      f" && {local} 'select pg_switch_wal()'"
+                  )
+                  server.wait_until_succeeds(
+                      f"{local} 'select archived_count > {count} and failed_count = 0 from pg_stat_archiver' | grep -x t",
+                      timeout=300,
+                  )
+
+          with subtest("An app reaches its own database alone, and only from its own namespace"):
+              client(f"{first}-hello", "db")
+              status, out = psql(f"{first}-hello", "psql", "create table probe (v text); insert into probe values ('kept')")
+              assert status == 0, out
+              for other in [{"dbname": "postgres"}, {"dbname": "app"}, {"user": "postgres"}, {"password": "wrong"}]:
+                  status, out = psql(f"{first}-hello", "psql", "select 1", **other)
+                  assert status != 0 and ("pg_hba.conf" in out or "authentication failed" in out), (other, out)
+              # The other tenant's app, with its own credentials, and a namespace without policies don't get through.
+              client(f"{second}-hello", "db")
+              status, out = psql(f"{second}-hello", "psql", "select 1", host=f"postgres-rw.{first}-postgres.svc")
+              assert status != 0 and "timeout expired" in out, out
+              apply({"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "db", "namespace": "probe"},
+                     "stringData": {"host": f"postgres-rw.{first}-postgres.svc", "port": "5432", "dbname": "hello",
+                                    "username": "hello", "password": "unknown", "sslmode": "require"}})
+              client("probe", "db")
+              status, out = psql("probe", "psql", "select 1")
+              assert status != 0 and "timeout expired" in out, out
+              # Nor do apps reach the object store.
+              blocked(f"{inside} http://rook-ceph-rgw-objects.rook-ceph.svc/")
+              server.succeed(f"kubectl -n {first}-hello delete pod psql && kubectl -n {second}-hello delete pod psql")
+
+          with subtest("A tenant's PostgreSQL takes no restore or new generation while it runs"):
+              patch = f"kubectl -n {first}-postgres patch cluster postgres --dry-run=server --type merge -p"
+              denied_by(f"""{patch} '{{"spec":{{"bootstrap":{{"recovery":{{"source":"origin"}}}}}}}}'""",
+                        policy("postgres-clusters"))
+
           with subtest("The standby CA issues too, with our external account there"):
               standby = {
                   "apiVersion": "cert-manager.io/v1",
@@ -768,8 +843,11 @@ pkgs.testers.runNixOSTest {
               gone(f"kustomization,secret -n flux-system -l suveraen/tenant={second}")
               gone(f"gateway,certificate,secret -n gateway -l suveraen/tenant={second}")
               gone(f"helmrelease,httproute,networkpolicy -A -l suveraen/tenant={second}")
+              # Its PostgreSQL and bucket are never pruned: they go with the namespace alone.
+              server.succeed(f"kubectl -n {second}-postgres get cluster postgres && kubectl -n {second}-postgres get objectbucketclaim bucket")
               for namespace in namespaces:
-                  gone(f"pods -n {namespace.removeprefix('namespace/')}")
+                  if namespace != f"namespace/{second}-postgres":
+                      gone(f"pods -n {namespace.removeprefix('namespace/')}")
               assert server.succeed(f"kubectl get namespace -l suveraen/tenant={second} -o name").split() == namespaces
               for host in hosts_of(first):
                   forge.succeed(f"{fetch(host)} -o /dev/null")

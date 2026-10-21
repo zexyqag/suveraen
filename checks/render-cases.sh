@@ -63,9 +63,10 @@ prod() { # tenant ID
 other() { # a second app like hello, which bravo also runs
   cp -r apps/hello apps/other
   rm apps/other/edge-apex.yaml
-  sed -i 's/hello/other/g; s/HELLO/OTHER/g' apps/other/ks.yaml apps/other/app/*.yaml
+  sed -i 's/hello/other/g; s/HELLO/OTHER/g' apps/other/ks.yaml apps/other/app/*.yaml apps/other/db/*.yaml
   sed -i 's|  - ../../../../../apps/hello/ks.yaml|&\n  - ../../../../../apps/other/ks.yaml|' \
     $T/bravo/apps/kustomization.yaml
+  append $T/bravo/secrets.yaml '  OTHER_DB_PASSWORD: x\n'
 }
 knob() { yq -i ".spec.postBuild.substitute.$1 = \"$2\"" "$T/bravo/tenant.yaml"; }
 export -f append np encsecret encmap prod other knob
@@ -381,12 +382,51 @@ refuses cronjob-image-tag "images are pinned by digest: busybox:1" \
   namespace: reloader\nspec:\n  schedule: \"0 0 * * *\"\n  jobTemplate:\n    spec:\n      template:\n        spec:
           restartPolicy: Never\n          containers:\n            - name: x\n              image: busybox:1\n'"
 
+# Tenants' databases.
+C=apps/postgres/cluster/cluster.yaml
+pg="a tenant's PostgreSQL is never pruned, has no superuser access"
+role="an app's role logs in with its Secret and nothing more"
+refuses attachment-without-postgres "nothing is named bravo-postgres-cluster" \
+  "sed -i '/apps\/postgres\/ks.yaml/d' $T/bravo/apps/kustomization.yaml"
+refuses attachment-other-dependency "an app's database is \${TENANT}-hello-db" \
+  "yq -i '(select(documentIndex == 2) | .spec.dependsOn) += [{\"name\": \"\${TENANT}-postgres\"}]' apps/hello/ks.yaml"
+refuses attachment-other-key "kubernetes/apps/other: an app reads only its own keys, not HELLO_DB_PASSWORD" \
+  "other; sed -i 's/OTHER_DB_PASSWORD/HELLO_DB_PASSWORD/' apps/other/db/secret.yaml"
+refuses role-superuser "$role" "yq -i '(select(.kind == \"DatabaseRole\") | .spec.superuser) = true' components/db/database.yaml"
+refuses role-createrole "$role" \
+  "yq -i '(select(.kind == \"DatabaseRole\") | .spec.createrole) = true' components/db/database.yaml"
+refuses role-in-other-role "$role" \
+  "yq -i '(select(.kind == \"DatabaseRole\") | .spec.inRoles) = [\"pg_read_all_data\"]' components/db/database.yaml"
+refuses database-other-owner "$role" \
+  "yq -i '(select(.kind == \"Database\") | .spec.owner) = \"app\"' components/db/database.yaml"
+refuses database-reached-elsewhere "$role" "sed -i 's/name: \${TENANT}-\${APP}\$/name: \${TENANT}-x/' components/db/database.yaml"
+refuses db-secret-opaque "$role" "yq -i '.type = \"Opaque\"' apps/hello/db/secret.yaml"
+refuses superuser-access "$pg" "yq -i '.spec.enableSuperuserAccess = true' $C"
+refuses pg-hba-open "$pg" "yq -i '.spec.postgresql.pg_hba = [\"host all all all scram-sha-256\"]' $C"
+refuses cluster-image-name "$pg" "yq -i '.spec.imageName = \"ghcr.io/cloudnative-pg/postgresql:18\"' $C"
+refuses cluster-prunable "$pg" "yq -i 'del(.metadata.annotations)' $C"
+refuses cluster-local-storage "$pg" "yq -i '.spec.storage.storageClass = \"local-path\"' $C"
+refuses server-name-fixed "$pg" "knob POSTGRES_GENERATION g2; sed -i 's/postgres-\${GENERATION}\$/postgres-g1/' $C"
+refuses generation-format "generations are g<number>: gen2" "knob POSTGRES_GENERATION gen2"
+refuses recovery-same-generation "recovers from an earlier generation than its own, g1" \
+  "knob POSTGRES_BOOTSTRAP recovery"
+refuses bucket-other-tenant "a tenant's bucket is bravo-postgres" \
+  "sed -i 's/bucketName: \${TENANT}-postgres/bucketName: alpha-postgres/' apps/postgres/app/objectbucketclaim.yaml"
+refuses barman-offsite "a tenant's bucket is alpha-postgres" \
+  "yq -i '.spec.configuration.endpointURL = \"https://s3.example.test\"' apps/postgres/app/objectstore.yaml"
+refuses bucket-in-other-app "an app creates only" \
+  "append apps/hello/app/configmap.yaml '---\napiVersion: objectbucket.io/v1alpha1\nkind: ObjectBucketClaim
+metadata:\n  name: x\nspec:\n  bucketName: x\n  storageClassName: ceph-bucket\n'"
+refuses namespace-without-app "labelled suveraen/tier=app, suveraen/tenant=alpha and suveraen/app=" \
+  "sed -i '/suveraen\/app: /d' components/app/namespace.yaml"
+
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"
 renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
   sed -i 's/PODINFO_UI_MESSAGE: .*/PODINFO_UI_MESSAGE: \${HELLO_API_KEY:=none}/' apps/hello/app/configmap.yaml"
 renders two-apps "other"
 renders real-cluster "$real"
+renders recovery "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery"
 renders failure-domain-host \
   "yq -i '.data.CEPH_FAILURE_DOMAIN = \"host\" | .data.CEPH_DAEMONS_SHARE_NODE = \"false\"' clusters/test/settings.yaml"
 renders failover "sed -i 's|issuer/public/ks.yaml|issuer/failover/ks.yaml|' clusters/test/kustomization.yaml"

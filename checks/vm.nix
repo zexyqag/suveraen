@@ -6,7 +6,8 @@
 # app's charts reach only its own namespace and can neither widen who may act there nor publish
 # ports, no namespace leaves restricted Pod Security, and no Service takes external IPs. A tenant's
 # namespaces, names in flux-system and hosts are its own, Gateways, certificates and ACME orders stay
-# in the gateway namespace, and the platform's pods run at a priority no tenant's may ask for. Hosts and
+# in the gateway namespace, a tenant's PostgreSQL takes no restore while it runs, and the platform's pods
+# run at a priority no tenant's may ask for. Hosts and
 # pods resolve names through the node's own resolver, and clocks use NTS. The watcher's ntfy only
 # takes known publishers and keeps its account API, stats and attachments closed; the server's
 # alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
@@ -135,6 +136,10 @@ let
             {
               group = "acme.cert-manager.io";
               kind = "Challenge";
+            }
+            {
+              group = "postgresql.cnpg.io";
+              kind = "Cluster";
             }
           ];
     }
@@ -555,6 +560,7 @@ pkgs.testers.runNixOSTest {
               " -f ${../kubernetes/platform/policies/app/tenant-names.yaml}"
               " -f ${../kubernetes/platform/policies/app/edge-objects.yaml}"
               " -f ${../kubernetes/platform/policies/app/hostnames.yaml}"
+              " -f ${../kubernetes/platform/policies/app/postgres-clusters.yaml}"
           )
 
           def dry(obj, verb="create"):
@@ -623,11 +629,15 @@ pkgs.testers.runNixOSTest {
           # A namespace named <tenant>-<app> carries that tenant's label from creation, and only such a namespace does.
           refused(dry(namespace("alpha-x", tier="app")), "tenant-namespaces")
           for name in ["alpha-hello", "alpha-web", "bravo-hello"]:
-              server.succeed(f"echo {shlex.quote(json.dumps(namespace(name, name[:5], tier='app')))} | kubectl create -f -")
+              server.succeed(
+                  f"echo {shlex.quote(json.dumps(namespace(name, name[:5], tier='app', app=name[6:])))} | kubectl create -f -"
+              )
           refused(dry(namespace("alpha-y", "bravo", tier="app")), "tenant-namespaces")
           refused(dry(namespace("misc", "alpha", tier="app")), "tenant-namespaces")
           refused(dry(namespace("alpha-z", "alpha", tier="platform")), "tenant-namespaces")
-          refused(dry(namespace("alpha-p", "alpha", tier="app", publish="true")), "tenant-namespaces")
+          refused(dry(namespace("alpha-p", "alpha", tier="app", app="p", publish="true")), "tenant-namespaces")
+          refused(dry(namespace("alpha-q", "alpha", tier="app")), "tenant-namespaces")
+          refused(dry(namespace("alpha-q", "alpha", tier="app", app="web")), "tenant-namespaces")
           refused("kubectl label namespace bravo-hello suveraen/tenant=alpha --overwrite --dry-run=server", "tenant-namespaces")
           refused("kubectl label namespace bravo-hello suveraen/tenant- --dry-run=server", "tenant-namespaces")
           refused(dry(namespace("local-path", tier="platform")), "tenant-namespaces")
@@ -717,7 +727,31 @@ pkgs.testers.runNixOSTest {
           refused(dry(certificate(None, "private", dnsNames=["hello.example.test"])), "edge-objects")
           refused(dry(certificate("alpha", dnsNames=["hello.example.test"], issuerRef=own)), "edge-objects")
           refused(dry(certificate("alpha", "alpha-hello", dnsNames=["hello.example.test"], issuerRef=own)), "edge-objects")
-          refused(dry(namespace("alpha-ca", "alpha", tier="app", **{"private-ca": "true"})), "tenant-namespaces")
+          refused(dry(namespace("alpha-ca", "alpha", tier="app", app="ca", **{"private-ca": "true"})), "tenant-namespaces")
+
+          # A tenant's PostgreSQL takes no restore or new generation while it runs; resizing it is fine.
+          cluster = {
+              "apiVersion": "postgresql.cnpg.io/v1",
+              "kind": "Cluster",
+              "metadata": {"name": "postgres", "namespace": "alpha-web"},
+              "spec": {
+                  "instances": 1,
+                  "bootstrap": {"initdb": {"database": "app", "owner": "app"}},
+                  "plugins": [{"name": "barman-cloud.cloudnative-pg.io", "isWALArchiver": True,
+                               "parameters": {"barmanObjectName": "postgres", "serverName": "postgres-g1"}}],
+              },
+          }
+          server.succeed(f"echo {shlex.quote(json.dumps(cluster))} | kubectl create -f -")
+          patch = "kubectl -n alpha-web patch cluster postgres --dry-run=server --type merge -p"
+          server.succeed(f"""{patch} '{{"spec":{{"instances":2}}}}'""")
+          refused(f"""{patch} '{{"spec":{{"bootstrap":{{"recovery":{{"source":"origin"}}}}}}}}'""", "postgres-clusters")
+          refused(f"""{patch} '{{"spec":{{"externalClusters":[{{"name":"origin"}}]}}}}'""", "postgres-clusters")
+          refused(
+              "kubectl -n alpha-web patch cluster postgres --dry-run=server --type json"
+              """ -p '[{"op":"replace","path":"/spec/plugins/0/parameters/serverName","value":"postgres-g2"}]'""",
+              "postgres-clusters",
+          )
+          server.succeed("kubectl -n alpha-web delete cluster postgres")
 
           # Each host belongs to whom the longest matching entry of the hostname map names: a tenant, or one namespace.
           refused(dry(gateway("bravo", "hello.example.test", "bravo-hello")), "hostnames")

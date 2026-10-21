@@ -44,6 +44,21 @@ patches:
           - apiVersion: ceph.rook.io/v1
             kind: CephObjectStore
             current: status.phase == 'Ready'
+          - apiVersion: objectbucket.io/v1alpha1
+            kind: ObjectBucketClaim
+            current: status.phase == 'Bound'
+          # Ready once it archives its WAL, so nothing builds on a database without backups.
+          - apiVersion: postgresql.cnpg.io/v1
+            kind: Cluster
+            current: >-
+              status.conditions.exists(c, c.type == 'Ready' && c.status == 'True') &&
+              status.conditions.exists(c, c.type == 'ContinuousArchiving' && c.status == 'True')
+          - apiVersion: postgresql.cnpg.io/v1
+            kind: Database
+            current: status.applied == true && status.observedGeneration == metadata.generation
+          - apiVersion: postgresql.cnpg.io/v1
+            kind: DatabaseRole
+            current: status.applied == true && status.observedGeneration == metadata.generation
           - apiVersion: gateway.networking.k8s.io/v1
             kind: HTTPRoute
             current: >-

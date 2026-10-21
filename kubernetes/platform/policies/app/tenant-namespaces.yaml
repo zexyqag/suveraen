@@ -1,6 +1,7 @@
 ---
 # A namespace named <tenant>-<app> belongs to that tenant and to no other, and carries its label from creation, so
-# selecting by the label can never reach another tenant's namespace. Names can't change, so neither can the label.
+# selecting by the label can never reach another tenant's namespace. Names can't change, so neither can the label. Its
+# app label names the app, which policies elsewhere select by (platform/ceph's object store).
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -25,6 +26,10 @@ spec:
         variables.tenant == '' || (object.metadata.?labels[?'suveraen/tier'].orValue('') == 'app' &&
         !('suveraen/publish' in object.metadata.labels) && !('suveraen/private-ca' in object.metadata.labels))
       message: a tenant's namespaces are app namespaces and never publish ports or sign certificates
+    - expression: >-
+        variables.tenant == '' ||
+        object.metadata.?labels[?'suveraen/app'].orValue('') == object.metadata.name.substring(6)
+      message: a tenant's namespace <tenant>-<app> carries the label suveraen/app=<app>
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

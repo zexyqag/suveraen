@@ -11,3 +11,4 @@ resources:
   - ./edge-objects.yaml
   - ./hostnames.yaml
   - ./tenant-priority.yaml
+  - ./postgres-clusters.yaml

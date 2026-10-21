@@ -1,0 +1,13 @@
+---
+# How the app reaches its database: its own role, over TLS.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db
+stringData:
+  host: postgres-rw.${TENANT}-postgres.svc
+  port: "5432"
+  dbname: ${APP}
+  username: ${APP}
+  password: ${HELLO_DB_PASSWORD}
+  sslmode: require

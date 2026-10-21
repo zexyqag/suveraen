@@ -1,0 +1,31 @@
+---
+# Where the Barman plugin archives WAL and base backups: the tenant's own bucket, one prefix per generation of its
+# cluster. barman-cloud encrypts only on the provider's side, so it writes nowhere outside the cluster.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: postgres
+spec:
+  configuration:
+    destinationPath: s3://${TENANT}-postgres/
+    endpointURL: http://rook-ceph-rgw-objects.rook-ceph.svc
+    s3Credentials:
+      accessKeyId:
+        name: bucket
+        key: AWS_ACCESS_KEY_ID
+      secretAccessKey:
+        name: bucket
+        key: AWS_SECRET_ACCESS_KEY
+    wal:
+      compression: zstd
+      maxParallel: 2
+    data:
+      compression: gzip
+  retentionPolicy: ${RETENTION}
+  instanceSidecarConfiguration:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 128Mi
+      limits:
+        memory: 256Mi

@@ -6,5 +6,6 @@ metadata:
   name: _
   labels:
     suveraen/tier: app
+    suveraen/app: ${APP}
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled

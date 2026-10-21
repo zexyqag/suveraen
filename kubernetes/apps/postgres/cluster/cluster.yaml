@@ -1,0 +1,46 @@
+---
+# Never pruned: its volumes go with it.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  instances: ${PG_INSTANCES}
+  imageCatalogRef:
+    apiGroup: postgresql.cnpg.io
+    kind: ClusterImageCatalog
+    name: postgresql
+    major: 18
+  storage:
+    storageClass: ceph-block
+    size: ${SIZE}
+  resources:
+    requests:
+      cpu: ${CPU}
+      memory: ${MEMORY}
+    limits:
+      memory: ${MEMORY}
+  enableSuperuserAccess: false
+  # Its pods reach the object store (apps/postgres/app, platform/ceph).
+  inheritedMetadata:
+    labels:
+      suveraen/object-store: client
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: postgres
+        serverName: postgres-${GENERATION}
+  postgresql:
+    # Each app's role reaches its own database alone, over TLS; nothing else gets in from the network.
+    pg_hba:
+      - hostssl sameuser all all scram-sha-256
+      - host all all all reject
+    parameters:
+      # Statements, and the members' data in them, stay out of the logs.
+      log_min_error_statement: fatal
+  managed:
+    services:
+      disabledDefaultServices: [ro, r]

@@ -1,0 +1,6 @@
+---
+# Lets an app's pods reach its tenant's PostgreSQL cluster; its attachment opens the other end.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ./networkpolicy.yaml

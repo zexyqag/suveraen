@@ -1,0 +1,45 @@
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: ${APP}
+  namespace: ${TENANT}-postgres
+spec:
+  cluster:
+    name: postgres
+  name: ${APP}
+  login: true
+  passwordSecret:
+    name: ${APP}-db
+  connectionLimit: 50
+  databaseRoleReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: ${APP}
+  namespace: ${TENANT}-postgres
+spec:
+  cluster:
+    name: postgres
+  name: ${APP}
+  owner: ${APP}
+  databaseReclaimPolicy: retain
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: from-${APP}
+  namespace: ${TENANT}-postgres
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: postgres
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${TENANT}-${APP}
+      ports:
+        - port: 5432

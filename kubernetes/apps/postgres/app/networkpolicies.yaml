@@ -1,0 +1,43 @@
+---
+# The operator manages the instances through their status port and PostgreSQL itself.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: from-operator
+spec:
+  podSelector:
+    matchLabels:
+      cnpg.io/cluster: postgres
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cloudnative-pg
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudnative-pg
+      ports:
+        - port: 8000
+        - port: 5432
+---
+# The instances' Barman sidecar, and the jobs that copy the bucket, reach the object store.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: to-object-store
+spec:
+  podSelector:
+    matchLabels:
+      suveraen/object-store: client
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: rook-ceph
+          podSelector:
+            matchLabels:
+              app: rook-ceph-rgw
+      ports:
+        - port: 8080

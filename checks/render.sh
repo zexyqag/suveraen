@@ -34,6 +34,8 @@ appkinds='ConfigMap,Secret,Service,ServiceAccount,PersistentVolumeClaim,LimitRan
 appkinds+=',Role.rbac.authorization.k8s.io,RoleBinding.rbac.authorization.k8s.io,NetworkPolicy.networking.k8s.io'
 appkinds+=',OCIRepository.source.toolkit.fluxcd.io,HelmRelease.helm.toolkit.fluxcd.io'
 appkinds+=',HTTPRoute.gateway.networking.k8s.io'
+# The tenant's PostgreSQL also claims its bucket and tells Barman where to archive.
+pgkinds=',ObjectBucketClaim.objectbucket.io,ObjectStore.barmancloud.cnpg.io'
 export quotas hard appkinds
 privileged=pod-security.kubernetes.io/audit=privileged,pod-security.kubernetes.io/enforce=privileged
 privileged+=,pod-security.kubernetes.io/warn=privileged
@@ -101,6 +103,31 @@ for dir in kubernetes/apps/*/; do
       [ "$docs" = 1 ] || fail "$file holds one host"
     fi
     for ((i = first; i < docs; i++)); do
+      part=$(yq ea "select(documentIndex == $i) | .metadata.name" "$file")
+      # An app's database and role in its tenant's PostgreSQL, once that runs.
+      if [ "$part" = "\${TENANT}-$app-db" ]; then
+        yq ea -e "select(documentIndex == $i)"' | ((.metadata | keys | join(",")) == "name"
+          and (.spec | keys | sort | join(",")) == "dependsOn,path,postBuild"
+          and .spec.path == ("./kubernetes/apps/" + strenv(app) + "/db")
+          and ([.spec.dependsOn[].name] | join(",")) == "${TENANT}-postgres-cluster"
+          and (.spec.postBuild | keys | join(",")) == "substitute"
+          and (.spec.postBuild.substitute | keys | join(",")) == "APP" and .spec.postBuild.substitute.APP == strenv(app))' \
+          "$file" >/dev/null || fail "$file: an app's database is \${TENANT}-$app-db from ./kubernetes/apps/$app/db," \
+            "after \${TENANT}-postgres-cluster alone, with APP $app"
+        continue
+      fi
+      # The tenant's PostgreSQL cluster, after the namespace, bucket and object store it uses.
+      if [ "$app" = postgres ] && [ "$part" = "\${TENANT}-postgres-cluster" ]; then
+        yq ea -e "select(documentIndex == $i)"' | ((.metadata | keys | join(",")) == "name"
+          and (.spec | keys | sort | join(",")) == "components,dependsOn,path,postBuild,targetNamespace"
+          and .spec.path == "./kubernetes/apps/postgres/cluster" and .spec.targetNamespace == "${TENANT}-postgres"
+          and (.spec.components | length) == 1 and (.spec.components[0] | test("^[.][.]/bootstrap/"))
+          and ([.spec.dependsOn[].name] | sort | join(",")) == "${TENANT}-postgres,pg-catalog"
+          and (.spec.postBuild | keys | join(",")) == "substitute" and .spec.postBuild.substitute.APP == "postgres")' \
+          "$file" >/dev/null || fail "$file: the cluster is \${TENANT}-postgres-cluster in \${TENANT}-postgres, from" \
+            "./kubernetes/apps/postgres/cluster with one bootstrap, after \${TENANT}-postgres and pg-catalog"
+        continue
+      fi
       yq ea -e "select(documentIndex == $i)"' | ((.metadata | keys | join(",")) == "name"
         and (.spec | keys | sort | join(",")) == "dependsOn,path,postBuild"
         and (.spec.path | test("^[.]/kubernetes/edge/(app|identity|apex)$"))
@@ -254,7 +281,7 @@ for dir in kubernetes/clusters/*/; do
     path=$(yq '.spec.path' "$w/$name.ks.yaml")
     # A file from elsewhere in the repository can read a key too, so other apps' keys get a value to look for.
     case $path in
-      ./kubernetes/apps/*/app) guarded=$(grep -vxF "$(basename "$(dirname "$path")" | tr a-z A-Z)" <<<"$appnames" \
+      ./kubernetes/apps/*/*) guarded=$(grep -vxF "$(basename "$(dirname "$path")" | tr a-z A-Z)" <<<"$appnames" \
         | paste -sd'|' || true) ;;
       ./kubernetes/edge/*) guarded=$(paste -sd'|' <<<"$appnames") ;;
       *) guarded= ;;
@@ -333,7 +360,7 @@ for dir in kubernetes/clusters/*/; do
         for child in $children; do
           export child
           yq ea -e "select($fluxks and .metadata.name == strenv(child))"' | ((.metadata.name
-            | test("^" + strenv(t) + "-[a-z0-9]+(-edge-[a-z0-9]+)?$"))
+            | test("^" + strenv(t) + "-[a-z0-9]+(-edge-[a-z0-9]+|-db|-cluster)?$"))
             and .metadata.labels."suveraen/tenant" == strenv(t)
             and .spec.commonMetadata.labels."suveraen/tenant" == strenv(t)
             and .spec.postBuild.substitute.TENANT == strenv(t)
@@ -352,20 +379,36 @@ for dir in kubernetes/clusters/*/; do
       ./kubernetes/apps/*/app)
         app=$(basename "$(dirname "$path")")
         [ -n "$t" ] && [ "$name" = "$t-$app" ] || fail "$cluster/$name: apps run only as a tenant's <tenant>-<app>"
+        kinds=$appkinds
+        [ "$app" != postgres ] || kinds+=$pgkinds
+        export kinds
         bad=$(yq ea '[select(.kind == "HelmRelease") | select(.metadata.namespace == "flux-system"
           or .spec.serviceAccountName != "flux-deployer" or .spec.install.crds != "Skip" or .spec.upgrade.crds != "Skip"
           or (.spec | has("targetNamespace") or has("storageNamespace"))) | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: app HelmReleases must run as flux-deployer in the app's namespace: $bad"
         bad=$(yq ea '[select(.kind != null)
           | ((.kind + "." + (.apiVersion | sub("/?[^/]*$", ""))) | sub("[.]$", "")) as $k
-          | select(((strenv(appkinds) | split(",")) | any_c(. == $k) | not)
+          | select(((strenv(kinds) | split(",")) | any_c(. == $k) | not)
             or ($k != "Namespace" and .metadata.namespace != strenv(name)))
           | $k + "/" + .metadata.name] | .[]' "$file")
-        [ -z "$bad" ] || fail "$cluster/$name: an app creates only ${appkinds//,/, }; in its own namespace: $bad"
+        [ -z "$bad" ] || fail "$cluster/$name: an app creates only ${kinds//,/, }; in its own namespace: $bad"
         yq ea -e '[select(.kind == "Namespace")] | (length == 1 and .[0].metadata.name == strenv(name)
-          and .[0].metadata.labels."suveraen/tier" == "app" and .[0].metadata.labels."suveraen/tenant" == strenv(t))' \
-          "$file" >/dev/null \
-          || fail "$cluster/$name: an app's namespace is $name, labelled suveraen/tier=app and suveraen/tenant=$t"
+          and .[0].metadata.labels."suveraen/tier" == "app" and .[0].metadata.labels."suveraen/tenant" == strenv(t)
+          and .[0].metadata.labels."suveraen/app" == strenv(app))' "$file" >/dev/null \
+          || fail "$cluster/$name: an app's namespace is $name, labelled suveraen/tier=app, suveraen/tenant=$t and" \
+            "suveraen/app=$app"
+        if [ "$app" = postgres ]; then
+          # The tenant's own bucket, kept when its claim goes, which Barman writes to in the cluster's object store only.
+          [ "$(yq ea '[select(.kind == "ObjectBucketClaim") | .metadata.name + " " + .spec.bucketName + " "
+            + .spec.storageClassName + " " + .metadata.annotations."kustomize.toolkit.fluxcd.io/prune"] | .[]' "$file"
+            yq ea '[select(.kind == "ObjectStore") | .metadata.name + " " + .spec.configuration.destinationPath + " "
+            + .spec.configuration.endpointURL + " " + .spec.configuration.s3Credentials.accessKeyId.name + " "
+            + .spec.configuration.s3Credentials.secretAccessKey.name] | .[]' "$file")" = "bucket $t-postgres $(
+              )ceph-bucket disabled
+postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket bucket" ] \
+            || fail "$cluster/$name: a tenant's bucket is $t-postgres, claimed from ceph-bucket and never pruned, and" \
+              "Barman archives there through the cluster's object store with its keys"
+        fi
         bad=$(yq ea '[select(.kind == "RoleBinding") | .metadata.namespace as $ns | select(
           (.roleRef.kind == "ClusterRole" and .roleRef.name != "flux-app")
           or ((.subjects // []) | any_c(.kind != "ServiceAccount" or ((.namespace // "") != "" and .namespace != $ns))))
@@ -397,6 +440,78 @@ for dir in kubernetes/clusters/*/; do
           [ "$(quantity "$limit")" -le "$(quantity "$quota")" ] \
             || fail "$cluster/$name: the LimitRange's $field, $limit, is above the quota's ${pair#*:}, $quota"
         done
+        ;;
+      ./kubernetes/apps/postgres/cluster)
+        [ -n "$t" ] && [ "$name" = "$t-postgres-cluster" ] \
+          || fail "$cluster/$name: a tenant's PostgreSQL cluster is <tenant>-postgres-cluster"
+        generation=$(yq '.spec.postBuild.substitute.GENERATION' "$w/$name.build.yaml")
+        origin=$(yq '.spec.postBuild.substitute.ORIGIN' "$w/$name.build.yaml")
+        [[ $generation =~ ^g[0-9]+$ && $origin =~ ^g[0-9]+$ ]] \
+          || fail "$cluster/$name: generations are g<number>: $generation, $origin"
+        objects="Cluster/$t-postgres/postgres/$t,ScheduledBackup/$t-postgres/postgres-$generation/$t"
+        [ "$(yq ea '[select(.kind != null) | .kind + "/" + .metadata.namespace + "/" + .metadata.name + "/"
+          + .metadata.labels."suveraen/tenant"] | sort | join(",")' "$file")" = "$objects" ] \
+          || fail "$cluster/$name: a tenant's PostgreSQL is Cluster postgres and ScheduledBackup postgres-$generation" \
+            "in $t-postgres, labelled with tenant $t"
+        recovery=$(yq ea '[select(.kind == "Cluster") | .spec.bootstrap | has("recovery")] | .[0]' "$file")
+        # A cluster archives under its own generation and recovers only from an earlier one.
+        if [ "$recovery" = true ]; then
+          [ "$origin" != "$generation" ] \
+            || fail "$cluster/$name: a cluster recovers from an earlier generation than its own, $generation"
+          from="recovery:origin:postgres-$origin"
+        else
+          from=initdb
+        fi
+        yq ea '[select(.kind == "Cluster")] | .[0] | [
+          "prune " + (.metadata.annotations."kustomize.toolkit.fluxcd.io/prune" // "enabled"),
+          "superuser " + (.spec.enableSuperuserAccess // false | tostring),
+          "image " + (.spec | has("imageName") | tostring) + "/" + (.spec.imageCatalogRef.kind // "-") + "/"
+            + (.spec.imageCatalogRef.name // "-"),
+          "storage " + (.spec.storage.storageClass // "-") + "/" + (.spec | has("walStorage") | tostring),
+          "pg_hba " + (.spec.postgresql.pg_hba // [] | join(";")),
+          "archive " + ([.spec.plugins[] | .name + ":" + (.isWALArchiver // false | tostring) + ":"
+            + (.parameters | to_entries | map(.key + "=" + .value) | join("+"))] | join(";")),
+          "bootstrap " + ((.spec.bootstrap // {}) | keys | join(",")) + ":" + (.spec.bootstrap.recovery.source // "")
+            + ":" + ([.spec.externalClusters[]? | select(.name == "origin") | .plugin.parameters.serverName]
+            | join(","))] | .[]' "$file" | sed 's/^bootstrap initdb::$/bootstrap initdb/' >"$w/$name.pg"
+        printf '%s\n' "prune disabled" "superuser false" "image false/ClusterImageCatalog/postgresql" \
+          "storage ceph-block/false" "pg_hba hostssl sameuser all all scram-sha-256;host all all all reject" \
+          "archive barman-cloud.cloudnative-pg.io:true:barmanObjectName=postgres+serverName=postgres-$generation" \
+          "bootstrap $from" >"$w/$name.pg.want"
+        bad=$(diff "$w/$name.pg.want" "$w/$name.pg" | sed -n 's/^> //p' | paste -sd';' || true)
+        [ -z "$bad" ] || fail "$cluster/$name: a tenant's PostgreSQL is never pruned, has no superuser access, takes" \
+          "its image from the catalog and its volume from ceph-block, lets each role reach its own database alone over" \
+          "TLS, and archives with Barman to postgres-$generation: $bad"
+        ;;
+      ./kubernetes/apps/*/db)
+        app=$(basename "$(dirname "$path")")
+        export app
+        [ -n "$t" ] && [ "$name" = "$t-$app-db" ] || fail "$cluster/$name: an app's database is <tenant>-<app>-db"
+        objects="Database/$t-postgres/$app/$t,DatabaseRole/$t-postgres/$app/$t"
+        objects+=",NetworkPolicy/$t-postgres/from-$app/$t,Secret/$t-postgres/$app-db/$t"
+        [ "$(yq ea '[select(.kind != null) | .kind + "/" + .metadata.namespace + "/" + .metadata.name + "/"
+          + .metadata.labels."suveraen/tenant"] | sort | join(",")' "$file")" = "$objects" ] \
+          || fail "$cluster/$name: an app's database is Database, DatabaseRole $app, NetworkPolicy from-$app and" \
+            "Secret $app-db in $t-postgres, labelled with tenant $t"
+        {
+          yq ea '[select(.kind == "Database") | .spec | "Database " + (keys | sort | join(",")) + " " + .cluster.name
+            + " " + .name + " " + .owner] | .[]' "$file"
+          yq ea '[select(.kind == "DatabaseRole") | .spec | "DatabaseRole " + (keys | sort | join(",")) + " "
+            + .cluster.name + " " + .name + " " + (.login | tostring) + " " + .passwordSecret.name] | .[]' "$file"
+          yq ea '[select(.kind == "NetworkPolicy") | .spec | "NetworkPolicy " + (.podSelector.matchLabels | to_entries
+            | map(.key + "=" + .value) | join(",")) + " " + (.policyTypes | join(",")) + " " + ([.ingress[]
+            | ([.from[] | (keys | join(",")) + "=" + (.namespaceSelector.matchLabels | to_entries
+              | map(.key + "=" + .value) | join(","))] | join(";")) + ":" + ([.ports[].port | tostring] | join(","))]
+            | join("|"))] | .[]' "$file"
+          yq ea '[select(.kind == "Secret") | "Secret " + .type + " " + .stringData.username] | .[]' "$file"
+        } >"$w/$name.db"
+        printf '%s\n' "Database cluster,databaseReclaimPolicy,name,owner postgres $app $app" \
+          "DatabaseRole cluster,connectionLimit,databaseRoleReclaimPolicy,login,name,passwordSecret postgres $app true $app-db" \
+          "NetworkPolicy cnpg.io/cluster=postgres Ingress namespaceSelector=kubernetes.io/metadata.name=$t-$app:5432" \
+          "Secret kubernetes.io/basic-auth $app" >"$w/$name.db.want"
+        bad=$(diff "$w/$name.db.want" "$w/$name.db" | sed -n 's/^> //p' | paste -sd';' || true)
+        [ -z "$bad" ] || fail "$cluster/$name: an app's role logs in with its Secret and nothing more, owns its" \
+          "database of the same name, and is reached from $t-$app alone: $bad"
         ;;
       ./kubernetes/edge/app | ./kubernetes/edge/identity | ./kubernetes/edge/apex)
         [[ $name =~ ^$t-([a-z0-9]+)-edge-([a-z0-9]+)$ ]] && [ -n "$t" ] \
@@ -460,7 +575,8 @@ for dir in kubernetes/clusters/*/; do
             "name": (.namespaceSelector.matchLabels."kubernetes.io/metadata.name" // ""),
             "tenant": (.namespaceSelector.matchLabels."suveraen/tenant" // "")}]
           | map(select(.ipblock or (.selector and (.expressions or (.tenant != strenv(t) and (.labels != 1
-            or (.name != "kube-system" and .name != "gateway" and (.name | test("^" + strenv(t) + "-") | not))))))))
+            or (.name != "kube-system" and .name != "gateway" and .name != "cloudnative-pg" and .name != "rook-ceph"
+              and (.name | test("^" + strenv(t) + "-") | not))))))))
           | map(.np) | unique | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: network policies reach only named platform namespaces and tenant $t's" \
           "own: $bad"

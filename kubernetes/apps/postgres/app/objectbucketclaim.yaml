@@ -1,0 +1,14 @@
+---
+# The tenant's bucket in the cluster's object store, with keys of its own in Secret bucket. Its data stays when the
+# claim goes (ceph-bucket keeps buckets).
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: bucket
+  annotations:
+    kustomize.toolkit.fluxcd.io/prune: disabled
+spec:
+  bucketName: ${TENANT}-postgres
+  storageClassName: ceph-bucket
+  additionalConfig:
+    maxSize: ${BUCKET_SIZE}

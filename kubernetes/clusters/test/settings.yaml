@@ -16,3 +16,5 @@ data:
   CEPH_DAEMONS_SHARE_NODE: "true"
   # Ceph's smallest cache size for an OSD; a real server gives each 5Gi.
   CEPH_OSD_MEMORY: 1152Mi
+  # One instance per database cluster while there is one server.
+  PG_INSTANCES: "1"

@@ -1,0 +1,38 @@
+---
+# CloudNativePG reads a cluster's bootstrap only when it creates the cluster, so a restore on a live cluster would
+# silently do nothing, and a new generation's serverName would archive into the old one's timeline. Such a change
+# must be refused until the cluster is deleted and Flux creates it anew (apps/postgres).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: postgres-clusters
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [postgresql.cnpg.io]
+        apiVersions: ["*"]
+        operations: [UPDATE]
+        resources: [clusters]
+    namespaceSelector:
+      matchExpressions:
+        - key: suveraen/tenant
+          operator: Exists
+  variables:
+    - name: serverNames
+      expression: >-
+        [object, oldObject].map(o, o.spec.?plugins.orValue([]).map(p, p.?parameters[?'serverName'].orValue('')))
+  validations:
+    - expression: >-
+        object.spec.?bootstrap == oldObject.spec.?bootstrap &&
+        object.spec.?externalClusters == oldObject.spec.?externalClusters &&
+        variables.serverNames[0] == variables.serverNames[1]
+      message: a restore or a new generation needs a new Cluster; delete this one for Flux to create it anew
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: postgres-clusters
+spec:
+  policyName: postgres-clusters
+  validationActions: [Deny]
