@@ -473,8 +473,12 @@ for dir in kubernetes/clusters/*/; do
         '$2 != "" && ($1 != "rook-ceph" || ks != "rook-ceph" || $2 != ceph) { print $1 }')
     [ -z "$bad" ] || fail "$cluster/$name: namespaces keep the cluster's restricted Pod Security default; only" \
       "rook-ceph, where Ceph runs, is privileged: $bad"
+    # Helm repositories and buckets serve whatever they hold at the time, with nothing to pin them by.
     bad=$(yq ea '[select((.kind == "OCIRepository" and .spec.ref.digest == null)
-      or (.kind == "GitRepository" and .spec.ref.commit == null)) | .metadata.name] | .[]' "$file")
+      or (.kind == "GitRepository" and .spec.ref.commit == null)
+      or ((.apiVersion // "") | test("^source.toolkit.fluxcd.io/"))
+        and (.kind == "HelmRepository" or .kind == "Bucket"))
+      | .kind + "/" + .metadata.name] | .[]' "$file")
     [ -z "$bad" ] || fail "$cluster/$name: sources must be pinned to a digest or a commit: $bad"
     if [ "$name" != gateway ]; then
       bad=$(yq ea '[select(.kind == "Namespace" and .metadata.labels."suveraen/publish" == "true") | .metadata.name]

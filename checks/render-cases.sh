@@ -306,6 +306,14 @@ refuses np-empty-peer "a network policy rule without peers reaches everything: x
 refuses np-edge-ports-only "a network policy rule without peers reaches everything: from-gateway-hello" \
   "yq -i 'del(.spec.ingress[0].from)' edge/base/networkpolicy.yaml"
 
+# Sources.
+refuses helmrepository-source "sources must be pinned to a digest or a commit: HelmRepository/reloader" \
+  "append platform/reloader/app/ocirepository.yaml '---\napiVersion: source.toolkit.fluxcd.io/v1\nkind: HelmRepository
+metadata:\n  name: reloader\n  namespace: flux-system\nspec:\n  interval: 12h
+  url: https://stakater.github.io/stakater-charts\n'"
+refuses oci-tag-only "sources must be pinned to a digest or a commit: OCIRepository/reloader" \
+  "yq -i 'del(.spec.ref.digest)' platform/reloader/app/ocirepository.yaml"
+
 # Pod Security.
 privileged="only rook-ceph, where Ceph runs, is privileged"
 refuses privileged-other-namespace "$privileged: reloader" \
