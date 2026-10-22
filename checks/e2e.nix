@@ -1167,6 +1167,8 @@ pkgs.testers.runNixOSTest {
               )
               server.succeed(f"""{suspend} '{{"spec":{{"suspend":true}}}}'""")
               server.succeed(f"kubectl -n {ns} delete cluster postgres --timeout=300s")
+              # Its instance archives WAL until it stops, which would land after the wipe.
+              server.wait_until_succeeds(f'test -z "$(kubectl -n {ns} get pods -l cnpg.io/cluster=postgres -o name)"', timeout=300)
               # The tenant's bucket in the cluster loses all its backups.
               wipe = restricted(
                   ns, "wipe",
