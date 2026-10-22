@@ -979,7 +979,7 @@ pkgs.testers.runNixOSTest {
               pod = restricted(namespace, "psql", "sleep 3600", env=[{"secretRef": {"name": secret}}])
               pod["spec"]["containers"][0] |= {
                   "image": postgres_image,
-                  "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"memory": "96Mi"}},
+                  "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"memory": "64Mi"}},
               }
               apply(pod)
               server.succeed(f"kubectl -n {namespace} wait pod psql --for=condition=Ready --timeout=300s")
