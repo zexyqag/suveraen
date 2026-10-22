@@ -470,22 +470,12 @@ pkgs.testers.runNixOSTest {
           images()
           diagnose_ceph()
 
-      # Rook, Ceph through the operator (there's no toolbox), the CSI drivers, the host's disks as the host and as
-      # ceph-volume see them, and last the OSD prepare pods' own logs.
+      # Rook, Ceph through the operator (there's no toolbox), the CSI drivers, the host's disks, and last ceph-volume's
+      # and the OSD prepare pods' own logs.
       def diagnose_ceph():
           ceph = (
               "kubectl -n rook-ceph exec deploy/rook-ceph-operator -- timeout 30 ceph --connect-timeout=10"
               " --conf=/var/lib/rook/rook-ceph/rook-ceph.config"
-          )
-          image = server.execute(
-              "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.spec.cephVersion.image}'"
-          )[1].strip()
-          # From the cluster's Ceph image as containerd keeps it, by digest alone.
-          volume = (
-              "timeout 300 k3s ctr -n k8s.io run --rm --privileged"
-              " --mount type=bind,src=/dev,dst=/dev,options=rbind:rw"
-              " --mount type=bind,src=/run/udev,dst=/run/udev,options=rbind:ro"
-              f" {re.sub(r':[^/@]*@', '@', image)}"
           )
           operator = "kubectl -n rook-ceph logs deploy/rook-ceph-operator --tail=-1"
           errors = "grep -E ' (E|W) \\| |op-osd|failed to provision|exec timeout' | tail -n 200"
@@ -513,9 +503,6 @@ pkgs.testers.runNixOSTest {
               "dmsetup ls --tree",
               "grep -E '^(dm_crypt|dm_mod|raid1) ' /proc/modules",
               "mdadm --detail /dev/md/osd-db",
-              "k3s ctr -n k8s.io images ls -q | grep -F quay.io/ceph/",
-              f"{volume} ceph-volume-inventory ceph-volume inventory --format json-pretty",
-              f"{volume} ceph-volume-lvm-list ceph-volume lvm list --format json",
               "tail -n 200 /var/lib/rook/rook-ceph/log/ceph-volume.log",
               "for log in /var/log/osd-prepare/*.log; do echo \"==> $log\"; tail -n 150 $log; done",
           ]:
