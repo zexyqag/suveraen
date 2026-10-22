@@ -325,6 +325,39 @@ pkgs.testers.runNixOSTest {
       # There's no release to upgrade to here.
       system.autoUpgrade.enable = lib.mkForce false;
 
+      # Every run of every container of Rook's OSD prepare pods, kept for diagnose(): the Job deletes its pod once it
+      # gives up, and ceph-volume says why it failed only there.
+      systemd.services.osd-prepare-logs = {
+        description = "Keep the logs of Rook's OSD prepare pods";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "k3s.service" ];
+        path = [ pkgs.kubectl ];
+        environment.KUBECONFIG = "/etc/rancher/k3s/k3s.yaml";
+        serviceConfig.Restart = "always";
+        script = ''
+          dir=/var/log/osd-prepare
+          mkdir -p "$dir"
+          keep() {
+            if kubectl --request-timeout=20s -n rook-ceph logs "$1" -c "$2" --timestamps "''${@:4}" \
+              >"$dir/.part" 2>&1; then
+              mv "$dir/.part" "$dir/$1-$2-$3.log"
+            fi
+          }
+          runs='{range .items[*]}{.metadata.name}{range .status.initContainerStatuses[*]}{" "}{.name}={.restartCount}{end}'
+          runs+='{range .status.containerStatuses[*]}{" "}{.name}={.restartCount}{end}{"\n"}{end}'
+          while sleep 5; do
+            kubectl --request-timeout=20s -n rook-ceph get pods -l app=rook-ceph-osd-prepare -o jsonpath="$runs" \
+              2>/dev/null | while read -r pod containers; do
+              for container in $containers; do
+                name=''${container%=*} count=''${container#*=}
+                keep "$pod" "$name" "$count"
+                [ "$count" = 0 ] || keep "$pod" "$name" $((count - 1)) --previous
+              done
+            done
+          done
+        '';
+      };
+
       suveraen = {
         adminKeys = [ keys.snakeOilEd25519PublicKey ];
         source = {
@@ -416,27 +449,77 @@ pkgs.testers.runNixOSTest {
               "kubectl get gitrepositories,ocirepositories,kustomizations,helmreleases -A",
               "kubectl get pods -A -o wide",
               "kubectl get events -A --sort-by=.lastTimestamp | tail -n 100",
+              "kubectl get events -A --field-selector reason=FailedCreate",
               "kubectl -n flux-system logs deploy/source-controller --tail=50",
               "kubectl -n flux-system logs deploy/kustomize-controller --tail=100",
               "kubectl -n flux-system logs deploy/helm-controller --tail=100",
               "kubectl get clusterissuers,certificates,certificaterequests,orders,challenges -A",
               "kubectl -n cert-manager logs deploy/cert-manager --tail=100",
               "journalctl -u knot -u knot-acme-secret --no-pager | tail -n 50",
-              "kubectl get cephclusters,cephblockpools,cephobjectstores -A -o wide",
-              "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph}'",
-              "kubectl -n rook-ceph logs deploy/rook-ceph-operator --tail=100",
-              "kubectl -n rook-ceph logs -l app=rook-ceph-osd-prepare --tail=50 --all-containers",
               "kubectl get pv,pvc,volumesnapshots -A",
               "kubectl get clusters.postgresql.cnpg.io,backups.postgresql.cnpg.io,jobs -A",
               "kubectl get replicationsources,replicationdestinations -A -o wide",
-              "kubectl logs -A -l app.kubernetes.io/created-by=volsync --tail=30 --prefix",
-              "lsblk -o NAME,TYPE,SIZE,PARTLABEL,FSTYPE",
+              "kubectl get pods -A -l app.kubernetes.io/created-by=volsync"
+              " -o jsonpath='{range .items[*]}{.metadata.namespace}{\" \"}{.metadata.name}{\"\\n\"}{end}'"
+              " | while read -r ns pod; do kubectl -n $ns logs $pod --all-containers --tail=30 --prefix; done",
               "free -m",
               "df -h /",
           ]:
-              print(server.execute(cmd)[1])
+              print(f"$ {cmd}\n{server.execute(f'set +e; ( {cmd} ) 2>&1')[1]}")
           print(acme.execute("journalctl -u pebble -u knot -u 's3-*' --no-pager | tail -n 80")[1])
           images()
+          diagnose_ceph()
+
+      # Rook, Ceph through the operator (there's no toolbox), the CSI drivers, the host's disks as the host and as
+      # ceph-volume see them, and last the OSD prepare pods' own logs.
+      def diagnose_ceph():
+          ceph = (
+              "kubectl -n rook-ceph exec deploy/rook-ceph-operator -- timeout 30 ceph --connect-timeout=10"
+              " --conf=/var/lib/rook/rook-ceph/rook-ceph.config"
+          )
+          image = server.execute(
+              "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.spec.cephVersion.image}'"
+          )[1].strip()
+          # From the cluster's Ceph image as containerd keeps it, by digest alone.
+          volume = (
+              "timeout 300 k3s ctr -n k8s.io run --rm --privileged"
+              " --mount type=bind,src=/dev,dst=/dev,options=rbind:rw"
+              " --mount type=bind,src=/run/udev,dst=/run/udev,options=rbind:ro"
+              f" {re.sub(r':[^/@]*@', '@', image)}"
+          )
+          operator = "kubectl -n rook-ceph logs deploy/rook-ceph-operator --tail=-1"
+          errors = "grep -E ' (E|W) \\| |op-osd|failed to provision|exec timeout' | tail -n 200"
+          for cmd in [
+              "kubectl get cephclusters,cephblockpools,cephobjectstores -A -o wide",
+              "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph}{\"\\n\"}{.status.conditions}'",
+              "kubectl -n rook-ceph get events --sort-by=.lastTimestamp",
+              "kubectl -n rook-ceph get jobs,pods -l app=rook-ceph-osd-prepare -o yaml",
+              "kubectl -n rook-ceph describe jobs -l app=rook-ceph-osd-prepare",
+              "kubectl -n rook-ceph get configmaps -l app=rook-ceph-osd,status=provisioning -o yaml",
+              f"{operator} | {errors}",
+              f"{operator} --previous | {errors}",
+              "kubectl -n rook-ceph logs deploy/rook-ceph-operator --tail=100",
+              *[f"{ceph} {args}" for args in
+                ["status", "health detail", "osd tree", "osd dump", "osd crush class ls", "pg stat", "df", "crash ls"]],
+              "kubectl -n rook-ceph get drivers.csi.ceph.io,operatorconfigs.csi.ceph.io,cephconnections.csi.ceph.io"
+              ",clientprofiles.csi.ceph.io -o yaml",
+              "kubectl -n rook-ceph get deploy,ds,rs,sa -o wide",
+              "kubectl -n rook-ceph logs deploy/ceph-csi-controller-manager --tail=100",
+              "lsblk -o NAME,KNAME,TYPE,SIZE,ROTA,PARTLABEL,PARTUUID,FSTYPE,MOUNTPOINTS",
+              "ls -l /dev/disk/by-osd/",
+              "for link in /dev/disk/by-osd/*; do echo $link; udevadm info --query=property $(readlink -f $link)"
+              " | grep -E '^(DEVLINKS|ID_PART_ENTRY_NAME|DM_VG_NAME|DM_LV_NAME)='; done",
+              "pvs; vgs; lvs -o lv_name,vg_name,lv_size,lv_tags,devices",
+              "dmsetup ls --tree",
+              "grep -E '^(dm_crypt|dm_mod|raid1) ' /proc/modules",
+              "mdadm --detail /dev/md/osd-db",
+              "k3s ctr -n k8s.io images ls -q | grep -F quay.io/ceph/",
+              f"{volume} ceph-volume-inventory ceph-volume inventory --format json-pretty",
+              f"{volume} ceph-volume-lvm-list ceph-volume lvm list --format json",
+              "tail -n 200 /var/lib/rook/rook-ceph/log/ceph-volume.log",
+              "for log in /var/log/osd-prepare/*.log; do echo \"==> $log\"; tail -n 150 $log; done",
+          ]:
+              print(f"$ {cmd}\n{server.execute(f'set +e; ( {cmd} ) 2>&1')[1]}")
 
       # What each container runs, by digest: how images only known by tag here get pinned.
       def images():
@@ -465,10 +548,19 @@ pkgs.testers.runNixOSTest {
               server.succeed("kubectl -n flux-system wait gitrepository suveraen --for=condition=SourceVerified --timeout=0")
 
           with subtest("Every Kustomization and HelmRelease becomes Ready"):
-              # The root Kustomization is Ready only once it has created the others, so --all covers them all.
-              server.wait_until_succeeds(
-                  "kubectl -n flux-system wait kustomization --all --for=condition=Ready --timeout=0", timeout=2700
-              )
+              # The root Kustomization is Ready only once it has created the others, so --all covers them all. A failed
+              # OSD prepare job ends the wait at once: the rest of it would only run out.
+              def ready(_):
+                  failed = server.execute(
+                      "kubectl -n rook-ceph get jobs -l app=rook-ceph-osd-prepare"
+                      " -o jsonpath='{..conditions[?(@.type==\"Failed\")].status}'"
+                  )[1]
+                  assert "True" not in failed, "an OSD prepare job failed"
+                  return server.execute(
+                      "kubectl -n flux-system wait kustomization --all --for=condition=Ready --timeout=0"
+                  )[0] == 0
+
+              retry(ready, timeout_seconds=2700)
               server.succeed("kubectl wait helmrelease -A --all --for=condition=Ready --timeout=0")
               images()
               memory()
