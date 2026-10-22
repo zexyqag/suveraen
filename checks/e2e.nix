@@ -772,18 +772,24 @@ pkgs.testers.runNixOSTest {
               server.wait_until_succeeds(
                   "kubectl -n objects get objectbucketclaim probe -o jsonpath='{.status.phase}' | grep -x Bound", timeout=600
               )
-              s3 = (
-                  'curl -fsS -m 10 --aws-sigv4 "aws:amz:''${BUCKET_REGION:-us-east-1}:s3"'
+              request = (
+                  ' --aws-sigv4 "aws:amz:''${BUCKET_REGION:-us-east-1}:s3"'
                   ' --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" "http://$BUCKET_HOST:$BUCKET_PORT/$BUCKET_NAME/marker"'
               )
+              s3 = "curl -fsS -m 10" + request
+              # The store admits a new pod only once k3s's policy controller has its address, which comes after it starts.
+              admitted = "curl -fsS -m 10 --retry 30 --retry-delay 1 --retry-connrefused" + request
               keys = [{"secretRef": {"name": "probe"}}, {"configMapRef": {"name": "probe"}}]
+              # Started first, so the sync that lets the client in has this pod's address too: what keeps it out then
+              # is the policy, not the controller's lag.
+              apply(restricted("objects", "other", "sleep 3600", env=keys))
+              server.succeed("kubectl -n objects wait pod other --for=condition=Ready --timeout=300s")
               apply(restricted(
-                  "objects", "client", f"echo kept > /tmp/marker && {s3} -T /tmp/marker && {s3}",
+                  "objects", "client", f"echo kept > /tmp/marker && {admitted} -T /tmp/marker && {admitted}",
                   labels={"suveraen/object-store": "client"}, env=keys,
               ))
-              assert finished("objects", "client").strip() == "kept"
-              apply(restricted("objects", "other", "sleep 600", env=keys))
-              server.succeed("kubectl -n objects wait pod other --for=condition=Ready --timeout=300s")
+              # Each refused try leaves curl's error in the log ahead of the object.
+              assert finished("objects", "client").splitlines()[-1:] == ["kept"]
               status, out = server.execute(f"kubectl -n objects exec other -- sh -c {shlex.quote(s3)} 2>&1")
               assert status in [7, 28], (status, out)
 
