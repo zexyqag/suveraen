@@ -1158,14 +1158,16 @@ pkgs.testers.runNixOSTest {
               )
               return signed
 
+          # Flux takes over what kubectl's own field managers set, so the object's next apply would drop the change.
+          def merge(namespace, obj, change):
+              server.succeed(
+                  f"kubectl -n {namespace} patch {obj} --field-manager=flux-client-side-apply --type merge"
+                  f" -p {shlex.quote(json.dumps(change))}"
+              )
+
           with subtest("When the cluster's object store has lost a tenant's backups, a release brings its PostgreSQL back from a provider's copy"):
               ns = f"{first}-postgres"
-              # Flux takes over what kubectl's own field managers set, so the tenant's next apply would drop the suspend.
-              suspend = (
-                  f"kubectl -n flux-system patch kustomization {first}-postgres-cluster"
-                  " --field-manager=flux-client-side-apply --type merge -p"
-              )
-              server.succeed(f"""{suspend} '{{"spec":{{"suspend":true}}}}'""")
+              merge("flux-system", f"kustomization {first}-postgres-cluster", {"spec": {"suspend": True}})
               server.succeed(f"kubectl -n {ns} delete cluster postgres --timeout=300s")
               # Its instance archives WAL until it stops, which would land after the wipe.
               server.wait_until_succeeds(f'test -z "$(kubectl -n {ns} get pods -l cnpg.io/cluster=postgres -o name)"', timeout=300)
@@ -1198,7 +1200,7 @@ pkgs.testers.runNixOSTest {
               )
               # The suspend held: a Cluster made before the restore's settings arrived would keep them out.
               server.fail(f"kubectl -n {ns} get cluster postgres")
-              server.succeed(f"""{suspend} '{{"spec":{{"suspend":false}}}}'""")
+              merge("flux-system", f"kustomization {first}-postgres-cluster", {"spec": {"suspend": False}})
               server.wait_until_succeeds(f"kubectl -n {ns} wait cluster postgres --for=condition=Ready --timeout=0", timeout=1200)
               server.wait_until_succeeds(
                   f"kubectl -n flux-system wait kustomization {first}-postgres-cluster --for=condition=Ready --timeout=0",
@@ -1222,10 +1224,7 @@ pkgs.testers.runNixOSTest {
               server.succeed(f"kubectl -n {ns} exec deploy/hello -- sh -c 'echo kept > /data/marker && echo gone > /data/removed'")
 
               def sync(kind, name, value):
-                  server.succeed(
-                      f"kubectl -n {ns} patch {kind} {name} --type merge"
-                      f""" -p '{{"spec":{{"trigger":{{"manual":"{value}"}}}}}}'"""
-                  )
+                  merge(ns, f"{kind} {name}", {"spec": {"trigger": {"manual": value}}})
                   server.wait_until_succeeds(
                       f"kubectl -n {ns} get {kind} {name} -o jsonpath='{{.status.lastManualSync}}' | grep -x {value}",
                       timeout=600,
