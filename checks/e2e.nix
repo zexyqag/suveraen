@@ -24,6 +24,7 @@
 # later copies leave the old generation's alone. An app's volume goes to both providers too, encrypted with the app's
 # own password, and comes back from either as it was copied, without the files deleted before; nothing is left of the
 # volumes copies and restores worked on, and every volume in a tenant's namespace is backed up or VolSync's.
+# The server's alerts reach a phone.
 {
   pkgs,
   module,
@@ -36,6 +37,19 @@ let
   asCgit = "runuser -u cgit -- env HOME=/srv/git";
 
   transferKey = import ./transfer-key.nix pkgs;
+  # The server's alerts go to an ntfy beside it, which only the publisher posts to and only the phone reads, as at the
+  # watcher. ntfy tokens are "tk_" plus 29 characters.
+  publisherToken = "tk_suveraentestpublisher00000000";
+  phonePassword = "phone-test-password";
+  alertSecrets = pkgs.runCommand "e2e-alert-secrets" { nativeBuildInputs = [ pkgs.ntfy-sh ]; } ''
+    mkdir $out
+    hash() { printf '%s\n%s\n' "$1" "$1" | ntfy user hash | grep -o '\$2a\$.*'; }
+    cat > $out/ntfy.env <<EOF
+    NTFY_AUTH_USERS='phone:$(hash ${phonePassword}):user,publisher:$(hash unused):user'
+    NTFY_AUTH_TOKENS='publisher:${publisherToken}'
+    EOF
+    printf '%s' ${publisherToken} > $out/publisher-token
+  '';
   # The cluster the server's Flux applies, as it is in the store.
   clusterIn =
     nodes: "${kubernetes}/${lib.removePrefix "./kubernetes/" nodes.server.suveraen.cluster.path}";
@@ -297,8 +311,25 @@ pkgs.testers.runNixOSTest {
           backup.recipients = [ keys.snakeOilEd25519PublicKey ];
         };
         alerts = {
-          urlFile = toString (pkgs.writeText "alerts-url" "http://127.0.0.1:9/ops");
-          tokenFile = toString (pkgs.writeText "alerts-token" "unused");
+          urlFile = toString (pkgs.writeText "alerts-url" "http://127.0.0.1:2587/ops");
+          tokenFile = "${alertSecrets}/publisher-token";
+          # Its ntfy is on the same machine, so there's no reboot of the watcher to ride out.
+          retrySeconds = 5;
+        };
+      };
+
+      # Stands in for the watcher's ntfy.
+      services.ntfy-sh = {
+        enable = true;
+        environmentFile = "${alertSecrets}/ntfy.env";
+        settings = {
+          base-url = "http://alerts.test";
+          listen-http = "127.0.0.1:2587";
+          auth-default-access = "deny-all";
+          auth-access = [
+            "phone:*:ro"
+            "publisher:*:wo"
+          ];
         };
       };
     };
@@ -365,6 +396,13 @@ pkgs.testers.runNixOSTest {
           server.execute(f"set +e; ( {cmd} ) > /tmp/shared/output 2>&1")
           return (server.shared_dir / "output").read_bytes().decode(errors="replace")
 
+      # The server's alerts so far, as the phone reads them.
+      phone = "curl -fsS -u phone:${phonePassword} 'http://127.0.0.1:2587/ops/json?poll=1'"
+
+      def alerts():
+          server.succeed(f"{phone} > /tmp/shared/alerts")
+          return [json.loads(line) for line in (server.shared_dir / "alerts").read_text().splitlines() if line]
+
       def diagnose():
           for cmd in [
               "kubectl get gitrepositories,ocirepositories,kustomizations,helmreleases -A",
@@ -396,6 +434,7 @@ pkgs.testers.runNixOSTest {
               " | while read -r ns pod; do kubectl -n $ns logs $pod --all-containers --tail=30 --prefix; done",
               "free -m",
               "df -h /",
+              phone,
           ]:
               print(f"$ {cmd}\n{shown(cmd)}")
           print(acme.execute("journalctl -u pebble -u knot -u 's3-*' --no-pager | tail -n 80")[1])
@@ -475,6 +514,12 @@ pkgs.testers.runNixOSTest {
 
       server.wait_for_unit("k3s.service")
       try:
+          with subtest("The server's alerts reach the phone"):
+              server.wait_until_succeeds("curl -fsS http://127.0.0.1:2587/v1/health")
+              server.succeed("suveraen-alert e2e-probe")
+              titles = [a.get("title") for a in alerts()]
+              assert "${nodes.server.networking.hostName}: e2e-probe" in titles, titles
+
           with subtest("Flux takes the signed commit"):
               server.wait_until_succeeds(
                   f"kubectl -n flux-system get gitrepository suveraen -o jsonpath='{{.status.artifact.revision}}' | grep -F {signed}",
