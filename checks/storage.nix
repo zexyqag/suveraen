@@ -1,7 +1,8 @@
-# A server's disk layout as disko installs it on two blank disks, booted: BlueStore DB volumes for Ceph's OSDs lie on
-# a RAID1 array over both system disks, at their size and with nothing on them, and all stay readable when one disk
-# fails; k3s's and the monitors' datasets are bounded or reserved as set and mounted outside rpool/var; and
-# containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter there.
+# A server's disk layout as disko installs it on two blank disks, booted: BlueStore DB volumes for Ceph's OSDs lie on a
+# RAID1 array over both system disks, at their size and with nothing on them, LVM's commands reach them by an ordinary
+# PATH, and all stay readable when one disk fails; k3s's and the monitors' datasets are bounded or reserved as set and
+# mounted outside rpool/var; and containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter
+# there.
 { lib, pkgs, ... }:
 let
   keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
@@ -72,6 +73,8 @@ in
         machine.succeed(f"test $(lsblk -bno SIZE {volume}) = ${mib 64}")
         machine.succeed(f"test -z \"$(lsblk -no FSTYPE {volume})\"")
     machine.fail("test -e /dev/disk/by-osd/osd4-db")
+    # As ceph-volume finds them from Rook's prepare pods: by a container image's PATH.
+    machine.succeed("env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin lvs osd-db/osd0-db")
     machine.succeed("mdadm /dev/md/osd-db --fail $(mdadm --detail /dev/md/osd-db | grep -o '/dev/vdb[0-9]*')")
     machine.succeed("mdadm --detail /dev/md/osd-db | grep -q degraded")
     for volume in volumes:

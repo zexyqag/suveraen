@@ -336,6 +336,12 @@ in
         SUBSYSTEM=="block", ENV{DM_VG_NAME}=="${dbGroup}", ENV{DM_LV_NAME}=="osd[0-9]*-db", SYMLINK+="disk/by-osd/$env{DM_LV_NAME}"
       '';
 
+    # ceph-volume, in Rook's OSD prepare pods, runs LVM's commands on the host through nsenter, found by the
+    # container's PATH, which names none of NixOS's directories.
+    systemd.tmpfiles.rules = lib.optionals (cfg.ceph.disks != [ ]) [
+      "L+ /usr/sbin - - - - ${lib.getBin config.services.lvm.package}/bin"
+    ];
+
     # Both BIOS and UEFI boot; disko adds every disk with an EF02 partition to grub's devices.
     boot.loader.grub = {
       enable = true;
