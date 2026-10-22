@@ -16,6 +16,10 @@ spec:
     requireSafeReplicaSize: true
   parameters:
     min_size: "2"
+    # The bounds Ceph's manager gives the pool when it makes it first. Made here instead, before the OSDs are up, it
+    # would have none: the autoscaler would hold it at 32 placement groups, past Ceph's limit per OSD on three disks.
+    pg_num_min: "1"
+    pg_num_max: "32"
 ---
 # Every block volume, platform's and tenants' alike; per-tenant pools would be too many placement groups.
 apiVersion: ceph.rook.io/v1
