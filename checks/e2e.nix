@@ -1237,6 +1237,11 @@ pkgs.testers.runNixOSTest {
               )
 
               def sync(kind, name, value):
+                  # A copy already running would take the new trigger as its own, though its snapshot may predate the files.
+                  server.wait_until_succeeds(
+                      f"t=$(kubectl -n {ns} get {kind} {name} -o jsonpath='{{.status.lastSyncStartTime}}') && test -z \"$t\"",
+                      timeout=600,
+                  )
                   merge(ns, f"{kind} {name}", {"spec": {"trigger": {"manual": value}}})
                   server.wait_until_succeeds(
                       f"kubectl -n {ns} get {kind} {name} -o jsonpath='{{.status.lastManualSync}}' | grep -x {value}",
