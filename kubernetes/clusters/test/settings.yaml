@@ -16,6 +16,13 @@ data:
   CEPH_DAEMONS_SHARE_NODE: "true"
   # Ceph's smallest cache size for an OSD; a real server gives each 5Gi.
   CEPH_OSD_MEMORY: 1152Mi
+  # The most the block pool and the object store's data pool hold, one copy counted. Together at most 0.80 x the data
+  # disks' bytes / 3 copies x f, so the OSDs stay below Ceph's nearfull mark once a lost OSD's copies have moved. f is
+  # the share of OSDs left where those copies go: with failure domain osd, (N-1)/N for N > 3 OSDs in all; with host,
+  # (n-1)/n for n > 1 OSDs per server, or with one per server (H-1)/H for H > 3 servers; else 1. 8 GiB on the test's
+  # 3 x 10 GiB.
+  CEPH_BLOCK_QUOTA: 4Gi
+  CEPH_OBJECTS_QUOTA: 2Gi
   # One Ceph manager, one object gateway and one instance per database cluster while there is one server; two, two
   # and three from three servers.
   CEPH_MGR_COUNT: "1"

@@ -10,3 +10,5 @@ spec:
   postBuild:
     substitute:
       TENANT: alpha
+      # Both tenants' buckets fit in the test cluster's object store quota.
+      POSTGRES_BUCKET_SIZE: 1G

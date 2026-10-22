@@ -760,6 +760,40 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     "and spreads over the OSD or the host, without erasure coding: $bad"
   domain=$(cut -d' ' -f2 "$w/pools" | sort -u)
   [ "$(wc -l <<<"$domain")" = 1 ] || fail "$cluster: every Ceph pool has the same failure domain:" $domain
+  # The pools that hold data stop at a byte quota before the OSDs fill; Ceph's own pools have none, as a full one would
+  # stop the whole object store or the manager.
+  quota='((Q.quotas // {}) | to_entries | map(.key + "=" + (.value | tostring)) | join(","))'
+  # Each line: the pool, whether it holds data, whether it is one of Ceph's own, and its quotas.
+  {
+    yq ea "[select(.kind == \"CephBlockPool\") | \"CephBlockPool/\" + .metadata.name + \" \"
+      + (.spec.parameters.bulk == \"true\" | tostring) + \" \" + ((.spec.name // \"\") | test(\"^[.]\") | tostring)
+      + \" \" + ${quota//Q/.spec}] | .[]" "$rendered"/*.yaml
+    for part in metadata:false:true data:true:false; do
+      IFS=: read -r p data own <<<"$part"
+      yq ea "[select(.kind == \"CephObjectStore\") | \"CephObjectStore/\" + .metadata.name + \"/$p $data $own \"
+        + ${quota//Q/.spec.${p}Pool}] | .[]" "$rendered"/*.yaml
+    done
+  } >"$w/quotas"
+  bad=$(awk '$4 ~ /(^|,)max(Bytes|Objects)=/ || ($3 == "true" && $4 != "") { print $1 }' "$w/quotas" | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: Ceph's pools have quotas in bytes alone, maxSize, and its own pools, the manager's" \
+    "and the object store's metadata, have none: $bad"
+  bad=$(while read -r name data _ quota; do
+    [ "$data" != true ] || { [[ $quota =~ ^maxSize=(.+)$ ]] && n=$(quantity "${BASH_REMATCH[1]}" 2>/dev/null) \
+      && [ "$n" -gt 0 ]; } || echo "$name"
+  done <"$w/quotas" | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: each Ceph pool that holds data stops at a whole quota of bytes above zero: $bad"
+  # A tenant meets its own bucket's limit before the object store's quota stops every tenant's archiving.
+  objects=$(yq ea '[select(.kind == "CephObjectStore")] | .[0].spec.dataPool.quotas.maxSize' "$rendered"/*.yaml)
+  sizes=$(yq ea '[select(.kind == "ObjectBucketClaim") | .spec.additionalConfig.maxSize // "-"] | .[]' \
+    "$rendered"/*.yaml | paste -sd' ')
+  total=0
+  for size in $sizes; do
+    n=$(quantity "$size" 2>/dev/null) || { total=; break; }
+    total=$((total + n))
+  done
+  [ -n "$total" ] && [ "$total" -le "$(quantity "$objects")" ] \
+    || fail "$cluster: the object store's quota covers every tenant's bucket, each with a whole size: $objects for" \
+      "$sizes"
   ceph=$(yq ea '[select(.kind == "CephCluster")] | .[] | .metadata.namespace + "/" + .metadata.name' "$rendered"/*.yaml)
   [ "$ceph" = rook-ceph/rook-ceph ] || fail "$cluster: one CephCluster, rook-ceph/rook-ceph"
   # Daemons share a node only while copies spread over OSDs. The hosts name the disks (suveraen.storage.ceph); the
@@ -801,6 +835,11 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
   [ "$(yq ea '[select(.kind == "CephCluster")] | .[0].spec.cephConfig.mgr."mgr/pg_autoscaler/threshold"
     | select(tag == "!!str")' "$rendered"/*.yaml)" = 1.0 ] \
     || fail "$cluster: Ceph's autoscaler acts on every change it recommends"
+  read -r warn crit <<<"$(yq ea '[select(.kind == "CephCluster")] | .[0].spec.cephConfig.mgr
+    | (.mon_pool_quota_warn_threshold // "-") + " " + (.mon_pool_quota_crit_threshold // "-")' "$rendered"/*.yaml)"
+  [[ $warn =~ ^[1-9][0-9]?$ && $crit =~ ^[1-9][0-9]?$ ]] && [ "$warn" -lt "$crit" ] \
+    || fail "$cluster: Ceph warns before a pool's quota stops its writes, at a whole percentage of it, and calls it an" \
+      "error at a higher one below 100: $warn, $crit"
   # Dropping one from Git leaves it running: Rook would delete the cluster's data with it.
   bad=$(yq ea '[select(.kind == "CephCluster" or .kind == "CephBlockPool" or .kind == "CephObjectStore")
     | select(.metadata.annotations."kustomize.toolkit.fluxcd.io/prune" != "disabled") | .kind + "/" + .metadata.name]

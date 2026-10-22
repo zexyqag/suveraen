@@ -38,3 +38,7 @@ spec:
   parameters:
     min_size: "2"
     bulk: "true"
+  # Stops tenants' writes before the OSDs fill, so a lost OSD's copies still fit on the rest and the object store keeps
+  # archiving.
+  quotas:
+    maxSize: ${CEPH_BLOCK_QUOTA}

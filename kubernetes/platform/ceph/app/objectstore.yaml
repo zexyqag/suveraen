@@ -26,6 +26,9 @@ spec:
     parameters:
       min_size: "2"
       bulk: "true"
+    # Above every tenant's bucket limit, so a tenant meets its own first.
+    quotas:
+      maxSize: ${CEPH_OBJECTS_QUOTA}
   preservePoolsOnDelete: true
   gateway:
     port: 80

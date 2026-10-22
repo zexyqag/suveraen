@@ -339,6 +339,23 @@ refuses pool-crush-rule-fixed "$pools" "yq -i 'del(.spec.metadataPool.enableCrus
 refuses pool-rack "$pools" "yq -i '.spec.failureDomain = \"rack\"' $P/pools.yaml"
 refuses pools-mixed-failure-domain "every Ceph pool has the same failure domain" \
   "yq -i '(select(.metadata.name == \"block\") | .spec.failureDomain) = \"host\"' $P/pools.yaml"
+capped="each Ceph pool that holds data stops at a whole quota of bytes above zero"
+refuses block-quota-missing "$capped: CephBlockPool/block" \
+  "yq -i '(select(.metadata.name == \"block\") | .spec) |= del(.quotas)' $P/pools.yaml"
+refuses objects-quota-missing "$capped: CephObjectStore/objects/data" \
+  "yq -i 'del(.spec.dataPool.quotas)' $P/objectstore.yaml"
+refuses quota-not-whole "$capped: CephBlockPool/block" \
+  "yq -i '.data.CEPH_BLOCK_QUOTA = \"1.5Ti\"' clusters/test/settings.yaml"
+refuses quota-zero "$capped: CephBlockPool/block" "yq -i '.data.CEPH_BLOCK_QUOTA = \"0Gi\"' clusters/test/settings.yaml"
+uncapped="and its own pools, the manager's and the object store's metadata, have none"
+refuses quota-on-metadata-pool "$uncapped: CephObjectStore/objects/metadata" \
+  "yq -i '.spec.metadataPool.quotas.maxSize = \"1Gi\"' $P/objectstore.yaml"
+refuses quota-max-bytes "$uncapped: CephBlockPool/block" \
+  "yq -i '(select(.metadata.name == \"block\") | .spec.quotas.maxBytes) = 1073741824' $P/pools.yaml"
+refuses buckets-over-objects-quota "the object store's quota covers every tenant's bucket, each with a whole size: 2Gi" \
+  "knob POSTGRES_BUCKET_SIZE 3G"
+refuses quota-warning-missing "Ceph warns before a pool's quota stops its writes" \
+  "yq -i 'del(.spec.cephConfig.mgr.mon_pool_quota_warn_threshold)' $P/cluster.yaml"
 cc="the CephCluster keeps its state in /var/lib/rook"
 refuses osd-unencrypted "$cc" "yq -i '.spec.storage.config.encryptedDevice = \"false\"' $P/cluster.yaml"
 refuses osd-device-unencrypted "$cc" \
@@ -417,7 +434,8 @@ C=apps/postgres/cluster/cluster.yaml
 pg="a tenant's PostgreSQL is never pruned, has no superuser access"
 role="an app's role logs in with its Secret and nothing more"
 refuses attachment-without-postgres "nothing is named bravo-postgres-cluster" \
-  "sed -i '/apps\/postgres\/ks.yaml/d' $T/bravo/apps/kustomization.yaml; sed -i '/POSTGRES_/d' $T/bravo/secrets.yaml"
+  "sed -i '/apps\/postgres\/ks.yaml/d' $T/bravo/apps/kustomization.yaml
+   sed -i '/POSTGRES_/d' $T/bravo/secrets.yaml $T/bravo/tenant.yaml"
 refuses attachment-other-dependency "an app's database is \${TENANT}-hello-db" \
   "yq -i '(select(documentIndex == 2) | .spec.dependsOn) += [{\"name\": \"\${TENANT}-postgres\"}]' apps/hello/ks.yaml"
 refuses attachment-other-key "kubernetes/apps/other: an app reads only its own keys, not HELLO_DB_PASSWORD" \
