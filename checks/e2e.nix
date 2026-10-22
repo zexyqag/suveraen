@@ -28,7 +28,9 @@
 # when a copy there changes or has lost its config, and passes for an app that has copied nothing yet, whose first
 # restore left an empty repository at one provider and none at the other; nothing is left of the volumes copies
 # and restores worked on, and every volume in a tenant's namespace is backed up or VolSync's.
-# The server's alerts reach a phone.
+# The server's alerts reach a phone. Its checks find every backup's last good copy where its controller records it,
+# none of them late; one more pool still fits, and when it passes its quota's warning they alert once, and once more
+# when that clears.
 {
   pkgs,
   module,
@@ -372,6 +374,8 @@ pkgs.testers.runNixOSTest {
           assert base64.b64decode(setting("ACME_CA_BUNDLE")) == ca.read(), "ACME_CA_BUNDLE isn't nixpkgs' test CA"
 
       start_all()
+      # The server's checks run when the test says.
+      server.succeed("systemctl stop host-checks.timer")
 
       with subtest("The forge serves a commit signed by a release signer"):
           forge.wait_for_unit("nginx.service")
@@ -440,6 +444,7 @@ pkgs.testers.runNixOSTest {
               " | while read -r ns pod; do kubectl -n $ns logs $pod --all-containers --tail=30 --prefix; done",
               "free -m",
               "df -h /",
+              "journalctl -u host-checks -o cat --no-pager | tail -n 80",
               phone,
           ]:
               print(f"$ {cmd}\n{shown(cmd)}")
@@ -1469,6 +1474,123 @@ pkgs.testers.runNixOSTest {
               passed, log = checked(f"{second}-hello", "offsite-check-1", "check-1-unconfigured", settings, backoff=0)
               assert not passed and "lost its config, but still holds: keys/" in log, log
               acme.succeed(f"mv /var/lib/s3-1/config {empty['1']}/config")
+
+          # Runs the server's checks once, and what they found, from that run's journal: whether they read the cluster,
+          # and each finding's state and what it says.
+          def host_checks():
+              server.succeed("systemctl start host-checks")
+              invocation = server.succeed("systemctl show -p InvocationID --value host-checks").strip()
+              journal = f"journalctl -o cat _SYSTEMD_INVOCATION_ID={invocation}"
+              # Its own files come last.
+              server.wait_until_succeeds(f"{journal} | grep -Eq '^(ok|late) etcd-snapshots: '", timeout=60)
+              findings = {}
+              scope = None
+              for line in shown(journal).splitlines():
+                  if line.startswith("cluster scope: "):
+                      scope = line.removeprefix("cluster scope: ")
+                  elif m := re.fullmatch(r"(ok|late) (.+?): (.*)", line):
+                      findings[m.group(2)] = (m.group(1), m.group(3))
+              return scope, findings
+
+          # What the server's checks have alerted so far, as the phone got it.
+          def checks_said():
+              return [(a["title"], a.get("priority", 3)) for a in alerts() if a.get("title", "").removeprefix(
+                  "${nodes.server.networking.hostName}: ").startswith(("backups ", "Ceph ", "cluster status ", "still: "))]
+
+          with subtest("The server finds every backup's last good copy where its controller records it, and none is late"):
+              # When each backup was last good, as the controllers record it, under the name the server gives it.
+              def recorded():
+                  stores = {(o["metadata"]["namespace"], o["metadata"]["name"]): o for o in items("objectstores")}
+                  jobs = {(j["metadata"]["namespace"], j["metadata"]["name"]): j for j in items("cronjobs")}
+                  backups = {}
+                  for c in items("clusters.postgresql.cnpg.io"):
+                      ns = c["metadata"]["namespace"]
+                      [p] = [p["parameters"] for p in c["spec"]["plugins"] if p["name"] == "barman-cloud.cloudnative-pg.io"]
+                      window = stores[(ns, p["barmanObjectName"])].get("status", {}).get("serverRecoveryWindow", {})
+                      backups[f"{ns}/{c['metadata']['name']} base backup"] = (
+                          window.get(p["serverName"], {}).get("lastSuccessfulBackupTime")
+                      )
+                      for name in ["offsite", "offsite-check-1", "offsite-check-2"]:
+                          backups[f"{ns}/{name}"] = jobs[(ns, name)].get("status", {}).get("lastSuccessfulTime")
+                  for r in items("replicationsources"):
+                      ns = r["metadata"]["namespace"]
+                      backups[f"{ns}/{r['metadata']['name']}"] = r.get("status", {}).get("lastSyncTime")
+                      for name in ["offsite-check-1", "offsite-check-2"]:
+                          backups[f"{ns}/{name}"] = jobs[(ns, name)].get("status", {}).get("lastSuccessfulTime")
+                  return backups
+
+              def moment(t):
+                  return datetime.fromisoformat(t.replace("Z", "+00:00"))
+
+              # The checks judge Ceph as Rook last recorded it.
+              server.wait_until_succeeds(
+                  "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}' | grep -x HEALTH_OK",
+                  timeout=600,
+              )
+              before = recorded()
+              scope, findings = host_checks()
+              after = recorded()
+              assert scope == "evaluated", scope
+              # A copy may have finished while the checks ran.
+              assert before.keys() == after.keys(), (before, after)
+              archiving = {f"{c['metadata']['namespace']}/{c['metadata']['name']} WAL archiving"
+                           for c in items("clusters.postgresql.cnpg.io")}
+              assert len(archiving) == len(tenants), archiving
+              assert findings.keys() == before.keys() | archiving | {"Ceph status", "cluster status", "etcd-snapshots"}, findings
+              assert all(state == "ok" for state, _ in findings.values()), findings
+              for key in before:
+                  detail, times = findings[key][1], [before[key], after[key]]
+                  if detail.startswith("never, "):
+                      assert None in times, (key, detail, times)
+                  else:
+                      m = re.match(r"last (\S+) \(", detail)
+                      assert m and moment(m.group(1)) in {moment(t) for t in times if t}, (key, detail, times)
+              assert findings["Ceph status"][1].startswith("HEALTH_OK, "), findings["Ceph status"]
+              assert checks_said() == [], checks_said()
+
+          with subtest("A pool past its quota's warning reaches the phone, one more pool still fits, and the alert clears"):
+              apply({
+                  "apiVersion": "ceph.rook.io/v1",
+                  "kind": "CephBlockPool",
+                  "metadata": {"name": "probe", "namespace": "rook-ceph"},
+                  "spec": {
+                      "failureDomain": setting("CEPH_FAILURE_DOMAIN"),
+                      "replicated": {"size": 3, "requireSafeReplicaSize": True},
+                      "parameters": {"min_size": "2"},
+                      "quotas": {"maxSize": "4Mi"},
+                  },
+              })
+              server.wait_until_succeeds(
+                  "kubectl -n rook-ceph get cephblockpool probe -o jsonpath='{.status.phase}' | grep -x Ready", timeout=600
+              )
+              # Rook makes the pool with one placement group, which the autoscaler raises to its floor of 32 on its next
+              # pass, once a minute.
+              retry(lambda _: ceph("osd pool get probe pg_num")["pg_num"] == 32, timeout_seconds=300)
+              retry(lambda _: all(s["state_name"] == "active+clean" for s in ceph("status")["pgmap"]["pgs_by_state"]),
+                    timeout_seconds=300)
+              # 3.5 MiB of 4: past the 80% at which Ceph warns, short of the 90% it calls an error.
+              server.succeed(
+                  "head -c 3670016 /dev/zero | kubectl -n rook-ceph exec -i deploy/rook-ceph-operator --"
+                  " rados --conf=/var/lib/rook/rook-ceph/rook-ceph.config -p probe put fill -"
+              )
+
+              # Ceph's checks as Rook records them, but those the cluster mutes.
+              def raised(_):
+                  c = parsed("kubectl -n rook-ceph get cephcluster rook-ceph -o json")
+                  muted = {k for k, v in c["spec"]["healthCheck"].get("muteHealthWarning", {}).items() if v["policy"] == "mute"}
+                  return set(c["status"]["ceph"].get("details", {})) - muted == {"POOL_NEAR_FULL"}
+
+              retry(raised, timeout_seconds=300)
+              said = len(checks_said())
+              host_checks()
+              assert checks_said()[said:] == [("${nodes.server.networking.hostName}: Ceph HEALTH_WARN: POOL_NEAR_FULL", 4)]
+              server.succeed("kubectl -n rook-ceph delete cephblockpool probe --timeout=300s")
+              server.wait_until_succeeds(
+                  "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}' | grep -x HEALTH_OK",
+                  timeout=300,
+              )
+              host_checks()
+              assert checks_said()[said + 1:] == [("${nodes.server.networking.hostName}: Ceph healthy again", 3)]
 
           with subtest("The standby CA issues too, with our external account there"):
               standby = {
