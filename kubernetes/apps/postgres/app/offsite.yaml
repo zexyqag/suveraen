@@ -41,6 +41,8 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: offsite
+  annotations:
+    suveraen/max-age: ${OFFSITE_MAX_AGE}
 spec:
   schedule: "${OFFSITE_SCHEDULE}"
   concurrencyPolicy: Forbid

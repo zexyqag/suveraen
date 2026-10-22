@@ -6,6 +6,7 @@ metadata:
   name: postgres
   annotations:
     kustomize.toolkit.fluxcd.io/prune: disabled
+    suveraen/max-age: ${ARCHIVE_MAX_AGE}
 spec:
   instances: ${PG_INSTANCES}
   imageCatalogRef:

@@ -36,6 +36,8 @@ apiVersion: volsync.backube/v1alpha1
 kind: ReplicationSource
 metadata:
   name: data-1
+  annotations:
+    suveraen/max-age: ${DATA_MAX_AGE}
 spec:
   sourcePVC: data
   trigger:
@@ -47,6 +49,8 @@ apiVersion: volsync.backube/v1alpha1
 kind: ReplicationSource
 metadata:
   name: data-2
+  annotations:
+    suveraen/max-age: ${DATA_MAX_AGE}
 spec:
   sourcePVC: data
   trigger:

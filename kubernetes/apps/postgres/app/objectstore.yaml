@@ -5,6 +5,8 @@ apiVersion: barmancloud.cnpg.io/v1
 kind: ObjectStore
 metadata:
   name: postgres
+  annotations:
+    suveraen/max-age: ${BASE_MAX_AGE}
 spec:
   configuration:
     destinationPath: s3://${TENANT}-postgres/

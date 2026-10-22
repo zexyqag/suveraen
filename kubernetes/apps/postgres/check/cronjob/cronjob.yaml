@@ -1,10 +1,12 @@
 ---
 # A check that passed leaves no Job, as the CronJob's last successful time records it; the last that failed keeps its
-# log. One retry rides out a copy or a prune that overlapped it.
+# log. One retry rides out a copy or a prune that overlapped it. Two missed daily checks and slack make one late.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: offsite-check-1
+  annotations:
+    suveraen/max-age: 3d
 spec:
   schedule: "${OFFSITE_CHECK_SCHEDULE_1}"
   concurrencyPolicy: Forbid
@@ -22,6 +24,8 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: offsite-check-2
+  annotations:
+    suveraen/max-age: 3d
 spec:
   schedule: "${OFFSITE_CHECK_SCHEDULE_2}"
   concurrencyPolicy: Forbid

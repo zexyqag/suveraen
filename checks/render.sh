@@ -706,6 +706,13 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     esac
     case $path in
       ./kubernetes/apps/* | ./kubernetes/edge/*)
+        # Backups say how old they may get, which the servers hold them to.
+        bad=$(yq ea '[select((.kind == "Cluster" and .apiVersion == "postgresql.cnpg.io/v1") or .kind == "ObjectStore"
+          or .kind == "ReplicationSource" or .kind == "CronJob")
+          | select(.metadata.annotations."suveraen/max-age" // "" | tostring | test("^[1-9][0-9]*[mhd]$") | not)
+          | .kind + "/" + .metadata.name] | .[]' "$file")
+        [ -z "$bad" ] || fail "$cluster/$name: backups say how old they may get, in minutes, hours or days" \
+          "(suveraen/max-age): $bad"
         # A rule without peers, or with an empty one, reaches every pod and address there is, both ways.
         bad=$(yq ea '[select(.kind == "NetworkPolicy")
           | select([((.spec.ingress // [])[] | (.from // [])), ((.spec.egress // [])[] | (.to // []))]

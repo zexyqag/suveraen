@@ -40,6 +40,10 @@ spec:
       OFFSITE_SCHEDULE: ${POSTGRES_OFFSITE_SCHEDULE:=7-59/15 * * * *}
       # The retention and a week of WAL before its oldest base backup.
       OFFSITE_LOCK: ${POSTGRES_OFFSITE_LOCK:=40d}
+      # Eight missed copies, with room for a weekly base backup's push to both providers.
+      OFFSITE_MAX_AGE: ${POSTGRES_OFFSITE_MAX_AGE:=2h}
+      # The weekly base backup and a day.
+      BASE_MAX_AGE: ${POSTGRES_BASE_MAX_AGE:=8d}
       # Each provider's copy is checked daily, off the copies' minutes, and read back in full once a cycle.
       OFFSITE_CHECK_SCHEDULE_1: ${POSTGRES_OFFSITE_CHECK_SCHEDULE_1:=41 1 * * *}
       OFFSITE_CHECK_SCHEDULE_2: ${POSTGRES_OFFSITE_CHECK_SCHEDULE_2:=41 13 * * *}
@@ -72,3 +76,5 @@ spec:
       MEMORY: ${POSTGRES_MEMORY:=512Mi}
       # Weekly; CloudNativePG's schedules have seconds.
       BASE_SCHEDULE: ${POSTGRES_BASE_SCHEDULE:=0 17 3 * * 0}
+      # How long archiving WAL may fail.
+      ARCHIVE_MAX_AGE: ${POSTGRES_ARCHIVE_MAX_AGE:=1h}

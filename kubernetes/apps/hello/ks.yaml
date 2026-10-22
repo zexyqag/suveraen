@@ -37,6 +37,8 @@ spec:
       DATA_UID: "65534"
       DATA_SCHEDULE_1: ${HELLO_DATA_SCHEDULE_1:=17 * * * *}
       DATA_SCHEDULE_2: ${HELLO_DATA_SCHEDULE_2:=47 * * * *}
+      # Two missed hourly copies and one running; a daily schedule needs 26h.
+      DATA_MAX_AGE: ${HELLO_DATA_MAX_AGE:=3h}
       # Each provider's copies are checked daily, between the hourly copies, and read back in full once a cycle.
       DATA_CHECK_SCHEDULE_1: ${HELLO_DATA_CHECK_SCHEDULE_1:=32 2 * * *}
       DATA_CHECK_SCHEDULE_2: ${HELLO_DATA_CHECK_SCHEDULE_2:=32 14 * * *}

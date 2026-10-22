@@ -61,9 +61,9 @@ patches:
             weekly: 5
   # With restic from VolSync's own image, the one the movers and restores use, as the app's user, reading the copies
   # alone. A check that passed leaves no Job, as the CronJob's last successful time records it; the last that failed
-  # keeps its log. One retry rides out a copy or a prune that overlapped it. What it runs is in its spec, which only
-  # Flux changes while the pod reaches the internet (platform/policies/app/egress-labels), and Flux makes each $$ in it
-  # a $.
+  # keeps its log. One retry rides out a copy or a prune that overlapped it. Two missed daily checks and slack make
+  # one late. What it runs is in its spec, which only Flux changes while the pod reaches the internet
+  # (platform/policies/app/egress-labels), and Flux makes each $$ in it a $.
   - target:
       kind: CronJob
       name: offsite-check-[12]
@@ -72,6 +72,8 @@ patches:
       kind: CronJob
       metadata:
         name: _
+        annotations:
+          suveraen/max-age: 3d
       spec:
         concurrencyPolicy: Forbid
         successfulJobsHistoryLimit: 0

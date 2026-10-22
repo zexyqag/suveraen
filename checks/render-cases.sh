@@ -564,6 +564,12 @@ refuses cronjob-without-copies "an app's CronJobs only check its copies: x" \
   "sed -i '/components\/volsync/d' apps/hello/ks.yaml; append apps/hello/app/configmap.yaml '$cronjob'"
 refuses hello-jobs-quota "the quota's count/jobs.batch, 6, holds every CronJob's running and kept Jobs" \
   "sed -i 's/QUOTA_JOBS: \"7\"/QUOTA_JOBS: \"6\"/' apps/hello/ks.yaml"
+age="backups say how old they may get, in minutes, hours or days (suveraen/max-age)"
+refuses max-age-number "Flux takes only strings as values to substitute: bravo-postgres/OFFSITE_MAX_AGE" \
+  "knob POSTGRES_OFFSITE_MAX_AGE 90"
+refuses max-age-weeks "bravo-postgres: $age: ObjectStore/postgres" "knob POSTGRES_BASE_MAX_AGE 2w"
+refuses max-age-missing "$age: ReplicationSource/data-2" \
+  "yq -i '(select(.metadata.name == \"data-2\") | .metadata) |= del(.annotations)' components/volsync/volume.yaml"
 
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"
@@ -574,6 +580,8 @@ renders real-cluster "$real"
 renders recovery "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery"
 renders recovery-offsite "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery; knob POSTGRES_RESTORE_FROM offsite-2"
 renders volume-restore-offsite-2 "knob HELLO_DATA_RESTORE again; knob HELLO_DATA_RESTORE_FROM offsite-2"
+renders volume-copied-daily "knob HELLO_DATA_SCHEDULE_1 '17 3 * * *'; knob HELLO_DATA_SCHEDULE_2 '47 3 * * *'
+  knob HELLO_DATA_MAX_AGE 26h"
 renders failure-domain-host "yq -i '.data.CEPH_FAILURE_DOMAIN = \"host\" | .data.CEPH_DAEMONS_SHARE_NODE = \"false\"
   | .data.CEPH_MGR_COUNT = \"2\" | .data.CEPH_RGW_INSTANCES = \"2\" | .data.PG_INSTANCES = \"3\"' clusters/test/settings.yaml"
 renders failover "sed -i 's|issuer/public/ks.yaml|issuer/failover/ks.yaml|' clusters/test/kustomization.yaml"
