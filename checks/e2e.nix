@@ -444,6 +444,15 @@ pkgs.testers.runNixOSTest {
           )
           signed = forge.succeed("${asCgit} git -C /srv/git/suveraen.git rev-parse main").strip()
 
+      # The console drops output the driver doesn't read in time, so long output comes through the shared directory.
+      def parsed(cmd):
+          server.succeed(f"{cmd} > /tmp/shared/output")
+          out = (server.shared_dir / "output").read_bytes()
+          try:
+              return json.loads(out)
+          except json.JSONDecodeError as e:
+              raise ValueError(f"{cmd}: {e}, in {len(out)} bytes: {e.doc[max(e.pos - 200, 0):e.pos + 200]!r}") from e
+
       def diagnose():
           for cmd in [
               "kubectl get gitrepositories,ocirepositories,kustomizations,helmreleases -A",
@@ -587,7 +596,7 @@ pkgs.testers.runNixOSTest {
 
           with subtest("Every workload runs, and Pod Security refused nothing"):
               def items(kind):
-                  return json.loads(server.succeed(f"kubectl get {kind} -A -o json"))["items"]
+                  return parsed(f"kubectl get {kind} -A -o json")["items"]
 
               for d in items("deployments") + items("statefulsets"):
                   want = d["spec"].get("replicas", 1)
@@ -641,10 +650,10 @@ pkgs.testers.runNixOSTest {
                           within(address["address"], "NODE")
 
           def ceph(args):
-              return json.loads(server.succeed(
+              return parsed(
                   "kubectl -n rook-ceph exec deploy/rook-ceph-operator -- ceph --connect-timeout=10"
                   f" --conf=/var/lib/rook/rook-ceph/rook-ceph.config {args} -f json"
-              ))
+              )
 
           def apply(obj):
               server.succeed(f"echo {shlex.quote(json.dumps(obj))} | kubectl apply -f -")
@@ -703,7 +712,7 @@ pkgs.testers.runNixOSTest {
                   assert meta["bluefs_dedicated_db"] == "1", meta
 
               def below(device):
-                  tree = json.loads(server.succeed(f"lsblk -J -o NAME,TYPE {device}"))["blockdevices"][0]
+                  tree = parsed(f"lsblk -J -o NAME,TYPE {device}")["blockdevices"][0]
 
                   def walk(d):
                       return [t for c in d.get("children", []) for t in [c["type"]] + walk(c)]
@@ -799,7 +808,7 @@ pkgs.testers.runNixOSTest {
 
           with subtest("Every route answers through the gateway with a certificate from the CA, and port 80 redirects there"):
               forge.succeed("curl -fsS --cacert ${caCert} https://acme.test:15000/roots/0 > /tmp/ca.crt")
-              hosts = sorted({h for r in json.loads(server.succeed("kubectl get httproute -A -o json"))["items"] for h in r["spec"]["hostnames"]})
+              hosts = sorted({h for r in items("httproute") for h in r["spec"]["hostnames"]})
               assert hosts, "no routes"
               for host in hosts:
                   # -f: a refused connection, a bad certificate or an error status all fail.
@@ -811,18 +820,18 @@ pkgs.testers.runNixOSTest {
                   ).split()
                   assert redirect == ["301", f"https://{host}/"], redirect
 
+          def get(cmd):
+              return parsed(f"{cmd} -o json")
+
           # A tenant's own Kustomization is tenant-<id>, labelled with its ID.
           tenants = sorted(
               k["metadata"]["labels"]["suveraen/tenant"]
-              for k in json.loads(server.succeed("kubectl -n flux-system get kustomization -l suveraen/tenant -o json"))["items"]
+              for k in get("kubectl -n flux-system get kustomization -l suveraen/tenant")["items"]
               if k["metadata"]["name"] == "tenant-" + k["metadata"]["labels"]["suveraen/tenant"]
           )
           assert tenants == sorted(os.listdir("${cluster}/tenants")), tenants
           assert len(tenants) >= 2, tenants
           first, second = tenants[0], tenants[1]
-
-          def get(cmd):
-              return json.loads(server.succeed(f"{cmd} -o json"))
 
           def routes(tenant):
               return get(f"kubectl get httproute -A -l suveraen/tenant={tenant}")["items"]
