@@ -453,6 +453,11 @@ pkgs.testers.runNixOSTest {
           except json.JSONDecodeError as e:
               raise ValueError(f"{cmd}: {e}, in {len(out)} bytes: {e.doc[max(e.pos - 200, 0):e.pos + 200]!r}") from e
 
+      # What a command prints, errors included, whether or not it fails.
+      def shown(cmd):
+          server.execute(f"set +e; ( {cmd} ) > /tmp/shared/output 2>&1")
+          return (server.shared_dir / "output").read_bytes().decode(errors="replace")
+
       def diagnose():
           for cmd in [
               "kubectl get gitrepositories,ocirepositories,kustomizations,helmreleases -A",
@@ -480,7 +485,7 @@ pkgs.testers.runNixOSTest {
               "free -m",
               "df -h /",
           ]:
-              print(f"$ {cmd}\n{server.execute(f'set +e; ( {cmd} ) 2>&1')[1]}")
+              print(f"$ {cmd}\n{shown(cmd)}")
           print(acme.execute("journalctl -u pebble -u knot -u 's3-*' --no-pager | tail -n 80")[1])
           images()
           diagnose_ceph()
@@ -532,7 +537,7 @@ pkgs.testers.runNixOSTest {
               "tail -n 200 /var/lib/rook/rook-ceph/log/ceph-volume.log",
               "for log in /var/log/osd-prepare/*.log; do echo \"==> $log\"; tail -n 150 $log; done",
           ]:
-              print(f"$ {cmd}\n{server.execute(f'set +e; ( {cmd} ) 2>&1')[1]}")
+              print(f"$ {cmd}\n{shown(cmd)}")
 
       # What each container runs, by digest: how images only known by tag here get pinned.
       def images():
