@@ -1221,7 +1221,10 @@ pkgs.testers.runNixOSTest {
 
           with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied"):
               ns = f"{first}-hello"
-              server.succeed(f"kubectl -n {ns} exec deploy/hello -- sh -c 'echo kept > /data/marker && echo gone > /data/removed'")
+              # VolSync copies a snapshot of the volume, which holds only what has reached its disk.
+              server.succeed(
+                  f"kubectl -n {ns} exec deploy/hello -- sh -c 'echo kept > /data/marker && echo gone > /data/removed && sync'"
+              )
 
               def sync(kind, name, value):
                   merge(ns, f"{kind} {name}", {"spec": {"trigger": {"manual": value}}})
@@ -1281,7 +1284,7 @@ pkgs.testers.runNixOSTest {
               server.succeed(f"kubectl -n {ns} delete pod reader && kubectl -n {ns} delete pvc restored")
 
               # A file deleted before the next copies is gone again from provider 2's copy, restored over the first.
-              server.succeed(f"kubectl -n {ns} exec deploy/hello -- rm /data/removed")
+              server.succeed(f"kubectl -n {ns} exec deploy/hello -- sh -c 'rm /data/removed && sync'")
               for n in providers:
                   sync("replicationsource", f"data-{n}", "second")
               restore("two", 2)
