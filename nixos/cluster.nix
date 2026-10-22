@@ -12,12 +12,16 @@ let
   # controllers apply with cluster-admin rights; anyone with admin or edit in a namespace could then take over the
   # cluster. Drop those grants, and lock the controllers down so that a Flux object only gets the rights of the
   # service account it names, with no references into other namespaces or to remote bases.
+  # A tenant's Kustomization can start on a new revision before the root one, cluster, gives it the release's
+  # settings. Those then cut short that run's health checks, which would otherwise hold them back for up to its
+  # timeout.
   fluxComponents = pkgs.runCommand "flux-components.yaml" { } ''
     ${lib.getExe pkgs.fluxcd} install --export | ${lib.getExe pkgs.yq-go} '
       (select(.kind == "ClusterRole").metadata.labels) |=
         with_entries(select(.key | test("^rbac.authorization.k8s.io/aggregate-to-") | not))
       | (select(.kind == "Deployment" and .metadata.name == "kustomize-controller").spec.template.spec.containers[0].args) +=
-        ["--no-cross-namespace-refs=true", "--no-remote-bases=true", "--default-service-account=default"]
+        ["--no-cross-namespace-refs=true", "--no-remote-bases=true", "--default-service-account=default",
+         "--feature-gates=CancelHealthCheckOnNewRevision=true"]
       | (select(.kind == "Deployment" and .metadata.name == "helm-controller").spec.template.spec.containers[0].args) +=
         ["--no-cross-namespace-refs=true", "--default-service-account=default"]
       | (select(.kind == "Deployment" and .metadata.name == "notification-controller").spec.template.spec.containers[0].args) +=
