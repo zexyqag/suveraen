@@ -479,6 +479,11 @@ pkgs.testers.runNixOSTest {
               "kubectl get pv,pvc,volumesnapshots -A",
               "kubectl get clusters.postgresql.cnpg.io,backups.postgresql.cnpg.io,jobs -A",
               "kubectl get replicationsources,replicationdestinations -A -o wide",
+              # VolSync deletes a mover once done, but keeps its result and filtered log in the status.
+              "kubectl get replicationsources,replicationdestinations -A -o jsonpath='{range .items[*]}"
+              "{.kind} {.metadata.namespace}/{.metadata.name}: trigger {.spec.trigger}, last manual {.status.lastManualSync},"
+              " managers {.metadata.managedFields[*].manager}{\"\\n\"}{.status.latestMoverStatus}{\"\\n\"}{end}'",
+              "kubectl -n volsync logs deploy/volsync --all-containers --tail=100",
               "kubectl get pods -A -l app.kubernetes.io/created-by=volsync"
               " -o jsonpath='{range .items[*]}{.metadata.namespace}{\" \"}{.metadata.name}{\"\\n\"}{end}'"
               " | while read -r ns pod; do kubectl -n $ns logs $pod --all-containers --tail=30 --prefix; done",
