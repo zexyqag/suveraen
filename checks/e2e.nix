@@ -11,7 +11,7 @@
 # theirs; tenants can't take each other's namespaces or hosts or keep Gateways outside the gateway namespace, and stay
 # within their quota; a host's key goes with its certificate; removing a tenant takes its Kustomizations, hosts, keys
 # and pods but leaves its namespaces, which then go by its label; and an unsigned commit is never applied. Ceph runs
-# healthy with three monitors and an encrypted OSD per disk, its DB on a partition of its own mirrored over both system
+# healthy with three monitors and an encrypted OSD per disk, its DB on a volume of its own mirrored over both system
 # disks, three copies on every pool; block volumes bind, snapshot and restore, and go with their claims; the object
 # store hands out buckets with keys of their own to the pods allowed to reach it; and after a reboot Ceph comes back
 # with its data. Each tenant's PostgreSQL archives WAL and base backups to its own bucket, takes no restore while it

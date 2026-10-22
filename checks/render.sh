@@ -763,7 +763,7 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
   ceph=$(yq ea '[select(.kind == "CephCluster")] | .[] | .metadata.namespace + "/" + .metadata.name' "$rendered"/*.yaml)
   [ "$ceph" = rook-ceph/rook-ceph ] || fail "$cluster: one CephCluster, rook-ceph/rook-ceph"
   # Daemons share a node only while copies spread over OSDs. The hosts name the disks (suveraen.storage.ceph); the
-  # cluster lists the slots they may give it from osd0 on, each with its own DB partition.
+  # cluster lists the slots they may give it from osd0 on, each with its own DB volume.
   share=$([ "$domain" = osd ] && echo true || echo false)
   slots=$(yq ea '[select(.kind == "CephCluster") | .spec.storage.devices[]] | length' "$rendered"/*.yaml)
   devices=$(for ((n = 0; n < slots; n++)); do
@@ -796,7 +796,7 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
   [ -z "$bad" ] || fail "$cluster: the CephCluster keeps its state in /var/lib/rook, runs a supported Ceph with three" \
     "monitors, lets daemons share a node only while copies spread over OSDs, speaks msgr2 alone, encrypted when on" \
     "the hosts' network, guarantees its OSDs their memory, and takes encrypted OSDs from every node on slots from" \
-    "osd0 on, each with its DB on its own partition: $bad"
+    "osd0 on, each with its DB on its own volume: $bad"
   # Dropping one from Git leaves it running: Rook would delete the cluster's data with it.
   bad=$(yq ea '[select(.kind == "CephCluster" or .kind == "CephBlockPool" or .kind == "CephObjectStore")
     | select(.metadata.annotations."kustomize.toolkit.fluxcd.io/prune" != "disabled") | .kind + "/" + .metadata.name]

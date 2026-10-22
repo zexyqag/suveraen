@@ -21,6 +21,8 @@ let
   ceph = config.suveraen.storage.ceph;
   slots = lib.range 0 (ceph.dbSlots - 1);
   members = lib.concatMapStringsSep " " disk dbDisks;
+  # nixos/storage.nix's volume group for the DBs.
+  group = "osd-db";
 in
 {
   virtualisation.emptyDiskImages = map (serial: {
@@ -28,14 +30,15 @@ in
     driveConfig.deviceExtraOpts.serial = serial;
   }) (hdds ++ dbDisks);
 
-  # What disko makes on a real server's two system disks: a RAID1 array over both, with a partition per slot.
-  systemd.services.osd-db-partitions = {
-    description = "Make the DB partitions of Ceph's OSDs";
+  # What disko makes on a real server's two system disks: a RAID1 array over both, and on it a volume group with a
+  # logical volume per slot.
+  systemd.services.osd-db-volumes = {
+    description = "Make the DB volumes of Ceph's OSDs";
     wantedBy = [ "k3s.service" ];
     before = [ "k3s.service" ];
     path = [
-      pkgs.gptfdisk
       pkgs.mdadm
+      config.services.lvm.package
       config.systemd.package
     ];
     serviceConfig = {
@@ -49,18 +52,16 @@ in
       fi
       udevadm settle
       [ -e /dev/md/osd-db ] || mdadm --assemble /dev/md/osd-db ${members}
+      udevadm settle
+      if ! vgs ${group} >/dev/null 2>&1; then
+        pvcreate --yes /dev/md/osd-db
+        vgcreate ${group} /dev/md/osd-db
+      fi
     ''
-    + lib.concatMapStrings (
-      slot:
-      let
-        label = "osd${toString slot}-db";
-        number = toString (slot + 1);
-      in
-      ''
-        [ -e /dev/disk/by-osd/${label} ] \
-          || sgdisk --new=${number}:0:+${ceph.dbSize} --change-name=${number}:${label} /dev/md/osd-db
-      ''
-    ) slots
+    + lib.concatMapStrings (slot: ''
+      lvs ${group}/osd${toString slot}-db >/dev/null 2>&1 \
+        || lvcreate --yes -L ${ceph.dbSize} -n osd${toString slot}-db ${group}
+    '') slots
     + ''
       udevadm settle
       udevadm wait --timeout=60 ${

@@ -41,24 +41,21 @@ let
   # kubernetes/platform/ceph lists this many OSD slots.
   maxSlots = 12;
   slots = lib.range 0 (cfg.ceph.dbSlots - 1);
+  withDb = slots != [ ];
 
-  # Raw partitions for BlueStore's DB, one per OSD slot. ceph-volume formats them itself, and the cluster finds them
-  # as /dev/disk/by-osd/osdN-db. On two system disks they lie on a RAID1 array over a partition of each: an OSD dies
-  # with its DB, and with copies spread over the OSDs of one server, a disk taking half the DBs with it would take
-  # every copy of some data.
-  dbPartitions = lib.listToAttrs (
-    map (
-      slot:
-      lib.nameValuePair "osd${toString slot}-db" {
-        size = cfg.ceph.dbSize;
-        label = "osd${toString slot}-db";
-        priority = 1100 + slot;
-      }
-    ) slots
-  );
+  # BlueStore's DBs, a logical volume per OSD slot in this group, which the cluster finds as
+  # /dev/disk/by-osd/osdN-db. Volumes, not partitions: ceph-volume 20.2 fails to prepare an encrypted OSD whose DB is a
+  # partition. On two system disks the group lies on a RAID1 array over a partition of each: an OSD dies with its DB,
+  # and with copies spread over the OSDs of one server, a disk taking half the DBs with it would take every copy of
+  # some data.
+  dbGroup = "osd-db";
+  dbVolume = {
+    type = "lvm_pv";
+    vg = dbGroup;
+  };
 
-  # Each disk's share of that array holds every DB, and room for the array's metadata (up to 128 MiB on large disks)
-  # and the partition table on it.
+  # Each disk's share holds every DB, and room for the array's metadata (up to 128 MiB on large disks), LVM's own,
+  # and each volume rounded up to whole extents.
   dbShare =
     let
       unit = lib.substring (lib.stringLength cfg.ceph.dbSize - 1) 1 cfg.ceph.dbSize;
@@ -76,21 +73,23 @@ let
       osd-db = {
         size = "${toString (cfg.ceph.dbSlots * kib + 256 * 1024)}K";
         priority = 1100;
-        content = {
-          type = "mdraid";
-          name = "osd-db";
-        };
+        content =
+          if mirrored then
+            {
+              type = "mdraid";
+              name = "osd-db";
+            }
+          else
+            dbVolume;
       };
     };
-
-  dbOnArray = mirrored && slots != [ ];
 
   systemDisk = i: device: {
     type = "disk";
     inherit device;
     content = {
       type = "gpt";
-      partitions = (if dbOnArray then dbShare else dbPartitions) // {
+      partitions = lib.optionalAttrs withDb dbShare // {
         bios = {
           size = "1M";
           type = "EF02";
@@ -195,8 +194,8 @@ in
         default = lib.length cfg.ceph.disks;
         defaultText = lib.literalExpression "length config.suveraen.storage.ceph.disks";
         description = ''
-          BlueStore DB partitions made at install, on the system disk or mirrored over both. They can't be added later,
-          so reserve one for every disk the machine may ever give Ceph.
+          BlueStore DB volumes made at install, on the system disk or mirrored over both. Their group has room for
+          these alone, so reserve one for every disk the machine may ever give Ceph.
         '';
       };
 
@@ -205,7 +204,7 @@ in
         default = null;
         example = "150G";
         description = ''
-          Size of each DB partition, about 1% of its disk. With two system disks each holds all of them, dbSlots times
+          Size of each DB volume, about 1% of its disk. With two system disks each holds all of them, dbSlots times
           this size.
         '';
       };
@@ -254,11 +253,11 @@ in
       }
       {
         assertion = cfg.ceph.dbSlots >= lib.length cfg.ceph.disks;
-        message = "suveraen.storage.ceph.dbSlots needs a DB partition for every disk in ceph.disks.";
+        message = "suveraen.storage.ceph.dbSlots needs a DB volume for every disk in ceph.disks.";
       }
       {
         assertion = cfg.ceph.dbSlots == 0 || cfg.ceph.dbSize != null;
-        message = "suveraen.storage.ceph.dbSize sets the size of the DB partitions.";
+        message = "suveraen.storage.ceph.dbSize sets the size of the DB volumes.";
       }
       {
         assertion = lib.all (lib.hasPrefix "/dev/disk/") cfg.ceph.disks;
@@ -289,16 +288,28 @@ in
             content = bootFilesystem;
           };
         }
-        // lib.optionalAttrs dbOnArray {
+        // lib.optionalAttrs (mirrored && withDb) {
           osd-db = {
             type = "mdadm";
             level = 1;
-            content = {
-              type = "gpt";
-              partitions = dbPartitions;
-            };
+            content = dbVolume;
           };
         };
+
+      lvm_vg = lib.optionalAttrs withDb {
+        ${dbGroup} = {
+          type = "lvm_vg";
+          lvs = lib.listToAttrs (
+            map (
+              slot:
+              lib.nameValuePair "osd${toString slot}-db" {
+                size = cfg.ceph.dbSize;
+                priority = 1000 + slot;
+              }
+            ) slots
+          );
+        };
+      };
 
       # Apart from rpool/var and bounded, so a full disk of images or pods can't stop etcd or the monitors. Images and
       # pods' state go without snapshots.
@@ -321,9 +332,8 @@ in
       lib.concatImapStrings (i: disk: ''
         SUBSYSTEM=="block", SYMLINK=="${lib.removePrefix "/dev/" disk}", SYMLINK+="disk/by-osd/osd${toString (i - 1)}"
       '') cfg.ceph.disks
-      # udev makes no by-partlabel links for partitions on an array.
-      + ''
-        SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ENV{ID_PART_ENTRY_NAME}=="osd[0-9]*-db", SYMLINK+="disk/by-osd/$env{ID_PART_ENTRY_NAME}"
+      + lib.optionalString withDb ''
+        SUBSYSTEM=="block", ENV{DM_VG_NAME}=="${dbGroup}", ENV{DM_LV_NAME}=="osd[0-9]*-db", SYMLINK+="disk/by-osd/$env{DM_LV_NAME}"
       '';
 
     # Both BIOS and UEFI boot; disko adds every disk with an EF02 partition to grub's devices.

@@ -81,7 +81,7 @@ spec:
   disruptionManagement:
     managePodBudgets: true
   # The hosts decide by the links they make (suveraen.storage.ceph.disks); a slot a node lacks is skipped. Each OSD's
-  # database is a partition on the system disks, on both where there are two, and block and database are both
+  # database is a logical volume on the system disks, on both where there are two, and block and database are both
   # encrypted.
   storage:
     useAllNodes: true
