@@ -448,6 +448,12 @@ pkgs.testers.runNixOSTest {
           for cmd in [
               "kubectl get gitrepositories,ocirepositories,kustomizations,helmreleases -A",
               "kubectl get pods -A -o wide",
+              "kubectl get pods -A --field-selector=status.phase=Failed"
+              " -o jsonpath='{range .items[*]}{.metadata.namespace}{\" \"}{.metadata.name}{\"\\n\"}{end}'"
+              " | while read -r ns pod; do"
+              " kubectl -n $ns get pod $pod -o jsonpath='{.status.containerStatuses[*].state.terminated}{\"\\n\"}';"
+              " kubectl -n $ns logs $pod --all-containers --tail=30 --prefix; done",
+              "kubectl get networkpolicies -A",
               "kubectl get events -A --sort-by=.lastTimestamp | tail -n 100",
               "kubectl get events -A --field-selector reason=FailedCreate",
               "kubectl -n flux-system logs deploy/source-controller --tail=50",
@@ -470,8 +476,8 @@ pkgs.testers.runNixOSTest {
           images()
           diagnose_ceph()
 
-      # Rook, Ceph through the operator (there's no toolbox), the CSI drivers, the host's disks, and last ceph-volume's
-      # and the OSD prepare pods' own logs.
+      # Rook, Ceph through the operator (there's no toolbox), the object store and who may reach it, the CSI drivers,
+      # the host's disks, and last ceph-volume's and the OSD prepare pods' own logs.
       def diagnose_ceph():
           ceph = (
               "kubectl -n rook-ceph exec deploy/rook-ceph-operator -- timeout 30 ceph --connect-timeout=10"
@@ -491,6 +497,17 @@ pkgs.testers.runNixOSTest {
               "kubectl -n rook-ceph logs deploy/rook-ceph-operator --tail=100",
               *[f"{ceph} {args}" for args in
                 ["status", "health detail", "osd tree", "osd dump", "osd crush class ls", "pg stat", "df", "crash ls"]],
+              "kubectl get objectbucketclaims,objectbuckets -A -o wide",
+              # Endpoints, claims and phases; the keys stay in the claims' Secrets.
+              "kubectl get objectbuckets -o yaml",
+              "kubectl -n rook-ceph get svc,endpointslices -l app=rook-ceph-rgw -o wide",
+              f"{operator} | grep -E 'op-bucket-prov|object-controller' | tail -n 50",
+              # A line per request with the client's address and the status: none means it never got there.
+              "kubectl -n rook-ceph logs -l app=rook-ceph-rgw --all-containers --prefix --tail=200",
+              # What k3s's policy controller lets reach the store, with each rule's counters, and the pods it admits.
+              "${pkgs.iptables}/bin/iptables-save -c | grep -F object-store-clients;"
+              " for set in $(${pkgs.iptables}/bin/iptables-save | grep -F object-store-clients"
+              " | grep -oE 'KUBE-SRC-[A-Z0-9]+' | sort -u); do ${pkgs.ipset}/bin/ipset list $set; done",
               "kubectl -n rook-ceph get drivers.csi.ceph.io,operatorconfigs.csi.ceph.io,cephconnections.csi.ceph.io"
               ",clientprofiles.csi.ceph.io -o yaml",
               "kubectl -n rook-ceph get deploy,ds,rs,sa -o wide",
