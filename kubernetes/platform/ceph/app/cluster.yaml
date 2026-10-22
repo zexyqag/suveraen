@@ -63,10 +63,15 @@ spec:
         memory: 256Mi
       limits:
         memory: 1Gi
+  # Numbers live here, not in the cluster's settings: Flux would substitute them as integers, and these take strings.
   cephConfig:
     global:
       osd_pool_default_size: "3"
       osd_pool_default_min_size: "2"
+    mgr:
+      # With Ceph's default factor of 3 the autoscaler leaves a pool the share it got before the other pools existed:
+      # 249 of 250 placement groups per OSD on three disks. At 1.0 the counts follow only the OSDs and pools.
+      mgr/pg_autoscaler/threshold: "1.0"
   healthCheck:
     # Raised for the older key type kernel clients need (security.cephx.csi).
     muteHealthWarning:

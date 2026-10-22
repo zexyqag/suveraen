@@ -357,6 +357,8 @@ refuses mons-share-node-with-host-domain "$cc" \
   "yq -i '.data.CEPH_FAILURE_DOMAIN = \"host\"' clusters/test/settings.yaml"
 refuses osd-memory-burstable "$cc" "yq -i '.spec.resources.osd.requests.memory = \"512Mi\"' $P/cluster.yaml"
 refuses ceph-unsupported "$cc" "yq -i '.spec.cephVersion.allowUnsupported = true' $P/cluster.yaml"
+refuses pg-threshold-default "Ceph's autoscaler acts on every change it recommends" \
+  "yq -i 'del(.spec.cephConfig.mgr.\"mgr/pg_autoscaler/threshold\")' $P/cluster.yaml"
 refuses ceph-prunable "Ceph's objects are never pruned: CephCluster/rook-ceph" \
   "yq -i 'del(.metadata.annotations)' $P/cluster.yaml"
 refuses second-ceph-cluster "one CephCluster, rook-ceph/rook-ceph" \

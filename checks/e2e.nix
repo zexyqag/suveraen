@@ -12,17 +12,18 @@
 # within their quota; a host's key goes with its certificate; removing a tenant takes its Kustomizations, hosts, keys
 # and pods but leaves its namespaces, which then go by its label; and an unsigned commit is never applied. Ceph runs
 # healthy with three monitors and an encrypted OSD per disk, its DB on a volume of its own mirrored over both system
-# disks, three copies on every pool; block volumes bind, snapshot and restore, and go with their claims; the object
-# store hands out buckets with keys of their own to the pods allowed to reach it; and after a reboot Ceph comes back
-# with its data. Each tenant's PostgreSQL archives WAL and base backups to its own bucket, takes no restore while it
-# runs, and lets each app reach its own database alone, from its own namespace; a removed tenant's cluster and bucket go
-# only with its namespaces. The bucket's running generation goes off-site to two providers, encrypted with the tenant's
-# own key and locked for as long as the template says, where the cluster's keys can neither delete nor unlock a copy,
-# nor reach another app's; when the cluster's object store has lost it, a release brings the tenant's PostgreSQL back
-# from a provider's copy as a new generation, with its apps' data, and later copies leave the old generation's alone. An
-# app's volume goes to both providers too, encrypted with the app's own password, and comes back from either as it was
-# copied, without the files deleted before; nothing is left of the volumes copies and restores worked on, and every
-# volume in a tenant's namespace is backed up or VolSync's.
+# disks, three copies on every pool and as many placement groups as its OSDs and pools call for, with room for one more
+# pool; block volumes bind, snapshot and restore, and go with their claims; the object store hands out buckets with keys
+# of their own to the pods allowed to reach it; and after a reboot Ceph comes back with its data. Each tenant's
+# PostgreSQL archives WAL and base backups to its own bucket, takes no restore while it runs, and lets each app reach
+# its own database alone, from its own namespace; a removed tenant's cluster and bucket go only with its namespaces. The
+# bucket's running generation goes off-site to two providers, encrypted with the tenant's own key and locked for as long
+# as the template says, where the cluster's keys can neither delete nor unlock a copy, nor reach another app's; when the
+# cluster's object store has lost it, a release brings the tenant's PostgreSQL back from a provider's copy as a new
+# generation, with its apps' data, and later copies leave the old generation's alone. An app's volume goes to both
+# providers too, encrypted with the app's own password, and comes back from either as it was copied, without the files
+# deleted before; nothing is left of the volumes copies and restores worked on, and every volume in a tenant's namespace
+# is backed up or VolSync's.
 {
   pkgs,
   module,
@@ -713,7 +714,7 @@ pkgs.testers.runNixOSTest {
                   },
               }
 
-          with subtest("Ceph is healthy: three monitors, an encrypted OSD per disk with its DB apart, three copies everywhere"):
+          with subtest("Ceph is healthy: three monitors, an encrypted OSD per disk with its DB apart, three copies everywhere, room for another pool"):
               server.wait_until_succeeds(
                   "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}' | grep -x HEALTH_OK",
                   timeout=900,
@@ -746,6 +747,23 @@ pkgs.testers.runNixOSTest {
               for pool in pools:
                   assert (pool["size"], pool["min_size"]) == (3, 2), pool
                   assert any(step.get("type") == domain for step in rules[pool["crush_rule"]]), (pool, rules)
+              config = parsed("kubectl -n rook-ceph get cephcluster rook-ceph -o json")["spec"]["cephConfig"]["mgr"]
+              for key, value in config.items():
+                  assert float(ceph(f"config get mgr {key}")) == float(value), (key, value)
+
+              # Once the autoscaler has done all it recommends, the two pools that hold data split what the others leave
+              # evenly, and one more pool at its floor of 32 placement groups still fits under Ceph's limit per OSD.
+              def settled(_):
+                  return all(p["pg_num"] == p["pg_num_target"] for p in ceph("osd pool ls detail")) and all(
+                      p["pg_num_final"] == p["pg_num_target"] for p in ceph("osd pool autoscale-status")
+                  )
+
+              retry(settled, timeout_seconds=600)
+              pools = ceph("osd pool ls detail")
+              pgs = {p["pool_name"]: p["pg_num"] for p in pools}
+              assert pgs["block"] == pgs["objects.rgw.buckets.data"], pgs
+              copies = sum(p["pg_num"] * p["size"] for p in pools) + 32 * 3
+              assert copies / len(osds) <= ceph("config get mgr mon_max_pg_per_osd"), pgs
 
           with subtest("A block volume binds, its snapshot restores, and it goes with its claim"):
               server.succeed("kubectl create namespace volumes")

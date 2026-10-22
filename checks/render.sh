@@ -797,6 +797,10 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     "monitors, lets daemons share a node only while copies spread over OSDs, speaks msgr2 alone, encrypted when on" \
     "the hosts' network, guarantees its OSDs their memory, and takes encrypted OSDs from every node on slots from" \
     "osd0 on, each with its DB on its own volume: $bad"
+  # Placement groups follow the OSDs and pools, not the order the pools came in.
+  [ "$(yq ea '[select(.kind == "CephCluster")] | .[0].spec.cephConfig.mgr."mgr/pg_autoscaler/threshold"
+    | select(tag == "!!str")' "$rendered"/*.yaml)" = 1.0 ] \
+    || fail "$cluster: Ceph's autoscaler acts on every change it recommends"
   # Dropping one from Git leaves it running: Rook would delete the cluster's data with it.
   bad=$(yq ea '[select(.kind == "CephCluster" or .kind == "CephBlockPool" or .kind == "CephObjectStore")
     | select(.metadata.annotations."kustomize.toolkit.fluxcd.io/prune" != "disabled") | .kind + "/" + .metadata.name]
