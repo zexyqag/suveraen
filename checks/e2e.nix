@@ -531,6 +531,11 @@ pkgs.testers.runNixOSTest {
               ",clientprofiles.csi.ceph.io -o yaml",
               "kubectl -n rook-ceph get deploy,ds,rs,sa -o wide",
               "kubectl -n rook-ceph logs deploy/ceph-csi-controller-manager --tail=100",
+              # Why any of Rook's containers restarted, and what the CSI controller said before and after.
+              "kubectl -n rook-ceph get pods -o jsonpath='{range .items[*]}{.metadata.name}{range .status.containerStatuses[*]}"
+              "{\" \"}{.name}={.restartCount}:{.lastState.terminated.reason}/{.lastState.terminated.exitCode}{end}{\"\\n\"}{end}'",
+              "kubectl -n rook-ceph logs deploy/rook-ceph.rbd.csi.ceph.com-ctrlplugin --all-containers --prefix --tail=50",
+              "kubectl -n rook-ceph logs deploy/rook-ceph.rbd.csi.ceph.com-ctrlplugin --all-containers --prefix --previous --tail=50",
               "lsblk -o NAME,KNAME,TYPE,SIZE,ROTA,PARTLABEL,PARTUUID,FSTYPE,MOUNTPOINTS",
               "ls -l /dev/disk/by-osd/",
               "for link in /dev/disk/by-osd/*; do echo $link; udevadm info --query=property $(readlink -f $link)"
