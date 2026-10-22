@@ -646,11 +646,15 @@ pkgs.testers.runNixOSTest {
               server.succeed(f"echo {shlex.quote(json.dumps(obj))} | kubectl apply -f -")
 
           def finished(namespace, pod, timeout=600):
-              server.wait_until_succeeds(
-                  f"kubectl -n {namespace} get pod {pod} -o jsonpath='{{.status.phase}}' | grep -xE 'Succeeded|Failed'",
-                  timeout=timeout,
-              )
-              server.succeed(f"kubectl -n {namespace} get pod {pod} -o jsonpath='{{.status.phase}}' | grep -x Succeeded")
+              phase = f"kubectl -n {namespace} get pod {pod} -o jsonpath='{{.status.phase}}'"
+              try:
+                  server.wait_until_succeeds(f"{phase} | grep -xE 'Succeeded|Failed'", timeout=timeout)
+                  server.succeed(f"{phase} | grep -x Succeeded")
+              except Exception:
+                  print(server.execute(
+                      f"set +e; ( kubectl -n {namespace} describe pod {pod}; kubectl -n {namespace} logs {pod} ) 2>&1"
+                  )[1])
+                  raise
               return server.succeed(f"kubectl -n {namespace} logs {pod}")
 
           # A pod that meets the restricted standard, with the app's image, which has a shell and curl.
