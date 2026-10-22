@@ -1,0 +1,41 @@
+---
+# CronJobs offsite-check-1 and offsite-check-2: each proves its provider's copy whole and readable once a day, on a
+# schedule of its own, so a provider that is down holds back neither the other's check nor any copy. They run as the
+# CronJob offsite's pods do, and read only.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+components:
+  - ./cronjob
+patches:
+  - target:
+      kind: CronJob
+      name: offsite-check-1
+    patch: |-
+      apiVersion: batch/v1
+      kind: CronJob
+      metadata:
+        name: _
+      spec:
+        jobTemplate:
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: rclone
+                    args: [check, "1"]
+  - target:
+      kind: CronJob
+      name: offsite-check-2
+    patch: |-
+      apiVersion: batch/v1
+      kind: CronJob
+      metadata:
+        name: _
+      spec:
+        jobTemplate:
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: rclone
+                    args: [check, "2"]

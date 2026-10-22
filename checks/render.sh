@@ -23,6 +23,8 @@ owned='(has("serviceAccountName") or has("sourceRef") or has("interval") or has(
 tenantre='^[a-z][a-z0-9]{4}$'
 namere='^[a-z][a-z0-9]{1,15}$'
 tenantlike='^[a-z][a-z0-9]{4}-'
+# One minute of one hour, every day.
+daily='^[0-5]?[0-9] ([01]?[0-9]|2[0-3]) [*] [*] [*]$'
 up='../../../../..'
 quotas='QUOTA_CONFIGMAPS,QUOTA_CPU,QUOTA_EPHEMERAL_STORAGE,QUOTA_JOBS,QUOTA_MEMORY,QUOTA_PODS,QUOTA_SECRETS'
 quotas+=',QUOTA_SERVICES,QUOTA_STORAGE,QUOTA_VOLUMES'
@@ -445,6 +447,34 @@ for dir in kubernetes/clusters/*/; do
 postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket bucket" ] \
             || fail "$cluster/$name: a tenant's bucket is $t-postgres, claimed from ceph-bucket and never pruned, and" \
               "Barman archives there through the cluster's object store with its keys"
+          # Each provider's copy is checked once a day by the CronJob offsite's own pod, which a check that fails runs
+          # once more, for a while at most, and keeps.
+          [ "$(yq ea '[select(.kind == "CronJob") | .metadata.name] | sort | join(",")' "$file")" \
+            = offsite,offsite-check-1,offsite-check-2 ] \
+            || fail "$cluster/$name: a tenant's PostgreSQL has the CronJobs offsite, offsite-check-1 and" \
+              "offsite-check-2"
+          pod='.spec.jobTemplate.spec.template | del(.spec.containers[0].args) | sort_keys(..)'
+          offsite=$(yq ea -o=json -I=0 "select(.kind == \"CronJob\" and .metadata.name == \"offsite\") | $pod" "$file")
+          for n in 1 2; do
+            check="select(.kind == \"CronJob\" and .metadata.name == \"offsite-check-$n\")"
+            yq ea -o=json -I=0 "$check | $pod" "$file" >"$w/$name.check"
+            yq ea "$check | .spec | [(.jobTemplate.spec.template.spec.containers[0].args | join(\" \")),
+              .concurrencyPolicy, .successfulJobsHistoryLimit, .failedJobsHistoryLimit, .jobTemplate.spec.backoffLimit,
+              (.jobTemplate.spec.activeDeadlineSeconds // 0 > 0)] | join(\",\")" "$file" >>"$w/$name.check"
+            schedule=$(yq ea "$check | .spec.schedule" "$file")
+            [ "$(cat "$w/$name.check")" = "$offsite"$'\n'"check $n,Forbid,0,1,1,true" ] && [[ $schedule =~ $daily ]] \
+              || fail "$cluster/$name: offsite-check-$n runs offsite's pod to check provider $n alone, once a day" \
+                "at a set time, never twice at once, keeps no Job that passed and the last that failed, which it" \
+                "retried once, and stops it after a while"
+          done
+          # A copy changed at a provider is found within a cycle and the three days a check may go without passing,
+          # while the provider still keeps what it replaced.
+          read -r cycle lock <<<"$(yq ea '[select(.kind == "ConfigMap" and .metadata.name == "offsite")] | .[0].data
+            | (.CHECK_CYCLE // "-") + " " + (.LOCK // "-")' "$file")"
+          [[ $cycle =~ ^[1-9][0-9]*d$ && $lock =~ ^[1-9][0-9]*d$ ]] && [ "${cycle%d}" -le 14 ] \
+            && [ $((${cycle%d} + 3)) -lt "${lock%d}" ] \
+            || fail "$cluster/$name: the checks read every copy back within 1 to 14 days, and that and three days" \
+              "more are less than the days a copy stays locked: $cycle, $lock"
         fi
         bad=$(yq ea '[select(.kind == "RoleBinding") | .metadata.namespace as $ns | select(
           (.roleRef.kind == "ClusterRole" and .roleRef.name != "flux-app")
@@ -477,6 +507,20 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           [ "$(quantity "$limit")" -le "$(quantity "$quota")" ] \
             || fail "$cluster/$name: the LimitRange's $field, $limit, is above the quota's ${pair#*:}, $quota"
         done
+        # Every Job the namespace may hold at once: each CronJob's running one and those it keeps, the others, a mover
+        # for each of VolSync's copies and restores, and the one CloudNativePG runs to make an instance.
+        need=$({
+          yq ea '[select(.metadata.namespace == strenv(name)) | select(.kind == "CronJob")
+            | (.spec.successfulJobsHistoryLimit // 3) + (.spec.failedJobsHistoryLimit // 1) + 1] | .[]' \
+            "$rendered"/*.yaml
+          yq ea '[select(.metadata.namespace == strenv(name)) | select(.kind == "Job" or .kind == "ReplicationSource"
+            or .kind == "ReplicationDestination" or (.kind == "Cluster" and .apiVersion == "postgresql.cnpg.io/v1"))]
+            | length' "$rendered"/*.yaml
+        } | awk '{ n += $1 } END { print n }')
+        quota=$(yq ea '[select(.kind == "ResourceQuota")] | .[0].spec.hard."count/jobs.batch"' "$file")
+        [[ $quota =~ ^[0-9]+$ ]] && [ "$need" -le "$quota" ] \
+          || fail "$cluster/$name: the quota's count/jobs.batch, $quota, holds every CronJob's running and kept Jobs," \
+            "the other Jobs, VolSync's movers and CloudNativePG's: $need"
         ;;
       ./kubernetes/apps/postgres/cluster)
         [ -n "$t" ] && [ "$name" = "$t-postgres-cluster" ] \
@@ -520,19 +564,22 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
         [ -z "$bad" ] || fail "$cluster/$name: a tenant's PostgreSQL is never pruned, has no superuser access, takes" \
           "its image from the catalog and its volume from ceph-block, labelled as Barman's to back up, lets each role" \
           "reach its own database alone over TLS, and archives with Barman to postgres-$generation: $bad"
-        # Its namespace's quota holds every instance with its Barman sidecar, and a job copying the bucket.
+        # Its namespace's quota holds every instance with its Barman sidecar, a job copying the bucket and one checking
+        # a copy.
         app=$rendered/$t-postgres.yaml
         instances=$(yq ea '[select(.kind == "Cluster")] | .[0].spec.instances' "$file")
         memory=$(yq ea '[select(.kind == "Cluster")] | .[0].spec.resources.limits.memory' "$file")
         sidecar=$(yq ea '[select(.kind == "ObjectStore")]
           | .[0].spec.instanceSidecarConfiguration.resources.limits.memory' "$app")
-        job=$(yq ea '[select(.kind == "CronJob")]
-          | .[0].spec.jobTemplate.spec.template.spec.containers[0].resources.limits.memory' "$app")
+        limit='.spec.jobTemplate.spec.template.spec.containers[0].resources.limits.memory'
+        job=$(yq ea "[select(.kind == \"CronJob\" and .metadata.name == \"offsite\")] | .[0] | $limit" "$app")
+        check=$(yq ea "[select(.kind == \"CronJob\" and .metadata.name == \"offsite-check-1\")] | .[0] | $limit" "$app")
         quota=$(yq ea '[select(.kind == "ResourceQuota")] | .[0].spec.hard."limits.memory"' "$app")
-        need=$((instances * ($(quantity "$memory") + $(quantity "$sidecar")) + $(quantity "$job")))
+        need=$((instances * ($(quantity "$memory") + $(quantity "$sidecar")) + $(quantity "$job")
+          + $(quantity "$check")))
         [ "$need" -le "$(quantity "$quota")" ] \
           || fail "$cluster/$name: $t-postgres's quota, $quota, can't hold $instances instances of $memory, each with a" \
-            "$sidecar sidecar, and a $job job"
+            "$sidecar sidecar, a $job job copying the bucket and a $check one checking a copy"
         ;;
       ./kubernetes/apps/*/db)
         app=$(basename "$(dirname "$path")")

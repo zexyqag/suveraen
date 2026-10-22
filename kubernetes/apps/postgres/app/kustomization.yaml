@@ -17,3 +17,4 @@ configMapGenerator:
 components:
   - ../../../components/internet
   - ../fetch
+  - ../check

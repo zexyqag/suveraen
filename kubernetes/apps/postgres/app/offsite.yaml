@@ -7,6 +7,10 @@ metadata:
 data:
   # How long each copy stays locked.
   LOCK: ${OFFSITE_LOCK}
+  # How long the bucket holds an object before both providers must have it, and in how many days the checks read every
+  # copy back.
+  CHECK_MIN_AGE: ${OFFSITE_CHECK_MIN_AGE}
+  CHECK_CYCLE: ${OFFSITE_CHECK_CYCLE}
   GENERATION: ${GENERATION}
   ORIGIN: ${ORIGIN}
   RESTORE_FROM: ${RESTORE_FROM}
@@ -52,6 +56,7 @@ spec:
             suveraen/egress: internet
         spec:
           restartPolicy: Never
+          automountServiceAccountToken: false
           securityContext:
             runAsNonRoot: true
             runAsUser: 65534

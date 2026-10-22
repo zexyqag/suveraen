@@ -2,7 +2,9 @@
 # providers through rclone's crypt, which encrypts contents and names with the tenant's own password and salt (push),
 # or brings generation $ORIGIN back from the provider $RESTORE_FROM names (fetch). A push never deletes: an object
 # store that is lost or wiped must not empty the copies, which the providers expire instead. Nor does it send a
-# generation the cluster no longer runs, such as one fetched back, which the providers already hold.
+# generation the cluster no longer runs, such as one fetched back, which the providers already hold. A check proves,
+# reading only, that one provider's copy holds whole all the bucket held CHECK_MIN_AGE ago, and decrypts a daily share
+# of it to the same bytes (check <n>).
 set -eu
 export RCLONE_CONFIG_RGW_TYPE=s3 RCLONE_CONFIG_RGW_PROVIDER=Ceph RCLONE_CONFIG_RGW_ENDPOINT="http://$BUCKET_HOST:$BUCKET_PORT"
 export RCLONE_CONFIG_RGW_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" RCLONE_CONFIG_RGW_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
@@ -43,6 +45,23 @@ case $1 in
       *) exit 64 ;;
     esac
     exec rclone copy "crypt:postgres-$ORIGIN" "rgw:$BUCKET_NAME/postgres-$ORIGIN" $flags
+    ;;
+  # The bucket's upload times alone pick what to check: rclone applies --min-age to both sides, and a copy pushed late
+  # looks young at the provider. Each day reads back another share, so every copy is read once in CHECK_CYCLE. Two
+  # checkers with 8M buffers stay inside the pod's memory.
+  check)
+    provider "$2"
+    export RCLONE_CONFIG_CRYPT_STRICT_NAMES=true
+    days=${CHECK_CYCLE%d}
+    from="rgw:$BUCKET_NAME/postgres-$GENERATION" to="crypt:postgres-$GENERATION"
+    list="rclone lsf -R --files-only --min-age $CHECK_MIN_AGE --use-server-modtime --fast-list"
+    $list "$from" >/tmp/all
+    $list --hash-filter "$(($(date -u +%s) / 86400 % days))/$days" "$from" >/tmp/part
+    check="rclone check --one-way --fast-list --checkers 2 --buffer-size 8M"
+    failed=0
+    $check --size-only --files-from /tmp/all "$from" "$to" || failed=1
+    $check --download --files-from /tmp/part "$from" "$to" || failed=1
+    exit $failed
     ;;
 esac
 exit 64

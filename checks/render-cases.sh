@@ -460,6 +460,10 @@ refuses postgres-quota-small "bravo-postgres's quota, 1Gi, can't hold 1 instance
   "knob POSTGRES_QUOTA_MEMORY 1Gi; knob POSTGRES_MEMORY 1Gi"
 refuses postgres-quota-three "can't hold 3 instances of 512Mi" "yq -i '.data.PG_INSTANCES = \"3\"' clusters/test/settings.yaml
   knob POSTGRES_QUOTA_MEMORY 2Gi"
+refuses postgres-quota-no-check "bravo-postgres's quota, 1100Mi, can't hold 1 instances of 512Mi" \
+  "knob POSTGRES_QUOTA_MEMORY 1100Mi"
+refuses postgres-jobs-quota "the quota's count/jobs.batch, 8, holds every CronJob's running and kept Jobs" \
+  "sed -i 's/QUOTA_JOBS: \"12\"/QUOTA_JOBS: \"8\"/' apps/postgres/ks.yaml"
 refuses recovery-same-generation "recovers from an earlier generation than its own, g1" \
   "knob POSTGRES_BOOTSTRAP recovery"
 refuses bucket-other-tenant "a tenant's bucket is bravo-postgres" \
@@ -491,6 +495,17 @@ refuses offsite-one-provider "the two providers' endpoints differ" \
   "yq -i '.data.BACKUP_2_ENDPOINT = .data.BACKUP_1_ENDPOINT' clusters/test/settings.yaml"
 refuses offsite-plain-http "prod: the providers' endpoints are https" \
   "$real; yq -i '.data.BACKUP_2_ENDPOINT = \"http://s3.two.test\"' clusters/prod/settings.yaml"
+checks="runs offsite's pod to check provider"
+refuses check-weekly "offsite-check-1 $checks 1 alone" "knob POSTGRES_OFFSITE_CHECK_SCHEDULE_1 '41 1 * * 0'"
+K=apps/postgres/check/kustomization.yaml
+refuses postgres-check-other-pod "offsite-check-1 $checks 1 alone" \
+  "yq -i '.patches += [{\"target\": {\"kind\": \"CronJob\", \"name\": \"offsite-check-1\"},
+   \"patch\": \"- op: remove\n  path: /spec/jobTemplate/spec/template/metadata/labels\"}]' $K"
+refuses postgres-check-other-args "offsite-check-2 $checks 2 alone" "sed -i 's/args: \[check, \"2\"\]/args: [push]/' $K"
+cycle="the checks read every copy back within 1 to 14 days"
+refuses check-cycle-zero "$cycle" "knob POSTGRES_OFFSITE_CHECK_CYCLE 0d"
+refuses check-cycle-long "$cycle" "knob POSTGRES_OFFSITE_CHECK_CYCLE 15d"
+refuses check-cycle-over-lock "$cycle" "knob POSTGRES_OFFSITE_LOCK 10d"
 V=apps/hello/app/volsync.yaml
 volsync="an app's volume is copied by components/volsync alone, as a user that isn't root"
 refuses volsync-other-prefix "copies of hello's volume go to s3:http://s3-1.test/test-" \

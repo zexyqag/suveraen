@@ -25,7 +25,7 @@ spec:
     substitute:
       APP: postgres
       QUOTA_CPU: ${POSTGRES_QUOTA_CPU:=1000m}
-      # Three instances with their Barman sidecars, and a job copying the bucket.
+      # Three instances with their Barman sidecars, a job copying the bucket and one checking a copy.
       QUOTA_MEMORY: ${POSTGRES_QUOTA_MEMORY:=3Gi}
       QUOTA_EPHEMERAL_STORAGE: ${POSTGRES_QUOTA_EPHEMERAL_STORAGE:=4Gi}
       QUOTA_STORAGE: ${POSTGRES_QUOTA_STORAGE:=40Gi}
@@ -34,12 +34,18 @@ spec:
       QUOTA_SERVICES: "4"
       QUOTA_SECRETS: "32"
       QUOTA_CONFIGMAPS: "16"
-      QUOTA_JOBS: "8"
+      QUOTA_JOBS: "12"
       BUCKET_SIZE: ${POSTGRES_BUCKET_SIZE:=100G}
       RETENTION: ${POSTGRES_RETENTION:=30d}
       OFFSITE_SCHEDULE: ${POSTGRES_OFFSITE_SCHEDULE:=7-59/15 * * * *}
       # The retention and a week of WAL before its oldest base backup.
       OFFSITE_LOCK: ${POSTGRES_OFFSITE_LOCK:=40d}
+      # Each provider's copy is checked daily, off the copies' minutes, and read back in full once a cycle.
+      OFFSITE_CHECK_SCHEDULE_1: ${POSTGRES_OFFSITE_CHECK_SCHEDULE_1:=41 1 * * *}
+      OFFSITE_CHECK_SCHEDULE_2: ${POSTGRES_OFFSITE_CHECK_SCHEDULE_2:=41 13 * * *}
+      OFFSITE_CHECK_CYCLE: ${POSTGRES_OFFSITE_CHECK_CYCLE:=7d}
+      # A push cycle plus a large base backup's upload.
+      OFFSITE_CHECK_MIN_AGE: ${POSTGRES_OFFSITE_CHECK_MIN_AGE:=3h}
       GENERATION: ${POSTGRES_GENERATION:=g1}
       ORIGIN: ${POSTGRES_ORIGIN:=g1}
       RESTORE_FROM: ${POSTGRES_RESTORE_FROM:=none}

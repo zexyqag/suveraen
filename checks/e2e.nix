@@ -21,9 +21,11 @@
 # off-site to two providers, encrypted with the tenant's own key and locked for as long as the template says, where the
 # cluster's keys can neither delete nor unlock a copy, nor reach another app's; when the cluster's object store has lost
 # it, a release brings the tenant's PostgreSQL back from a provider's copy as a new generation, with its apps' data, and
-# later copies leave the old generation's alone. An app's volume goes to both providers too, encrypted with the app's
-# own password, and comes back from either as it was copied, without the files deleted before; nothing is left of the
-# volumes copies and restores worked on, and every volume in a tenant's namespace is backed up or VolSync's.
+# later copies leave the old generation's alone. A check that only reads proves each provider's copy whole and
+# decrypting to what the bucket holds, and fails at that provider alone when a copy there changes or goes. An app's
+# volume goes to both providers too, encrypted with the app's own password, and comes back from either as it was copied,
+# without the files deleted before; nothing is left of the volumes copies and restores worked on, and every volume in a
+# tenant's namespace is backed up or VolSync's.
 # The server's alerts reach a phone.
 {
   pkgs,
@@ -124,6 +126,8 @@ pkgs.testers.runNixOSTest {
           port = 80;
         })
       ];
+      # To find a tenant's copies there by the names its crypt encrypts.
+      environment.systemPackages = [ pkgs.rclone ];
       systemd.services.pebble.serviceConfig.ExecStart = lib.mkForce (
         lib.getExe (
           pebble "public" ''{"listenAddress": "0.0.0.0:443", "managementListenAddress": "0.0.0.0:15000"}''
@@ -1074,10 +1078,10 @@ pkgs.testers.runNixOSTest {
               return read(secrets, f"{app}_BACKUP_{n}_ACCESS_KEY_ID"), read(secrets, f"{app}_BACKUP_{n}_SECRET_ACCESS_KEY")
 
           def stored_at(n, tenant, prefix):
-              # What the provider holds under a prefix: each file with its modification time.
+              # What the provider holds under a prefix: each file with its size and modification time.
               data = f"/var/lib/s3-{n}/data/{bucket_at(n, tenant)}"
-              out = acme.succeed(f"cd {data} && find {prefix} -type f -printf '%p %T@\\n'")
-              return dict(line.split() for line in out.splitlines())
+              out = acme.succeed(f"cd {data} && find {prefix} -type f -printf '%p %s %T@\\n'")
+              return dict(line.split(" ", 1) for line in out.splitlines())
 
           def bucket_at(n, tenant):
               return setting(f"BACKUP_{n}_BUCKET_PREFIX") + tenant
@@ -1095,6 +1099,8 @@ pkgs.testers.runNixOSTest {
                   assert setting(f"BACKUP_{n}_ENDPOINT") == f"http://s3-{n}.test", n
                   acme.wait_for_unit(f"s3-{n}-setup.service")
               archived(ns)
+              # What the bucket holds by now, the push copies.
+              pushed = server.succeed("date -u +%Y-%m-%dT%H:%M:%SZ").strip()
               push(ns, "push")
               with open("${kubernetes}/apps/postgres/ks.yaml") as template:
                   days = re.search(r"POSTGRES_OFFSITE_LOCK:=(\d+)d", template.read())
@@ -1163,6 +1169,100 @@ pkgs.testers.runNixOSTest {
                   f"kubectl -n {namespace} patch {obj} --field-manager=flux-client-side-apply --type merge"
                   f" -p {shlex.quote(json.dumps(change))}"
               )
+
+          # Runs a check now, as its CronJob would with some of its settings changed, and tells whether it passed, with
+          # its log. A check that passed leaves no Job, so its log is read while it runs, from each of its pods in turn:
+          # the last one's result is the one that counts.
+          def checked(ns, cronjob, job, env, backoff=None):
+              spec = parsed(f"kubectl -n {ns} create job {job} --from=cronjob/{cronjob} --dry-run=client -o json")
+              container = spec["spec"]["template"]["spec"]["containers"][0]
+              container["env"] = [e for e in container.get("env", []) if e["name"] not in env] + [
+                  {"name": k, "value": v} for k, v in env.items()
+              ]
+              if backoff is not None:
+                  spec["spec"]["backoffLimit"] = backoff
+              log = f"{ns}-{job}.log"
+              server.succeed(
+                  f"(seen=; for _ in $(seq 2400); do"
+                  f" for pod in $(kubectl -n {ns} get pods -l job-name={job} -o name"
+                  " --sort-by=.metadata.creationTimestamp 2>/dev/null); do"
+                  f' case " $seen " in *" $pod "*) ;; *) kubectl -n {ns} logs -f $pod > /tmp/{log}.part 2>/dev/null'
+                  f' && mv /tmp/{log}.part /tmp/{log} && seen="$seen $pod" ;; esac; done;'
+                  f" state=$(kubectl -n {ns} get job {job} --ignore-not-found"
+                  " -o jsonpath='{.metadata.name} {.status.conditions[?(@.status==\"True\")].type}');"
+                  ' case $state in "" | *Complete* | *Failed*) [ -n "$seen" ] && break ;; esac;'
+                  f" sleep 0.5; done; mv /tmp/{log} /tmp/shared/{log}) </dev/null >/dev/null 2>&1 &"
+              )
+              apply(spec)
+              conditions = []
+
+              def ended(_):
+                  status, out = server.execute(
+                      f"kubectl -n {ns} get job {job} --ignore-not-found"
+                      " -o jsonpath='{.metadata.name} {.status.conditions[?(@.status==\"True\")].type}'"
+                  )
+                  if status != 0:
+                      return False
+                  conditions[:] = out.split()[1:] if out.split() else ["Gone"]
+                  return bool({"Complete", "Failed", "Gone"} & set(conditions))
+
+              retry(ended, timeout_seconds=1200)
+              server.wait_until_succeeds(f"test -e /tmp/shared/{log}", timeout=60)
+              return "Failed" not in conditions, (server.shared_dir / log).read_text()
+
+          def flip(path):
+              # Inverts a byte of a file at a provider, in what rclone's crypt and restic both authenticate.
+              byte = int(acme.succeed(f"od -An -tu1 -j40 -N1 {path}"))
+              acme.succeed(f"printf '\\{255 - byte:03o}' | dd of={path} bs=1 seek=40 conv=notrunc status=none")
+
+          with subtest("Each provider's copy of a tenant's PostgreSQL proves whole and readable with reads alone, and a damaged copy fails at that provider only"):
+              ns = f"{first}-postgres"
+              # No copy runs meanwhile, so the providers' files change only if a check writes them.
+              merge(ns, "cronjob offsite", {"spec": {"suspend": True}})
+              server.wait_until_succeeds(
+                  f"test -z \"$(kubectl -n {ns} get cronjob offsite -o jsonpath='{{.status.active}}')\"", timeout=600
+              )
+              # All the bucket held before the push, read back in full.
+              settings = {"CHECK_MIN_AGE": pushed, "CHECK_CYCLE": "1d"}
+              before = {n: stored_at(n, first, "postgres") for n in providers}
+              for n in providers:
+                  passed, log = checked(ns, f"offsite-check-{n}", f"check-{n}", settings)
+                  matching = [int(m) for m in re.findall(r" (\d+) matching files", log)]
+                  assert passed and log.count(" 0 differences found") == 2 and len(matching) == 2 and min(matching) > 0, log
+                  server.wait_until_succeeds(
+                      f"kubectl -n {ns} get cronjob offsite-check-{n}"
+                      " -o jsonpath='{.status.lastSuccessfulTime}' | grep .",
+                      timeout=60,
+                  )
+              assert {n: stored_at(n, first, "postgres") for n in providers} == before
+              # At provider 2 the copy of the first base backup's data changes a byte, and the copy of its record goes;
+              # rclone's crypt gives their names there.
+              secrets = f"${cluster}/tenants/{first}/secrets.yaml"
+              copies = f"/var/lib/s3-2/data/{bucket_at(2, first)}/postgres"
+              rclone = (
+                  f"HOME=/tmp RCLONE_CONFIG_COPY_TYPE=crypt RCLONE_CONFIG_COPY_REMOTE={copies}"
+                  f" RCLONE_CONFIG_COPY_PASSWORD=$(rclone obscure {read(secrets, 'POSTGRES_CRYPT_PASSWORD')})"
+                  f" RCLONE_CONFIG_COPY_PASSWORD2=$(rclone obscure {read(secrets, 'POSTGRES_CRYPT_SALT')}) rclone"
+              )
+              info, data = sorted(acme.succeed(f"{rclone} lsf -R --files-only copy:postgres-g1/base").split())[:2]
+              info, data = (
+                  f"{copies}/{line.split()[-1]}" for line in acme.succeed(
+                      f"{rclone} cryptdecode --reverse copy: postgres-g1/base/{info} postgres-g1/base/{data}"
+                  ).splitlines()
+              )
+              acme.succeed(f"touch -r {data} /var/lib/s3-2/changed && mv {info} /var/lib/s3-2/missing")
+              flip(data)
+              passed, log = checked(ns, "offsite-check-2", "check-2-damaged", settings, backoff=0)
+              assert not passed and "file not in" in log and "failed to authenticate decrypted block" in log, log
+              passed, log = checked(ns, "offsite-check-1", "check-1-again", settings)
+              assert passed, log
+              # Put back as they were, for the restore from provider 2 below.
+              flip(data)
+              acme.succeed(f"touch -r /var/lib/s3-2/changed {data} && mv /var/lib/s3-2/missing {info}")
+              assert stored_at(2, first, "postgres") == before["2"]
+              passed, log = checked(ns, "offsite-check-2", "check-2-again", settings)
+              assert passed, log
+              merge(ns, "cronjob offsite", {"spec": {"suspend": False}})
 
           with subtest("When the cluster's object store has lost a tenant's backups, a release brings its PostgreSQL back from a provider's copy"):
               ns = f"{first}-postgres"
