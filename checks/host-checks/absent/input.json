@@ -1,0 +1,9 @@
+{
+  "cluster": {
+    "clusters": null,
+    "objectstores": null,
+    "pvcs": null,
+    "replicationsources": null,
+    "cephcluster": null
+  }
+}

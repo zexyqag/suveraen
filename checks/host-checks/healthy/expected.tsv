@@ -1,0 +1,13 @@
+cluster	evaluated
+cluster	Ceph status	ok	4	Ceph status not updated	HEALTH_OK, checked 2026-10-22T11:59:00Z (1m ago), limit 30m
+cluster	alpha-hello/data-1	ok	4	backups late	last 2026-10-22T11:00:00Z (1h 0m ago), limit 3h
+cluster	alpha-hello/data-2	ok	4	backups late	last 2026-10-22T11:30:00Z (30m ago), limit 3h
+cluster	alpha-hello/offsite-check-1	ok	4	backups late	last 2026-10-22T01:41:00Z (10h 19m ago), limit 3d
+cluster	alpha-hello/offsite-check-2	ok	4	backups late	last 2026-10-21T13:41:00Z (22h 19m ago), limit 3d
+cluster	alpha-postgres/offsite	ok	4	backups late	last 2026-10-22T11:52:00Z (8m ago), limit 2h
+cluster	alpha-postgres/offsite-check-1	ok	4	backups late	last 2026-10-22T01:41:00Z (10h 19m ago), limit 3d
+cluster	alpha-postgres/offsite-check-2	ok	4	backups late	last 2026-10-21T13:41:00Z (22h 19m ago), limit 3d
+cluster	alpha-postgres/postgres WAL archiving	ok	4	backups late	archiving, limit 1h
+cluster	alpha-postgres/postgres base backup	ok	4	backups late	last 2026-10-19T00:00:00Z (3d 12h ago), limit 8d
+host	cluster status	ok	4	cluster status unreadable	read
+host	etcd-snapshots	ok	4	backups late	last 2026-10-22T00:00:00Z (12h 0m ago), limit 13h

@@ -98,6 +98,7 @@
           inherit pkgs ranges;
           kubernetes = ./kubernetes;
         };
+        host-checks = import ./checks/host-checks.nix { inherit pkgs; };
 
         vm = import ./checks/vm.nix {
           inherit pkgs;

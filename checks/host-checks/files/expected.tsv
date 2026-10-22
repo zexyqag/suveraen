@@ -1,0 +1,6 @@
+cluster	evaluated
+host	cluster status	ok	4	cluster status unreadable	read
+host	etcd-snapshots	late	4	backups late	last 2026-10-21T22:00:00Z (14h 0m ago), limit 13h
+host	fresh	ok	4	backups late	missing since 2026-10-22T12:00:00Z (0m ago), limit 1h
+host	probe	late	4	backups late	missing since 2026-10-22T10:00:00Z (2h 0m ago), limit 1h
+host	spool	ok	4	backups late	missing since 2026-10-22T11:30:00Z (30m ago), limit 1h

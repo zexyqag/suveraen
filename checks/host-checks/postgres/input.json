@@ -1,0 +1,263 @@
+{
+  "cluster": {
+    "clusters": {
+      "items": [
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "gen-postgres",
+            "creationTimestamp": "2026-10-13T12:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "1h"
+            }
+          },
+          "spec": {
+            "plugins": [
+              {
+                "name": "barman-cloud.cloudnative-pg.io",
+                "isWALArchiver": true,
+                "parameters": {
+                  "barmanObjectName": "postgres",
+                  "serverName": "postgres-g2"
+                }
+              }
+            ]
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "ContinuousArchiving",
+                "status": "True",
+                "lastTransitionTime": "2026-10-13T12:00:00Z"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "fail-postgres",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "1h"
+            }
+          },
+          "spec": {
+            "plugins": [
+              {
+                "name": "barman-cloud.cloudnative-pg.io",
+                "isWALArchiver": true,
+                "parameters": {
+                  "barmanObjectName": "postgres",
+                  "serverName": "postgres-g1"
+                }
+              }
+            ]
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "ContinuousArchiving",
+                "status": "False",
+                "lastTransitionTime": "2026-10-22T10:00:00Z",
+                "message": "unexpected failure invoking barman-cloud-wal-archive: exit status 4\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "quiet-postgres",
+            "creationTimestamp": "2026-10-22T10:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "1h"
+            }
+          },
+          "spec": {
+            "plugins": [
+              {
+                "name": "barman-cloud.cloudnative-pg.io",
+                "isWALArchiver": true,
+                "parameters": {
+                  "barmanObjectName": "postgres",
+                  "serverName": "postgres-g1"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "new-postgres",
+            "creationTimestamp": "2026-10-22T11:30:00Z",
+            "annotations": {
+              "suveraen/max-age": "1h"
+            }
+          },
+          "spec": {
+            "plugins": [
+              {
+                "name": "barman-cloud.cloudnative-pg.io",
+                "isWALArchiver": true,
+                "parameters": {
+                  "barmanObjectName": "postgres",
+                  "serverName": "postgres-g1"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "objectstores": {
+      "items": [
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "gen-postgres",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "8d"
+            }
+          },
+          "status": {
+            "serverRecoveryWindow": {
+              "postgres-g1": {
+                "lastSuccessfulBackupTime": "2026-10-22T00:00:00Z"
+              }
+            }
+          }
+        },
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "fail-postgres",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "8d"
+            }
+          },
+          "status": {
+            "serverRecoveryWindow": {
+              "postgres-g1": {
+                "lastSuccessfulBackupTime": "2026-10-22T00:00:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "cronjobs": {
+      "gen-postgres/offsite": {
+        "metadata": {
+          "name": "offsite",
+          "namespace": "gen-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "2h"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T11:52:00Z"
+        }
+      },
+      "gen-postgres/offsite-check-1": {
+        "metadata": {
+          "name": "offsite-check-1",
+          "namespace": "gen-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T01:41:00Z"
+        }
+      },
+      "gen-postgres/offsite-check-2": {
+        "metadata": {
+          "name": "offsite-check-2",
+          "namespace": "gen-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-21T13:41:00Z"
+        }
+      },
+      "fail-postgres/offsite": {
+        "metadata": {
+          "name": "offsite",
+          "namespace": "fail-postgres",
+          "creationTimestamp": "2026-10-22T09:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "2h"
+          }
+        }
+      },
+      "fail-postgres/offsite-check-1": {
+        "metadata": {
+          "name": "offsite-check-1",
+          "namespace": "fail-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T01:41:00Z",
+          "active": [
+            {
+              "kind": "Job",
+              "namespace": "fail-postgres",
+              "name": "offsite-check-1-29123456"
+            }
+          ]
+        }
+      },
+      "fail-postgres/offsite-check-2": {
+        "metadata": {
+          "name": "offsite-check-2",
+          "namespace": "fail-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-21T13:41:00Z"
+        }
+      },
+      "quiet-postgres/offsite-check-1": {
+        "metadata": {
+          "name": "offsite-check-1",
+          "namespace": "quiet-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T01:41:00Z"
+        }
+      },
+      "quiet-postgres/offsite-check-2": {
+        "metadata": {
+          "name": "offsite-check-2",
+          "namespace": "quiet-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-21T13:41:00Z"
+        }
+      }
+    }
+  }
+}

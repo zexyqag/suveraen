@@ -1,0 +1,94 @@
+{
+  "cluster": {
+    "nodes": {
+      "items": [
+        {
+          "metadata": {
+            "name": "server",
+            "labels": {
+              "node-role.kubernetes.io/control-plane": "true"
+            }
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "Ready",
+                "status": "True"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "a",
+            "labels": {
+              "node-role.kubernetes.io/control-plane": "true"
+            }
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "Ready",
+                "status": "True"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "clusters": {
+      "items": [
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "alpha-postgres",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "1h"
+            }
+          },
+          "spec": {
+            "plugins": [
+              {
+                "name": "barman-cloud.cloudnative-pg.io",
+                "isWALArchiver": true,
+                "parameters": {
+                  "barmanObjectName": "postgres",
+                  "serverName": "postgres-g1"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "cephcluster": {
+      "metadata": {
+        "name": "rook-ceph",
+        "namespace": "rook-ceph",
+        "creationTimestamp": "2026-10-01T00:00:00Z"
+      },
+      "spec": {
+        "healthCheck": {
+          "muteHealthWarning": {
+            "AUTH_INSECURE_CLIENT_KEY_TYPE": {
+              "policy": "mute"
+            }
+          }
+        }
+      },
+      "status": {
+        "ceph": {
+          "health": "HEALTH_ERR",
+          "lastChecked": "2026-10-22T11:59:00Z",
+          "details": {
+            "MON_DOWN": {
+              "severity": "HEALTH_ERR",
+              "message": "1/3 mons down"
+            }
+          }
+        }
+      }
+    }
+  }
+}

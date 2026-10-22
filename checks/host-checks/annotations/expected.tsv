@@ -1,0 +1,16 @@
+cluster	evaluated
+cluster	odd-hello/data-1	late	4	backups late	no valid suveraen/max-age ("") since 2026-10-01T00:00:00Z (21d 12h ago), grace 1h
+cluster	odd-hello/data-2	late	4	backups late	no valid suveraen/max-age ("3H") since 2026-10-01T00:00:00Z (21d 12h ago), grace 1h
+cluster	odd-hello/offsite-check-1	ok	4	backups late	last 2026-10-22T01:41:00Z (10h 19m ago), limit 3d
+cluster	odd-hello/offsite-check-2	late	4	backups late	no valid suveraen/max-age (null) since 2026-10-01T00:00:00Z (21d 12h ago), grace 1h
+cluster	odd-postgres/offsite	late	4	backups late	no valid suveraen/max-age ("2 h") since 2026-10-01T00:00:00Z (21d 12h ago), grace 1h
+cluster	odd-postgres/offsite-check-1	ok	4	backups late	last 2026-10-22T01:41:00Z (10h 19m ago), limit 3d
+cluster	odd-postgres/offsite-check-2	ok	4	backups late	last 2026-10-21T13:41:00Z (22h 19m ago), limit 3d
+cluster	odd-postgres/postgres WAL archiving	late	4	backups late	no valid suveraen/max-age ("90") since 2026-10-01T00:00:00Z (21d 12h ago), grace 1h
+cluster	odd-postgres/postgres base backup	late	4	backups late	no valid suveraen/max-age ("2w") since 2026-10-01T00:00:00Z (21d 12h ago), grace 1h
+cluster	young-postgres/offsite	ok	4	backups late	last 2026-10-22T11:52:00Z (8m ago), limit 2h
+cluster	young-postgres/offsite-check-1	ok	4	backups late	last 2026-10-22T01:41:00Z (10h 19m ago), limit 3d
+cluster	young-postgres/offsite-check-2	ok	4	backups late	last 2026-10-21T13:41:00Z (22h 19m ago), limit 3d
+cluster	young-postgres/postgres WAL archiving	ok	4	backups late	no valid suveraen/max-age ("90") since 2026-10-22T11:30:00Z (30m ago), grace 1h
+cluster	young-postgres/postgres base backup	ok	4	backups late	last 2026-10-22T11:40:00Z (20m ago), limit 8d
+host	cluster status	ok	4	cluster status unreadable	read

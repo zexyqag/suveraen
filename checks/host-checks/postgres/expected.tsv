@@ -1,0 +1,22 @@
+cluster	evaluated
+cluster	fail-postgres/offsite	late	4	backups late	never, counted from 2026-10-22T09:00:00Z (3h 0m ago), limit 2h
+cluster	fail-postgres/offsite-check-1	ok	4	backups late	last 2026-10-22T01:41:00Z (10h 19m ago), a run in progress, limit 3d
+cluster	fail-postgres/offsite-check-2	ok	4	backups late	last 2026-10-21T13:41:00Z (22h 19m ago), limit 3d
+cluster	fail-postgres/postgres WAL archiving	late	4	backups late	failing since 2026-10-22T10:00:00Z (2h 0m ago): unexpected failure invoking barman-cloud-wal-archive: exit status 4 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, limit 1h
+cluster	fail-postgres/postgres base backup	ok	4	backups late	last 2026-10-22T00:00:00Z (12h 0m ago), limit 8d
+cluster	gen-postgres/offsite	ok	4	backups late	last 2026-10-22T11:52:00Z (8m ago), limit 2h
+cluster	gen-postgres/offsite-check-1	ok	4	backups late	last 2026-10-22T01:41:00Z (10h 19m ago), limit 3d
+cluster	gen-postgres/offsite-check-2	ok	4	backups late	last 2026-10-21T13:41:00Z (22h 19m ago), limit 3d
+cluster	gen-postgres/postgres WAL archiving	ok	4	backups late	archiving, limit 1h
+cluster	gen-postgres/postgres base backup	late	4	backups late	never, counted from 2026-10-13T12:00:00Z (9d 0h ago), limit 8d
+cluster	new-postgres/offsite	ok	4	backups late	missing, required since 2026-10-22T11:30:00Z (30m ago), grace 1h
+cluster	new-postgres/offsite-check-1	ok	4	backups late	missing, required since 2026-10-22T11:30:00Z (30m ago), grace 1h
+cluster	new-postgres/offsite-check-2	ok	4	backups late	missing, required since 2026-10-22T11:30:00Z (30m ago), grace 1h
+cluster	new-postgres/postgres WAL archiving	ok	4	backups late	not reported since 2026-10-22T11:30:00Z (30m ago), limit 1h
+cluster	new-postgres/postgres base backup	ok	4	backups late	no ObjectStore postgres, required since 2026-10-22T11:30:00Z (30m ago), grace 1h
+cluster	quiet-postgres/offsite	late	4	backups late	missing, required since 2026-10-22T10:00:00Z (2h 0m ago), grace 1h
+cluster	quiet-postgres/offsite-check-1	ok	4	backups late	last 2026-10-22T01:41:00Z (10h 19m ago), limit 3d
+cluster	quiet-postgres/offsite-check-2	ok	4	backups late	last 2026-10-21T13:41:00Z (22h 19m ago), limit 3d
+cluster	quiet-postgres/postgres WAL archiving	late	4	backups late	not reported since 2026-10-22T10:00:00Z (2h 0m ago), limit 1h
+cluster	quiet-postgres/postgres base backup	late	4	backups late	no ObjectStore postgres, required since 2026-10-22T10:00:00Z (2h 0m ago), grace 1h
+host	cluster status	ok	4	cluster status unreadable	read

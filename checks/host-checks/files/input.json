@@ -1,0 +1,34 @@
+{
+  "spec": {
+    "files": {
+      "etcd-snapshots": {
+        "path": "/var/lib/rancher/k3s/server/db/snapshots",
+        "maxAge": 46800
+      },
+      "probe": {
+        "path": "/var/lib/backup-probe",
+        "maxAge": 3600
+      },
+      "spool": {
+        "path": "/var/lib/spool",
+        "maxAge": 3600
+      },
+      "fresh": {
+        "path": "/var/lib/fresh",
+        "maxAge": 3600
+      }
+    }
+  },
+  "files": {
+    "etcd-snapshots": 1792620000.25,
+    "probe": null,
+    "spool": null,
+    "fresh": null
+  },
+  "state": {
+    "firstSeen": {
+      "probe": 1792663200,
+      "spool": 1792668600
+    }
+  }
+}

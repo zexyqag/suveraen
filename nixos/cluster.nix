@@ -269,6 +269,12 @@ in
       };
     };
 
+    # k3s snapshots etcd at 0:00 and 12:00 by default.
+    suveraen.checks.files.etcd-snapshots = {
+      path = "/var/lib/rancher/k3s/server/db/snapshots";
+      maxAge = "13h";
+    };
+
     systemd.services.flux-sops-key = lib.mkIf (cfg.sopsAgeKeyFile != null) {
       description = "Give Flux the key to the repository's secrets";
       after = [ "k3s.service" ];

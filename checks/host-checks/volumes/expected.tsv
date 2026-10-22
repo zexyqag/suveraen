@@ -1,0 +1,15 @@
+cluster	evaluated
+cluster	gone-hello/data copy to offsite-2	late	4	backups late	no ReplicationSource copies it, required since 2026-10-01T00:00:00Z (21d 12h ago), grace 1h
+cluster	gone-hello/data-1	ok	4	backups late	last 2026-10-22T11:00:00Z (1h 0m ago), limit 3h
+cluster	gone-hello/offsite-check-1	ok	4	backups late	last 2026-10-22T01:41:00Z (10h 19m ago), limit 3d
+cluster	gone-hello/offsite-check-2	ok	4	backups late	last 2026-10-21T13:41:00Z (22h 19m ago), limit 3d
+cluster	late-hello/data-1	ok	4	backups late	last 2026-10-22T11:00:00Z (1h 0m ago), limit 3h
+cluster	late-hello/data-2	late	4	backups late	last 2026-10-22T07:00:00Z (5h 0m ago), no copy scheduled (manual trigger set), limit 3h
+cluster	late-hello/offsite-check-1	ok	4	backups late	last 2026-10-22T01:41:00Z (10h 19m ago), limit 3d
+cluster	late-hello/offsite-check-2	ok	4	backups late	last 2026-10-21T13:41:00Z (22h 19m ago), limit 3d
+cluster	new-hello/data copy to offsite-1	ok	4	backups late	no ReplicationSource copies it, required since 2026-10-22T11:30:00Z (30m ago), grace 1h
+cluster	new-hello/data copy to offsite-2	ok	4	backups late	no ReplicationSource copies it, required since 2026-10-22T11:30:00Z (30m ago), grace 1h
+cluster	other-hello/files-1	ok	4	backups late	never, counted from 2026-10-22T10:30:00Z (1h 30m ago), limit 3h
+cluster	other-hello/offsite-check-1	late	4	backups late	missing, required since 2026-10-22T10:30:00Z (1h 30m ago), grace 1h
+cluster	other-hello/offsite-check-2	late	4	backups late	missing, required since 2026-10-22T10:30:00Z (1h 30m ago), grace 1h
+host	cluster status	ok	4	cluster status unreadable	read

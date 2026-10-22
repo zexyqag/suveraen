@@ -1,0 +1,273 @@
+{
+  "cluster": {
+    "clusters": {
+      "items": [
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "odd-postgres",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "90"
+            }
+          },
+          "spec": {
+            "plugins": [
+              {
+                "name": "barman-cloud.cloudnative-pg.io",
+                "isWALArchiver": true,
+                "parameters": {
+                  "barmanObjectName": "postgres",
+                  "serverName": "postgres-g1"
+                }
+              }
+            ]
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "ContinuousArchiving",
+                "status": "True",
+                "lastTransitionTime": "2026-10-01T00:00:00Z"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "young-postgres",
+            "creationTimestamp": "2026-10-22T11:30:00Z",
+            "annotations": {
+              "suveraen/max-age": "90"
+            }
+          },
+          "spec": {
+            "plugins": [
+              {
+                "name": "barman-cloud.cloudnative-pg.io",
+                "isWALArchiver": true,
+                "parameters": {
+                  "barmanObjectName": "postgres",
+                  "serverName": "postgres-g1"
+                }
+              }
+            ]
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "ContinuousArchiving",
+                "status": "True",
+                "lastTransitionTime": "2026-10-22T11:30:00Z"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "objectstores": {
+      "items": [
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "odd-postgres",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "2w"
+            }
+          },
+          "status": {
+            "serverRecoveryWindow": {
+              "postgres-g1": {
+                "lastSuccessfulBackupTime": "2026-10-22T00:00:00Z"
+              }
+            }
+          }
+        },
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "young-postgres",
+            "creationTimestamp": "2026-10-22T11:30:00Z",
+            "annotations": {
+              "suveraen/max-age": "8d"
+            }
+          },
+          "status": {
+            "serverRecoveryWindow": {
+              "postgres-g1": {
+                "lastSuccessfulBackupTime": "2026-10-22T11:40:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "pvcs": {
+      "items": [
+        {
+          "metadata": {
+            "name": "data",
+            "namespace": "odd-hello",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "labels": {
+              "suveraen/backup": "volsync"
+            }
+          }
+        }
+      ]
+    },
+    "replicationsources": {
+      "items": [
+        {
+          "metadata": {
+            "name": "data-1",
+            "namespace": "odd-hello",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": ""
+            }
+          },
+          "spec": {
+            "sourcePVC": "data",
+            "trigger": {
+              "schedule": "15 * * * *"
+            },
+            "restic": {
+              "repository": "offsite-1"
+            }
+          },
+          "status": {
+            "lastSyncTime": "2026-10-22T11:00:00Z"
+          }
+        },
+        {
+          "metadata": {
+            "name": "data-2",
+            "namespace": "odd-hello",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "3H"
+            }
+          },
+          "spec": {
+            "sourcePVC": "data",
+            "trigger": {
+              "schedule": "30 * * * *"
+            },
+            "restic": {
+              "repository": "offsite-2"
+            }
+          },
+          "status": {
+            "lastSyncTime": "2026-10-22T11:00:00Z"
+          }
+        }
+      ]
+    },
+    "cronjobs": {
+      "odd-postgres/offsite": {
+        "metadata": {
+          "name": "offsite",
+          "namespace": "odd-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "2 h"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T11:52:00Z"
+        }
+      },
+      "odd-postgres/offsite-check-1": {
+        "metadata": {
+          "name": "offsite-check-1",
+          "namespace": "odd-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T01:41:00Z"
+        }
+      },
+      "odd-postgres/offsite-check-2": {
+        "metadata": {
+          "name": "offsite-check-2",
+          "namespace": "odd-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-21T13:41:00Z"
+        }
+      },
+      "young-postgres/offsite": {
+        "metadata": {
+          "name": "offsite",
+          "namespace": "young-postgres",
+          "creationTimestamp": "2026-10-22T11:30:00Z",
+          "annotations": {
+            "suveraen/max-age": "2h"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T11:52:00Z"
+        }
+      },
+      "young-postgres/offsite-check-1": {
+        "metadata": {
+          "name": "offsite-check-1",
+          "namespace": "young-postgres",
+          "creationTimestamp": "2026-10-22T11:30:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T01:41:00Z"
+        }
+      },
+      "young-postgres/offsite-check-2": {
+        "metadata": {
+          "name": "offsite-check-2",
+          "namespace": "young-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-21T13:41:00Z"
+        }
+      },
+      "odd-hello/offsite-check-1": {
+        "metadata": {
+          "name": "offsite-check-1",
+          "namespace": "odd-hello",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T01:41:00Z"
+        }
+      },
+      "odd-hello/offsite-check-2": {
+        "metadata": {
+          "name": "offsite-check-2",
+          "namespace": "odd-hello",
+          "creationTimestamp": "2026-10-01T00:00:00Z"
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-21T13:41:00Z"
+        }
+      }
+    }
+  }
+}

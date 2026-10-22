@@ -1,0 +1,32 @@
+{
+  "cluster": {
+    "cephcluster": {
+      "metadata": {
+        "name": "rook-ceph",
+        "namespace": "rook-ceph",
+        "creationTimestamp": "2026-10-01T00:00:00Z"
+      },
+      "spec": {
+        "healthCheck": {
+          "muteHealthWarning": {
+            "AUTH_INSECURE_CLIENT_KEY_TYPE": {
+              "policy": "mute"
+            }
+          }
+        }
+      },
+      "status": {
+        "ceph": {
+          "health": "HEALTH_OK",
+          "lastChecked": "2026-10-22T11:59:00Z",
+          "details": {
+            "AUTH_INSECURE_CLIENT_KEY_TYPE": {
+              "severity": "HEALTH_WARN",
+              "message": "1 client(s) use insecure key types"
+            }
+          }
+        }
+      }
+    }
+  }
+}

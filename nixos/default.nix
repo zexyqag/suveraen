@@ -13,5 +13,6 @@
     ./alerts.nix
     ./source.nix
     ./upgrade.nix
+    ./host-checks.nix
   ];
 }

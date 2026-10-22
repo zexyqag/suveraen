@@ -1,0 +1,43 @@
+{
+  "cluster": {
+    "cephcluster": {
+      "metadata": {
+        "name": "rook-ceph",
+        "namespace": "rook-ceph",
+        "creationTimestamp": "2026-10-01T00:00:00Z"
+      },
+      "spec": {
+        "healthCheck": {
+          "muteHealthWarning": {
+            "AUTH_INSECURE_CLIENT_KEY_TYPE": {
+              "policy": "mute"
+            },
+            "PG_DAMAGED": {
+              "policy": "unmute"
+            }
+          }
+        }
+      },
+      "status": {
+        "ceph": {
+          "health": "HEALTH_ERR",
+          "lastChecked": "2026-10-22T11:59:00Z",
+          "details": {
+            "POOL_NEAR_FULL": {
+              "severity": "HEALTH_WARN",
+              "message": "1 pool(s) nearfull"
+            },
+            "AUTH_INSECURE_CLIENT_KEY_TYPE": {
+              "severity": "HEALTH_WARN",
+              "message": "1 client(s) use insecure key types"
+            },
+            "PG_DAMAGED": {
+              "severity": "HEALTH_ERR",
+              "message": "Possible data damage: 1 pg inconsistent"
+            }
+          }
+        }
+      }
+    }
+  }
+}

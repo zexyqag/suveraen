@@ -1,0 +1,222 @@
+{
+  "spec": {
+    "files": {
+      "etcd-snapshots": {
+        "path": "/var/lib/rancher/k3s/server/db/snapshots",
+        "maxAge": 46800
+      }
+    }
+  },
+  "files": {
+    "etcd-snapshots": 1792627200
+  },
+  "cluster": {
+    "clusters": {
+      "items": [
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "alpha-postgres",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "1h"
+            }
+          },
+          "spec": {
+            "plugins": [
+              {
+                "name": "barman-cloud.cloudnative-pg.io",
+                "isWALArchiver": true,
+                "parameters": {
+                  "barmanObjectName": "postgres",
+                  "serverName": "postgres-g1"
+                }
+              }
+            ]
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "ContinuousArchiving",
+                "status": "True",
+                "lastTransitionTime": "2026-10-01T00:00:00Z"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "objectstores": {
+      "items": [
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "alpha-postgres",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "8d"
+            }
+          },
+          "status": {
+            "serverRecoveryWindow": {
+              "postgres-g1": {
+                "lastSuccessfulBackupTime": "2026-10-19T00:00:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "pvcs": {
+      "items": [
+        {
+          "metadata": {
+            "name": "data",
+            "namespace": "alpha-hello",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "labels": {
+              "suveraen/backup": "volsync"
+            }
+          }
+        }
+      ]
+    },
+    "replicationsources": {
+      "items": [
+        {
+          "metadata": {
+            "name": "data-1",
+            "namespace": "alpha-hello",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "3h"
+            }
+          },
+          "spec": {
+            "sourcePVC": "data",
+            "trigger": {
+              "schedule": "15 * * * *"
+            },
+            "restic": {
+              "repository": "offsite-1"
+            }
+          },
+          "status": {
+            "lastSyncTime": "2026-10-22T11:00:00Z"
+          }
+        },
+        {
+          "metadata": {
+            "name": "data-2",
+            "namespace": "alpha-hello",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "3h"
+            }
+          },
+          "spec": {
+            "sourcePVC": "data",
+            "trigger": {
+              "schedule": "30 * * * *"
+            },
+            "restic": {
+              "repository": "offsite-2"
+            }
+          },
+          "status": {
+            "lastSyncTime": "2026-10-22T11:30:00Z"
+          }
+        }
+      ]
+    },
+    "cephcluster": {
+      "metadata": {
+        "name": "rook-ceph",
+        "namespace": "rook-ceph",
+        "creationTimestamp": "2026-10-01T00:00:00Z"
+      },
+      "spec": {
+        "healthCheck": {
+          "muteHealthWarning": {
+            "AUTH_INSECURE_CLIENT_KEY_TYPE": {
+              "policy": "mute"
+            }
+          }
+        }
+      },
+      "status": {
+        "ceph": {
+          "health": "HEALTH_OK",
+          "lastChecked": "2026-10-22T11:59:00Z"
+        }
+      }
+    },
+    "cronjobs": {
+      "alpha-postgres/offsite": {
+        "metadata": {
+          "name": "offsite",
+          "namespace": "alpha-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "2h"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T11:52:00Z"
+        }
+      },
+      "alpha-postgres/offsite-check-1": {
+        "metadata": {
+          "name": "offsite-check-1",
+          "namespace": "alpha-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T01:41:00Z"
+        }
+      },
+      "alpha-postgres/offsite-check-2": {
+        "metadata": {
+          "name": "offsite-check-2",
+          "namespace": "alpha-postgres",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-21T13:41:00Z"
+        }
+      },
+      "alpha-hello/offsite-check-1": {
+        "metadata": {
+          "name": "offsite-check-1",
+          "namespace": "alpha-hello",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T01:41:00Z"
+        }
+      },
+      "alpha-hello/offsite-check-2": {
+        "metadata": {
+          "name": "offsite-check-2",
+          "namespace": "alpha-hello",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-21T13:41:00Z"
+        }
+      }
+    }
+  }
+}

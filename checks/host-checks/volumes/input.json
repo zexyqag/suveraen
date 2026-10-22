@@ -1,0 +1,181 @@
+{
+  "cluster": {
+    "pvcs": {
+      "items": [
+        {
+          "metadata": {
+            "name": "data",
+            "namespace": "late-hello",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "labels": {
+              "suveraen/backup": "volsync"
+            }
+          }
+        },
+        {
+          "metadata": {
+            "name": "data",
+            "namespace": "gone-hello",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "labels": {
+              "suveraen/backup": "volsync"
+            }
+          }
+        },
+        {
+          "metadata": {
+            "name": "data",
+            "namespace": "new-hello",
+            "creationTimestamp": "2026-10-22T11:30:00Z",
+            "labels": {
+              "suveraen/backup": "volsync"
+            }
+          }
+        }
+      ]
+    },
+    "replicationsources": {
+      "items": [
+        {
+          "metadata": {
+            "name": "data-1",
+            "namespace": "late-hello",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "3h"
+            }
+          },
+          "spec": {
+            "sourcePVC": "data",
+            "trigger": {
+              "schedule": "15 * * * *"
+            },
+            "restic": {
+              "repository": "offsite-1"
+            }
+          },
+          "status": {
+            "lastSyncTime": "2026-10-22T11:00:00Z"
+          }
+        },
+        {
+          "metadata": {
+            "name": "data-2",
+            "namespace": "late-hello",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "3h"
+            }
+          },
+          "spec": {
+            "sourcePVC": "data",
+            "trigger": {
+              "manual": "restore-drill"
+            },
+            "restic": {
+              "repository": "offsite-2"
+            }
+          },
+          "status": {
+            "lastSyncTime": "2026-10-22T07:00:00Z"
+          }
+        },
+        {
+          "metadata": {
+            "name": "data-1",
+            "namespace": "gone-hello",
+            "creationTimestamp": "2026-10-01T00:00:00Z",
+            "annotations": {
+              "suveraen/max-age": "3h"
+            }
+          },
+          "spec": {
+            "sourcePVC": "data",
+            "trigger": {
+              "schedule": "15 * * * *"
+            },
+            "restic": {
+              "repository": "offsite-1"
+            }
+          },
+          "status": {
+            "lastSyncTime": "2026-10-22T11:00:00Z"
+          }
+        },
+        {
+          "metadata": {
+            "name": "files-1",
+            "namespace": "other-hello",
+            "creationTimestamp": "2026-10-22T10:30:00Z",
+            "annotations": {
+              "suveraen/max-age": "3h"
+            }
+          },
+          "spec": {
+            "sourcePVC": "files",
+            "trigger": {
+              "schedule": "15 * * * *"
+            },
+            "restic": {
+              "repository": "offsite-1"
+            }
+          }
+        }
+      ]
+    },
+    "cronjobs": {
+      "late-hello/offsite-check-1": {
+        "metadata": {
+          "name": "offsite-check-1",
+          "namespace": "late-hello",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T01:41:00Z"
+        }
+      },
+      "late-hello/offsite-check-2": {
+        "metadata": {
+          "name": "offsite-check-2",
+          "namespace": "late-hello",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-21T13:41:00Z"
+        }
+      },
+      "gone-hello/offsite-check-1": {
+        "metadata": {
+          "name": "offsite-check-1",
+          "namespace": "gone-hello",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-22T01:41:00Z"
+        }
+      },
+      "gone-hello/offsite-check-2": {
+        "metadata": {
+          "name": "offsite-check-2",
+          "namespace": "gone-hello",
+          "creationTimestamp": "2026-10-01T00:00:00Z",
+          "annotations": {
+            "suveraen/max-age": "3d"
+          }
+        },
+        "status": {
+          "lastSuccessfulTime": "2026-10-21T13:41:00Z"
+        }
+      }
+    }
+  }
+}

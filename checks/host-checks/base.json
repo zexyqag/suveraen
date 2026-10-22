@@ -1,0 +1,51 @@
+{
+  "now": 1792670400,
+  "spec": {
+    "host": "server",
+    "unreadableAfter": 1800,
+    "cephStaleAfter": 1800,
+    "missingGrace": 3600,
+    "files": {}
+  },
+  "files": {},
+  "state": {
+    "lastRead": 1792670400,
+    "firstSeen": {}
+  },
+  "cluster": {
+    "nodes": {
+      "items": [
+        {
+          "metadata": {
+            "name": "server",
+            "labels": {
+              "node-role.kubernetes.io/control-plane": "true"
+            }
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "Ready",
+                "status": "True"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "clusters": {
+      "items": []
+    },
+    "objectstores": {
+      "items": []
+    },
+    "pvcs": {
+      "items": []
+    },
+    "replicationsources": {
+      "items": []
+    },
+    "cephcluster": null,
+    "cronjobs": {}
+  }
+}

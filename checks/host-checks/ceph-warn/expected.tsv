@@ -1,0 +1,4 @@
+cluster	evaluated
+cluster	Ceph POOL_NEAR_FULL	late	4	Ceph HEALTH_WARN	1 pool(s) nearfull; ceph health detail says more
+cluster	Ceph status	ok	4	Ceph status not updated	HEALTH_WARN, checked 2026-10-22T11:59:00Z (1m ago), limit 30m
+host	cluster status	ok	4	cluster status unreadable	read

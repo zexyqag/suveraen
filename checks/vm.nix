@@ -8,12 +8,14 @@
 # sign a namespace's own names only where the platform allows a private CA, a tenant's PostgreSQL takes no restore while
 # it runs, and the platform's pods run at a priority no tenant's may ask for. Only the platform's backup jobs and movers
 # reach out of a tenant's namespace, and its apps' charts can change neither what they run nor the keys their copies go
-# with, nor delete a volume that is copied off-site. Hosts and pods resolve names through the node's own resolver, and
+# with, nor make or delete a volume copied off-site. Hosts and pods resolve names through the node's own resolver, and
 # clocks use NTS. The watcher's ntfy only takes known publishers and keeps its account API, stats and attachments
 # closed; the server's alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
 # server falls back to a second channel when the watcher is gone. The server and its Flux only take commits signed by a
-# release signer, the server never goes back to an older one, and it alerts when its configuration gets old. Wiped, the
-# server comes back from an etcd snapshot with its token file alone.
+# release signer, the server never goes back to an older one, and it alerts when its configuration gets old. The
+# server's checks read how old the backups the cluster records are and Ceph's health with an account that reads nothing
+# else, and alert once per change, also when the cluster can't be read. Wiped, the server comes back from an etcd
+# snapshot with its token file alone.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -49,8 +51,8 @@ let
   # "en*" would also match eth1, the test network, through its alternative names.
   uplink = "eth0";
 
-  # The tenant policies match these kinds by group and resource; their real definitions come with the platform,
-  # which this test doesn't deploy.
+  # The tenant policies match these kinds by group and resource, and the servers' checks read their status; their real
+  # definitions come with the platform, which this test doesn't deploy.
   standIns = pkgs.writeText "stand-in-crds.json" (
     builtins.toJSON {
       apiVersion = "v1";
@@ -62,6 +64,7 @@ let
               group,
               kind,
               scope ? "Namespaced",
+              version ? "v1",
             }:
             let
               singular = pkgs.lib.toLower kind;
@@ -82,7 +85,7 @@ let
                 };
                 versions = [
                   {
-                    name = "v1";
+                    name = version;
                     served = true;
                     storage = true;
                     schema.openAPIV3Schema = {
@@ -139,6 +142,19 @@ let
             {
               group = "postgresql.cnpg.io";
               kind = "Cluster";
+            }
+            {
+              group = "barmancloud.cnpg.io";
+              kind = "ObjectStore";
+            }
+            {
+              group = "volsync.backube";
+              kind = "ReplicationSource";
+              version = "v1alpha1";
+            }
+            {
+              group = "ceph.rook.io";
+              kind = "CephCluster";
             }
           ];
     }
@@ -242,6 +258,10 @@ pkgs.testers.runNixOSTest {
             inherit path;
             sopsAgeKeyFile = toString (pkgs.writeText "age-key" "AGE-SECRET-KEY-TEST");
           };
+          checks.files.probe = {
+            path = "/var/lib/backup-probe";
+            maxAge = "1h";
+          };
           alerts = {
             urlFile = toString (pkgs.writeText "alerts-url" "http://alerts.test/ops");
             tokenFile = "${secrets}/publisher-token";
@@ -286,6 +306,8 @@ pkgs.testers.runNixOSTest {
       import shlex
 
       start_all()
+      # The checks run when the test says.
+      server.succeed("systemctl stop host-checks.timer")
 
       watcher.wait_for_unit("ntfy-sh.service")
       watcher.wait_for_unit("gatus.service")
@@ -896,11 +918,18 @@ pkgs.testers.runNixOSTest {
               "metadata": {"name": "data", "namespace": "alpha-hello", "labels": {"suveraen/backup": "volsync"}},
               "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}},
           }
+          # Nor make one, which the servers' checks would expect copies of.
+          refused(f"{dry(volume)} {deployer}", "backup-volumes")
+          server.succeed(f"{dry(volume)} {by('flux-system:kustomize-controller')}")
+          plain = volume | {"metadata": {"name": "plain", "namespace": "alpha-hello"}}
+          server.succeed(f"{dry(plain)} {deployer}")
           server.succeed(f"echo {shlex.quote(json.dumps(volume))} | kubectl create -f -")
+          server.succeed(f"echo {shlex.quote(json.dumps(plain))} | kubectl create -f -")
           refused(f"kubectl -n alpha-hello delete pvc data --dry-run=server {deployer}", "backup-volumes")
           refused(f"kubectl -n alpha-hello label pvc data suveraen/backup- {deployer}", "backup-volumes")
+          refused(f"kubectl -n alpha-hello label pvc plain suveraen/backup=volsync {deployer}", "backup-volumes")
           server.succeed(f"kubectl -n alpha-hello annotate pvc data probe=x {deployer}")
-          server.succeed("kubectl -n alpha-hello delete pvc/data secret/offsite-1")
+          server.succeed("kubectl -n alpha-hello delete pvc/data pvc/plain secret/offsite-1")
 
       with subtest("Clocks follow NTS servers"):
           for node in [server, watcher]:
@@ -938,6 +967,175 @@ pkgs.testers.runNixOSTest {
           )
           server.succeed("systemctl start release-age.service")
           server.wait_until_succeeds("${ops} | grep -F 'server: stale configuration'")
+
+      # The server's alerts so far with this title, as the phone reads them.
+      def sent(title):
+          out = server.succeed(f"${ops} | jq -c --arg t 'server: {title}' 'select(.title == $t)'")
+          return [json.loads(line) for line in out.splitlines()]
+
+      def keys(lines):
+          return {line.split(": ")[0] for line in lines.splitlines()}
+
+      def at(when):
+          return server.succeed(f"date -u -d '{when}' +%FT%TZ").strip()
+
+      def set_status(kind, ns, name, value, *flags):
+          patch = shlex.quote(json.dumps([{"op": "add", "path": "/status", "value": value}]))
+          server.succeed(f"kubectl -n {ns} patch {kind} {name} {' '.join(flags)} --type json -p {patch}")
+
+      def create(obj):
+          server.succeed(f"echo {shlex.quote(json.dumps(obj))} | kubectl create -f -")
+
+      with subtest("The servers' checks read the backups' and Ceph's status and nothing else"):
+          server.succeed("systemctl start host-checks")
+          server.succeed("systemctl show host-checks -p DynamicUser --value | grep -x yes")
+          checker = "--as=system:serviceaccount:kube-system:host-checks"
+          review = json.loads(server.succeed(
+              """echo '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"default"}}'"""
+              f" | kubectl create -f - -o json {checker}"
+          ))
+          # Beside what every account may do: ask what it may do.
+          rules = sorted(
+              (r["apiGroups"], r["resources"], r.get("resourceNames", []), r["verbs"])
+              for r in review["status"]["resourceRules"]
+              if not set(r["apiGroups"]) <= {"authorization.k8s.io", "authentication.k8s.io"}
+          )
+          assert rules == sorted([
+              ([""], ["nodes"], [], ["list"]),
+              ([""], ["persistentvolumeclaims"], [], ["list"]),
+              (["postgresql.cnpg.io"], ["clusters"], [], ["list"]),
+              (["barmancloud.cnpg.io"], ["objectstores"], [], ["list"]),
+              (["volsync.backube"], ["replicationsources"], [], ["list"]),
+              (["batch"], ["cronjobs"], ["offsite", "offsite-check-1", "offsite-check-2"], ["get"]),
+              (["ceph.rook.io"], ["cephclusters"], ["rook-ceph"], ["get"]),
+          ]), rules
+          for denied in [
+              "list secrets -A",
+              "get secrets -n kube-system",
+              "get pods --subresource=log -n default",
+              "create pods --subresource=exec -n default",
+              "get nodes --subresource=proxy",
+              "list cronjobs -A",
+              "get cronjobs/other -n default",
+              "list configmaps -A",
+              "list jobs -A",
+          ]:
+              server.fail(f"kubectl auth can-i {denied} {checker}")
+          server.succeed(f"kubectl auth can-i get cronjobs/offsite -n default {checker}")
+
+      with subtest("Late backups reach the phone once, and so does their recovery"):
+          server.succeed("kubectl create namespace checks-db && kubectl create namespace checks-app")
+
+          def meta(name, ns, max_age):
+              return {"name": name, "namespace": ns, "annotations": {"suveraen/max-age": max_age}}
+
+          def archiving(state, since="now"):
+              return {"conditions": [{"type": "ContinuousArchiving", "status": state, "lastTransitionTime": at(since),
+                                      "reason": "Probe", "message": "archive_command failed"}]}
+
+          def backups(g1, g2):
+              return {"serverRecoveryWindow": {f"postgres-{g}": {"lastSuccessfulBackupTime": at(t)}
+                                               for g, t in [("g1", g1), ("g2", g2)]}}
+
+          # A cluster on its second generation, whose first one's backups are recent and its own old.
+          create({
+              "apiVersion": "postgresql.cnpg.io/v1",
+              "kind": "Cluster",
+              "metadata": meta("postgres", "checks-db", "1h"),
+              "spec": {"plugins": [{"name": "barman-cloud.cloudnative-pg.io", "isWALArchiver": True,
+                                    "parameters": {"barmanObjectName": "postgres", "serverName": "postgres-g2"}}]},
+              "status": archiving("True"),
+          })
+          create({"apiVersion": "barmancloud.cnpg.io/v1", "kind": "ObjectStore", "metadata": meta("postgres", "checks-db", "8d"),
+                  "status": backups("now", "-9 days")})
+          for ns, jobs in [("checks-db", ["offsite", "offsite-check-1", "offsite-check-2"]),
+                           ("checks-app", ["offsite-check-1", "offsite-check-2"])]:
+              for name in jobs:
+                  job = {"spec": pod(ns)["spec"] | {"restartPolicy": "Never"}}
+                  create({"apiVersion": "batch/v1", "kind": "CronJob", "metadata": meta(name, ns, "2h" if name == "offsite" else "3d"),
+                          "spec": {"suspend": True, "schedule": "0 0 * * *", "jobTemplate": {"spec": {"template": job}}}})
+                  set_status("cronjob", ns, name, {"lastSuccessfulTime": at("-3 hours" if name == "offsite" else "now")},
+                             "--subresource=status")
+          create({
+              "apiVersion": "v1",
+              "kind": "PersistentVolumeClaim",
+              "metadata": {"name": "data", "namespace": "checks-app", "labels": {"suveraen/backup": "volsync"}},
+              "spec": {"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}},
+          })
+          for n, synced in [(1, "now"), (2, "-48 hours")]:
+              create({
+                  "apiVersion": "volsync.backube/v1alpha1",
+                  "kind": "ReplicationSource",
+                  "metadata": meta(f"data-{n}", "checks-app", "3h"),
+                  "spec": {"sourcePVC": "data", "trigger": {"schedule": "0 * * * *"}, "restic": {"repository": f"offsite-{n}"}},
+                  "status": {"lastSyncTime": at(synced)},
+              })
+
+          # The probe file isn't there yet, but has been missed for less than its hour.
+          server.succeed("systemctl start host-checks")
+          [late] = sent("backups late: 3")
+          assert keys(late["message"]) == {"New:", "checks-db/postgres base backup", "checks-db/offsite", "checks-app/data-2"}, late
+          server.succeed("systemctl start host-checks")
+          assert len([t for t in server.succeed("${ops} | jq -r .title").splitlines() if t.startswith("server: backups")]) == 1
+
+          set_status("clusters.postgresql.cnpg.io", "checks-db", "postgres", archiving("False", "-2 hours"))
+          server.succeed("touch -d '-2 hours' /var/lib/backup-probe")
+          set_status("replicationsources.volsync.backube", "checks-app", "data-2", {"lastSyncTime": at("now")})
+          server.succeed("systemctl start host-checks")
+          [late] = sent("backups late: 2")
+          before, new = late["message"].split("\nNew:\n")
+          assert keys(new) == {"checks-db/postgres WAL archiving", "probe"}, late
+          assert before.endswith("\nOn time again: checks-app/data-2"), late
+
+          set_status("clusters.postgresql.cnpg.io", "checks-db", "postgres", archiving("True"))
+          set_status("objectstores.barmancloud.cnpg.io", "checks-db", "postgres", backups("-9 days", "now"))
+          set_status("cronjob", "checks-db", "offsite", {"lastSuccessfulTime": at("now")}, "--subresource=status")
+          server.succeed("touch /var/lib/backup-probe")
+          server.succeed("systemctl start host-checks")
+          [back] = sent("backups on time again")
+          assert back.get("priority", 3) == 3, back
+          server.succeed("kubectl delete namespace checks-db checks-app")
+
+      with subtest("Ceph's health reaches the phone once per change"):
+          muted = {"AUTH_INSECURE_CLIENT_KEY_TYPE": "HEALTH_WARN"}
+          create({
+              "apiVersion": "ceph.rook.io/v1",
+              "kind": "CephCluster",
+              "metadata": {"name": "rook-ceph", "namespace": "rook-ceph"},
+              "spec": {"healthCheck": {"muteHealthWarning": {code: {"policy": "mute"} for code in muted}}},
+          })
+
+          # What the phone got from one check of Ceph reported so.
+          def reported(health, details, checked="now"):
+              said = "${ops} | jq -c 'select(.title | startswith(\"server: Ceph\"))'"
+              before = len(server.succeed(said).splitlines())
+              set_status("cephclusters.ceph.rook.io", "rook-ceph", "rook-ceph", {"ceph": {
+                  "health": health,
+                  "lastChecked": at(checked),
+                  "details": {code: {"severity": severity, "message": f"{code} in a test"} for code, severity in details.items()},
+              }})
+              server.succeed("systemctl start host-checks")
+              return [(m["title"], m.get("priority", 3)) for m in map(json.loads, server.succeed(said).splitlines()[before:])]
+
+          assert reported("HEALTH_OK", muted) == []
+          near = {"POOL_NEAR_FULL": "HEALTH_WARN"} | muted
+          assert reported("HEALTH_WARN", near) == [("server: Ceph HEALTH_WARN: POOL_NEAR_FULL", 4)]
+          assert reported("HEALTH_WARN", near) == []
+          assert reported("HEALTH_ERR", near | {"PG_DAMAGED": "HEALTH_ERR"}) == [("server: Ceph HEALTH_ERR: PG_DAMAGED", 5)]
+          assert reported("HEALTH_OK", muted) == [("server: Ceph healthy again", 3)]
+          assert reported("HEALTH_OK", muted, "-2 hours") == [("server: Ceph status not updated", 4)]
+          server.succeed("kubectl -n rook-ceph delete cephclusters.ceph.rook.io rook-ceph")
+
+      with subtest("With the cluster down, the server says so"):
+          server.succeed("systemctl stop k3s")
+          # As if the last good read were an hour ago.
+          server.succeed("echo $(( $(date +%s) - 3600 )) > /var/lib/private/host-checks/last-read")
+          server.succeed("systemctl start host-checks")
+          assert len(sent("cluster status unreadable")) == 1
+          server.succeed("systemctl start k3s")
+          server.wait_until_succeeds("kubectl get --raw /readyz", timeout=300)
+          server.succeed("systemctl start host-checks")
+          assert len(sent("cluster status readable again")) == 1
 
       with subtest("The watcher keeps no record of who reads alerts"):
           # The phone account has read alerts through nginx above.

@@ -1,0 +1,5 @@
+cluster	evaluated
+cluster	Ceph PG_DAMAGED	late	5	Ceph HEALTH_ERR	Possible data damage: 1 pg inconsistent; ceph health detail says more
+cluster	Ceph POOL_NEAR_FULL	late	5	Ceph HEALTH_ERR	1 pool(s) nearfull; ceph health detail says more
+cluster	Ceph status	ok	4	Ceph status not updated	HEALTH_ERR, checked 2026-10-22T11:59:00Z (1m ago), limit 30m
+host	cluster status	ok	4	cluster status unreadable	read

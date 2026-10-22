@@ -1,7 +1,8 @@
 ---
-# Volumes the platform copies off-site carry suveraen/backup. An app's charts may delete their own claims, but not
-# these, nor take the label off: a volume made anew would start from its last restore, and its copies would go on
-# without the data.
+# Volumes the platform copies off-site carry suveraen/backup, and the servers' checks expect copies of each. Only Flux
+# and CloudNativePG make them, so an app's charts can't raise alerts with volumes of their own. The charts may delete
+# their own claims, but not these, nor take the label off: a volume made anew would start from its last restore, and
+# its copies would go on without the data.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -12,7 +13,7 @@ spec:
     resourceRules:
       - apiGroups: [""]
         apiVersions: [v1]
-        operations: [UPDATE, DELETE]
+        operations: [CREATE, UPDATE, DELETE]
         resources: [persistentvolumeclaims]
     namespaceSelector:
       matchExpressions:
@@ -20,15 +21,25 @@ spec:
           operator: Exists
   matchConditions:
     - name: labelled
-      expression: oldObject.metadata.?labels[?'suveraen/backup'].hasValue()
+      expression: >-
+        (oldObject != null && oldObject.metadata.?labels[?'suveraen/backup'].hasValue()) ||
+        (object != null && object.metadata.?labels[?'suveraen/backup'].hasValue())
+  variables:
+    - name: before
+      expression: "oldObject == null ? '' : oldObject.metadata.?labels[?'suveraen/backup'].orValue('')"
+    - name: after
+      expression: "object == null ? '' : object.metadata.?labels[?'suveraen/backup'].orValue('')"
   validations:
     - expression: >-
-        (request.operation == 'UPDATE' &&
-        object.metadata.?labels[?'suveraen/backup'] == oldObject.metadata.?labels[?'suveraen/backup']) ||
-        request.userInfo.username in ['system:serviceaccount:kube-system:namespace-controller',
+        variables.before == variables.after || 'system:masters' in request.userInfo.groups ||
+        request.userInfo.username in (variables.after != '' ?
+        ['system:serviceaccount:flux-system:kustomize-controller',
+        'system:serviceaccount:cloudnative-pg:cloudnative-pg'] :
+        ['system:serviceaccount:kube-system:namespace-controller',
         'system:serviceaccount:kube-system:generic-garbage-collector',
-        'system:serviceaccount:cloudnative-pg:cloudnative-pg'] || 'system:masters' in request.userInfo.groups
-      message: only an admin deletes a volume that is copied off-site, or stops its copies
+        'system:serviceaccount:cloudnative-pg:cloudnative-pg'])
+      message: >-
+        only the platform makes a volume that is copied off-site, and only an admin deletes it or stops its copies
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding
