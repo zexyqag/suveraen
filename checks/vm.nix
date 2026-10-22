@@ -865,6 +865,19 @@ pkgs.testers.runNixOSTest {
           refused(f"kubectl -n alpha-hello label pod probe suveraen/egress- {deployer}", "egress-labels")
           server.succeed(f"kubectl -n alpha-hello annotate pod probe probe=x {deployer}")
           server.succeed("kubectl -n alpha-hello delete pod probe --wait=false")
+          # A CronJob's spec holds what its jobs run, such as the script that checks an app's copies.
+          check = template("CronJob", {"suveraen/egress": "internet"})
+          server.succeed(
+              f"echo {shlex.quote(json.dumps(check))} | kubectl create -f - {by('flux-system:kustomize-controller')}"
+          )
+          command = json.dumps([
+              {"op": "add", "path": "/spec/jobTemplate/spec/template/spec/containers/0/command", "value": ["sh"]}
+          ])
+          refused(
+              f"kubectl -n alpha-hello patch cronjob probe --type=json -p {shlex.quote(command)} {deployer}",
+              "egress-labels",
+          )
+          server.succeed("kubectl -n alpha-hello delete cronjob probe")
           server.succeed(
               "kubectl apply -f ${../kubernetes/platform/policies/app/backup-keys.yaml}"
               " -f ${../kubernetes/platform/policies/app/backup-volumes.yaml}"

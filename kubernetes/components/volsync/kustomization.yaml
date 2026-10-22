@@ -3,12 +3,14 @@
 # and which its charts can't delete (platform/policies/backup-volumes). A volume is filled from the latest restore
 # when it is made: the first one starts empty, and one made anew holds what that restore found, so a lost volume
 # comes back whole only once a release has restored the latest copy again. The app's Secrets offsite-1 and offsite-2
-# hold its keys, which reach only volsync/<app>/ in the tenant's bucket at each provider. The movers run as the app's
-# user and are the namespace's only pods that reach the internet.
+# hold its keys, which reach only volsync/<app>/ in the tenant's bucket at each provider. The CronJobs offsite-check-1
+# and offsite-check-2 check the copies at one provider each, daily. The movers and checks run as the app's user and
+# are the namespace's only pods that reach the internet.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:
   - ./volume.yaml
+  - ./check.yaml
 components:
   - ../internet
 patches:
@@ -57,3 +59,94 @@ patches:
             hourly: 24
             daily: 7
             weekly: 5
+  # With restic from VolSync's own image, the one the movers and restores use, as the app's user, reading the copies
+  # alone. A check that passed leaves no Job, as the CronJob's last successful time records it; the last that failed
+  # keeps its log. One retry rides out a copy or a prune that overlapped it. What it runs is in its spec, which only
+  # Flux changes while the pod reaches the internet (platform/policies/app/egress-labels), and Flux makes each $$ in it
+  # a $.
+  - target:
+      kind: CronJob
+      name: offsite-check-[12]
+    patch: |-
+      apiVersion: batch/v1
+      kind: CronJob
+      metadata:
+        name: _
+      spec:
+        concurrencyPolicy: Forbid
+        successfulJobsHistoryLimit: 0
+        failedJobsHistoryLimit: 1
+        jobTemplate:
+          spec:
+            backoffLimit: 1
+            activeDeadlineSeconds: 21600
+            template:
+              metadata:
+                labels:
+                  suveraen/egress: internet
+              spec:
+                restartPolicy: Never
+                automountServiceAccountToken: false
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: ${DATA_UID}
+                  runAsGroup: ${DATA_UID}
+                  seccompProfile:
+                    type: RuntimeDefault
+                containers:
+                  - name: restic
+                    image: quay.io/backube/volsync:0.16.0@sha256:0d03a6aad57569eba2c0eaa0848cf4a908d9744b372ff2224bb291a320f36d76
+                    # The repository's structure in full and a daily share of its data, so all of it is read once
+                    # in CYCLE days. Without restic's lock: a check that died holding it would stop every later copy
+                    # until someone unlocks it, as the movers don't wait for a lock, and without one restic writes
+                    # nothing.
+                    command:
+                      - bash
+                      - -c
+                      - |
+                        set -u
+                        days=$${CYCLE%d}
+                        restic check --no-lock --read-data-subset="$$(($$(date -u +%s) / 86400 % days + 1))/$$days"
+                        status=$$?
+                        # restic finds no repository without its config. VolSync makes one with the volume's first
+                        # copy, or with its first restore from this provider, so only a path that holds nothing at
+                        # all has none yet.
+                        if [ "$$status" -eq 10 ]; then
+                          location=$${RESTIC_REPOSITORY#s3:}
+                          case $$location in http://* | https://*) ;; *) location=https://$$location ;; esac
+                          path=$${location#*://}
+                          found=$$(rclone lsf -q --s3-provider Other --s3-env-auth --s3-region "$$AWS_DEFAULT_REGION" \
+                            --s3-endpoint "$${location%%://*}://$${path%%/*}" ":s3:$${path#*/}/") || exit
+                          if [ -z "$$found" ]; then
+                            echo "no repository yet"
+                            exit 0
+                          fi
+                          echo "the repository has lost its config, but still holds:" $$found
+                        fi
+                        exit "$$status"
+                    env:
+                      - name: CYCLE
+                        value: ${DATA_CHECK_CYCLE}
+                      - name: HOME
+                        value: /tmp
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      readOnlyRootFilesystem: true
+                      capabilities:
+                        drop: [ALL]
+                    resources:
+                      requests:
+                        cpu: 10m
+                        memory: 64Mi
+                        ephemeral-storage: 64Mi
+                      limits:
+                        memory: ${DATA_MOVER_MEMORY:=256Mi}
+                        ephemeral-storage: ${DATA_CACHE_SIZE:=256Mi}
+                    volumeMounts:
+                      - name: tmp
+                        mountPath: /tmp
+                volumes:
+                  # restic's cache for the check.
+                  - name: tmp
+                    emptyDir:
+                      sizeLimit: ${DATA_CACHE_SIZE:=256Mi}

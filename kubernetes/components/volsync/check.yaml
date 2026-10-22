@@ -1,0 +1,33 @@
+---
+# What both checks share is in kustomization.yaml.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: offsite-check-1
+spec:
+  schedule: "${DATA_CHECK_SCHEDULE_1}"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: restic
+              envFrom:
+                - secretRef:
+                    name: offsite-1
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: offsite-check-2
+spec:
+  schedule: "${DATA_CHECK_SCHEDULE_2}"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: restic
+              envFrom:
+                - secretRef:
+                    name: offsite-2

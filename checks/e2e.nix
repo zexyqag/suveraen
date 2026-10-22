@@ -24,8 +24,10 @@
 # later copies leave the old generation's alone. A check that only reads proves each provider's copy whole and
 # decrypting to what the bucket holds, and fails at that provider alone when a copy there changes or goes. An app's
 # volume goes to both providers too, encrypted with the app's own password, and comes back from either as it was copied,
-# without the files deleted before; nothing is left of the volumes copies and restores worked on, and every volume in a
-# tenant's namespace is backed up or VolSync's.
+# without the files deleted before, and a check without restic's lock reads each copy back, fails at that provider alone
+# when a copy there changes or has lost its config, and passes for an app that has copied nothing yet, whose first
+# restore left an empty repository at one provider and none at the other; nothing is left of the volumes copies
+# and restores worked on, and every volume in a tenant's namespace is backed up or VolSync's.
 # The server's alerts reach a phone.
 {
   pkgs,
@@ -1425,6 +1427,48 @@ pkgs.testers.runNixOSTest {
                       assert "suveraen/backup" in meta.get("labels", {}) or (
                           meta.get("labels", {}).get("app.kubernetes.io/created-by") == "volsync"
                       ), meta
+
+          with subtest("Each copy of an app's volume proves whole and readable without a lock, a damaged copy or one that lost its config fails at that provider only, and an app that has copied nothing yet passes"):
+              ns = f"{first}-hello"
+              settings = {"CYCLE": "1d"}
+
+              def repository(n):
+                  return f"/var/lib/s3-{n}/data/{bucket_at(n, first)}/volsync/hello"
+
+              # Nothing copies the volume now (its copies were triggered by hand above), so only a check could change
+              # what the providers hold, old versions included.
+              def listed(n):
+                  versions = f"/var/lib/s3-{n}/versions/{bucket_at(n, first)}"
+                  return acme.succeed(f"find {repository(n)} {versions} -printf '%p %s %T@\\n' | sort")
+
+              before = {n: listed(n) for n in providers}
+              for n in providers:
+                  passed, log = checked(ns, f"offsite-check-{n}", f"check-{n}", settings)
+                  assert passed and "read group #1 of" in log and "no errors were found" in log, log
+              assert {n: listed(n) for n in providers} == before
+              pack = acme.succeed(f"find {repository(2)}/data -type f | sort | head -1").strip()
+              acme.succeed(f"touch -r {pack} /var/lib/s3-2/pack")
+              flip(pack)
+              passed, log = checked(ns, "offsite-check-2", "check-2-damaged", settings, backoff=0)
+              assert not passed and "repository contains errors" in log, log
+              passed, log = checked(ns, "offsite-check-1", "check-1-again", settings)
+              assert passed, log
+              flip(pack)
+              acme.succeed(f"touch -r /var/lib/s3-2/pack {pack}")
+              assert listed(2) == before["2"]
+              # Nothing wrote to the other tenant's volume, so VolSync copied none of it: its first restore made an
+              # empty repository at provider 1, where it looked, and provider 2 holds nothing.
+              empty = {n: f"/var/lib/s3-{n}/data/{bucket_at(n, second)}/volsync/hello" for n in providers}
+              acme.succeed(f"test -e {empty['1']}/config")
+              acme.fail(f"test -e {empty['2']}")
+              for n, said in [("1", "no errors were found"), ("2", "no repository yet")]:
+                  passed, log = checked(f"{second}-hello", f"offsite-check-{n}", f"check-{n}", settings)
+                  assert passed and said in log, log
+              # Without its config, a repository that holds anything is no new one.
+              acme.succeed(f"mv {empty['1']}/config /var/lib/s3-1/config")
+              passed, log = checked(f"{second}-hello", "offsite-check-1", "check-1-unconfigured", settings, backoff=0)
+              assert not passed and "lost its config, but still holds: keys/" in log, log
+              acme.succeed(f"mv /var/lib/s3-1/config {empty['1']}/config")
 
           with subtest("The standby CA issues too, with our external account there"):
               standby = {

@@ -37,10 +37,10 @@ appkinds='ConfigMap,Secret,Service,ServiceAccount,PersistentVolumeClaim,LimitRan
 appkinds+=',Role.rbac.authorization.k8s.io,RoleBinding.rbac.authorization.k8s.io,NetworkPolicy.networking.k8s.io'
 appkinds+=',OCIRepository.source.toolkit.fluxcd.io,HelmRelease.helm.toolkit.fluxcd.io'
 appkinds+=',HTTPRoute.gateway.networking.k8s.io'
-# Copies of an app's volume (components/volsync).
-appkinds+=',ReplicationSource.volsync.backube,ReplicationDestination.volsync.backube'
-# The tenant's PostgreSQL also claims its bucket, tells Barman where to archive and copies the bucket off-site.
-pgkinds=',ObjectBucketClaim.objectbucket.io,ObjectStore.barmancloud.cnpg.io,CronJob.batch,Job.batch'
+# Copies of an app's volume and their checks (components/volsync).
+appkinds+=',ReplicationSource.volsync.backube,ReplicationDestination.volsync.backube,CronJob.batch'
+# The tenant's PostgreSQL also claims its bucket, tells Barman where to archive and fetches a copy back.
+pgkinds=',ObjectBucketClaim.objectbucket.io,ObjectStore.barmancloud.cnpg.io,Job.batch'
 export quotas hard appkinds
 privileged=pod-security.kubernetes.io/audit=privileged,pod-security.kubernetes.io/enforce=privileged
 privileged+=,pod-security.kubernetes.io/warn=privileged
@@ -418,6 +418,7 @@ for dir in kubernetes/clusters/*/; do
           + .metadata.name + " " + .spec.restic.repository + " " + (.spec.sourcePVC // "-") + " "
           + (.spec.restic.moverSecurityContext.runAsNonRoot // false | tostring) + " "
           + (.spec.restic.enableFileDeletion // false | tostring)] | sort | join(",")' "$file")
+        cronjobs=$(yq ea '[select(.kind == "CronJob") | .metadata.name] | sort | join(",")' "$file")
         if [ -n "$copies" ]; then
           sources="ReplicationSource data-1 offsite-1 data true false,ReplicationSource data-2 offsite-2 data true false"
           [[ $copies == "ReplicationDestination data offsite-"[12]" - true true,$sources" ]] \
@@ -430,6 +431,51 @@ for dir in kubernetes/clusters/*/; do
               | .stringData.RESTIC_REPOSITORY // \"-\"] | join(\",\")" "$file")" = "$repository" ] \
               || fail "$cluster/$name: copies of $app's volume go to $repository, from Secret offsite-$n"
           done
+          # Each provider's copies are checked daily by restic from VolSync's own image, with the script in the
+          # CronJob's spec and nothing else, as a user that isn't root, without a lock.
+          [ "$cronjobs" = offsite-check-1,offsite-check-2 ] \
+            || fail "$cluster/$name: an app's copies are checked by the CronJobs offsite-check-1 and offsite-check-2," \
+              "and it has no others: $cronjobs"
+          yq ea -e '[select(.kind == "CronJob") | .spec.jobTemplate.spec.template.spec.containers[0].command // []
+            | .[2] // "" | test("restic check --no-lock ")] | all' "$file" >/dev/null \
+            || fail "$cluster/$name: an app's copies are checked without restic's lock"
+          restic=$(yq ea '[select(.kind == "HelmRelease" and .metadata.name == "volsync")] | .[0].spec.values.restic
+            | .repository + ":" + .tag' "$rendered"/*.yaml)
+          for n in 1 2; do
+            check="select(.kind == \"CronJob\" and .metadata.name == \"offsite-check-$n\")"
+            yq ea "$check | .spec as \$s | \$s.jobTemplate.spec.template as \$t | \$t.spec.containers[0] as \$c | [
+              \"policy \" + \$s.concurrencyPolicy,
+              \"history \" + (\$s.successfulJobsHistoryLimit | tostring) + \"/\"
+                + (\$s.failedJobsHistoryLimit | tostring),
+              \"retries \" + (\$s.jobTemplate.spec.backoffLimit | tostring),
+              \"deadline \" + ((\$s.jobTemplate.spec.activeDeadlineSeconds // 0) > 0 | tostring),
+              \"labels \" + (\$t.metadata.labels // {} | to_entries | map(.key + \"=\" + .value) | join(\",\")),
+              \"token \" + (\$t.spec.automountServiceAccountToken | tostring),
+              \"user \" + (\$t.spec.securityContext.runAsNonRoot | tostring),
+              \"containers \" + (\$t.spec.containers | length | tostring) + \"/\"
+                + (\$t.spec.initContainers // [] | length | tostring),
+              \"image \" + \$c.image,
+              \"command \" + (\$c.command // [] | .[0:2] + [length | tostring] | join(\" \")) + \"/\"
+                + (\$c.args // [] | join(\" \")),
+              \"env \" + ([\$c.envFrom[] | (keys | join(\",\")) + \"=\" + (.secretRef.name // \"-\")] | join(\";\")),
+              \"volumes \" + ([\$t.spec.volumes[] | (keys | map(select(. != \"name\")) | join(\",\")) + \"=\"
+                + (.configMap.name // \"-\")] | sort | join(\";\"))] | .[]" "$file" >"$w/$name.check-$n"
+            printf '%s\n' "policy Forbid" "history 0/1" "retries 1" "deadline true" "labels suveraen/egress=internet" \
+              "token false" "user true" "containers 1/0" "image $restic" "command bash -c 3/" \
+              "env secretRef=offsite-$n" "volumes emptyDir=-" >"$w/$name.check-$n.want"
+            bad=$(diff "$w/$name.check-$n.want" "$w/$name.check-$n" | sed -n 's/^> //p' | paste -sd';' || true)
+            schedule=$(yq ea "$check | .spec.schedule" "$file")
+            cycle=$(yq ea "$check | [.spec.jobTemplate.spec.template.spec.containers[0].env[]
+              | select(.name == \"CYCLE\") | .value] | join(\",\")" "$file")
+            cmp -s "$w/$name.check-$n.want" "$w/$name.check-$n" && [[ $schedule =~ $daily ]] \
+              && [[ $cycle =~ ^[1-9][0-9]*d$ ]] && [ "${cycle%d}" -le 14 ] \
+              || fail "$cluster/$name: offsite-check-$n checks the copies at provider $n alone, once a day at a set" \
+                "time and all of them within 1 to 14 days, with VolSync's restic and its spec's script alone, as a" \
+                "user that isn't root and without the account's token, never twice at once, keeping no Job that" \
+                "passed and the last that failed, which it retried once, and stopping it after a while: $bad"
+          done
+        elif [ "$app" != postgres ] && [ -n "$cronjobs" ]; then
+          fail "$cluster/$name: an app's CronJobs only check its copies: $cronjobs"
         fi
         # Volumes the platform makes are copied off-site or made anew by it, and never pruned.
         bad=$(yq ea '[select(.kind == "PersistentVolumeClaim") | select(.metadata.labels."suveraen/backup" == null

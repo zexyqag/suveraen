@@ -527,6 +527,43 @@ refuses volume-prunable "an app's volumes say how they are backed up (suveraen/b
   "yq -i '(select(.kind == \"PersistentVolumeClaim\") | .metadata.annotations) = {}' components/volsync/volume.yaml"
 refuses volsync-privileged "VolSync's movers run as the app's user, never privileged" \
   "yq -i '.metadata.annotations.\"volsync.backube/privileged-movers\" = \"true\"' components/app/namespace.yaml"
+copies="checks the copies at provider"
+refuses volsync-check-locks "an app's copies are checked without restic's lock" \
+  "sed -i 's/ --no-lock//' components/volsync/kustomization.yaml"
+refuses volsync-check-configmap "offsite-check-1 $copies 1 alone" \
+  "yq -i '(select(.metadata.name == \"offsite-check-1\") | .spec.jobTemplate.spec.template.spec.volumes)
+   = [{\"name\": \"scripts\", \"configMap\": {\"name\": \"x\"}}]' components/volsync/check.yaml"
+refuses volsync-check-other-image "offsite-check-1 $copies 1 alone" \
+  "sed -i 's|image: quay.io/backube/volsync:.*|image: quay.io/backube/volsync:0.15.0@sha256:$(printf %064d 0)|' \
+  components/volsync/kustomization.yaml"
+refuses volsync-check-other-secret "offsite-check-2 $copies 2 alone" \
+  "yq -i '(select(.metadata.name == \"offsite-check-2\") | .spec.jobTemplate.spec.template.spec.containers[0]
+   | .envFrom[0].secretRef.name) = \"offsite-1\"' components/volsync/check.yaml"
+refuses volsync-check-cycle-long "offsite-check-1 $copies 1 alone" "knob HELLO_DATA_CHECK_CYCLE 15d"
+refuses volsync-check-missing "and it has no others: offsite-check-1" \
+  "yq -i 'select(.metadata.name != \"offsite-check-2\")' components/volsync/check.yaml"
+cronjob='---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: x
+spec:
+  schedule: 0 0 * * *
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: x
+              image: busybox:1
+'
+refuses app-other-cronjob "and it has no others: offsite-check-1,offsite-check-2,x" \
+  "append apps/hello/app/configmap.yaml '$cronjob'"
+refuses cronjob-without-copies "an app's CronJobs only check its copies: x" \
+  "sed -i '/components\/volsync/d' apps/hello/ks.yaml; append apps/hello/app/configmap.yaml '$cronjob'"
+refuses hello-jobs-quota "the quota's count/jobs.batch, 6, holds every CronJob's running and kept Jobs" \
+  "sed -i 's/QUOTA_JOBS: \"7\"/QUOTA_JOBS: \"6\"/' apps/hello/ks.yaml"
 
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"
