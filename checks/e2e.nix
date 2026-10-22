@@ -958,6 +958,15 @@ pkgs.testers.runNixOSTest {
                   + " 2>&1"
               )
 
+          def reached(namespace, query):
+              # A new pod gets past the database's policy only once k3s's policy controller has its address.
+              for _ in range(60):
+                  status, out = psql(namespace, "psql", query)
+                  if status == 0:
+                      return out
+                  time.sleep(5)
+              raise AssertionError(out)
+
           postgres_image = server.succeed(
               "kubectl get clusterimagecatalog postgresql -o jsonpath='{.spec.images[0].image}'"
           ).strip()
@@ -1002,8 +1011,7 @@ pkgs.testers.runNixOSTest {
 
           with subtest("An app reaches its own database alone, and only from its own namespace"):
               client(f"{first}-hello", "db")
-              status, out = psql(f"{first}-hello", "psql", "create table probe (v text); insert into probe values ('kept')")
-              assert status == 0, out
+              reached(f"{first}-hello", "create table probe (v text); insert into probe values ('kept')")
               for other in [{"dbname": "postgres"}, {"dbname": "app"}, {"user": "postgres"}, {"password": "wrong"}]:
                   status, out = psql(f"{first}-hello", "psql", "select 1", **other)
                   assert status != 0 and ("pg_hba.conf" in out or "authentication failed" in out), (other, out)
@@ -1167,12 +1175,8 @@ pkgs.testers.runNixOSTest {
               )
               # With the app's data, which it reaches with its own credentials, and archiving as generation g2.
               client(f"{first}-hello", "db")
-              for _ in range(60):
-                  status, out = psql(f"{first}-hello", "psql", "select v from probe")
-                  if status == 0:
-                      break
-                  time.sleep(5)
-              assert status == 0 and out.strip() == "kept", out
+              out = reached(f"{first}-hello", "select v from probe")
+              assert out.strip() == "kept", out
               server.succeed(f"kubectl -n {first}-hello delete pod psql")
               recoverable(ns, "g2")
               # The next push sends generation g2 alone, not g1 again, fetched back as it was.
