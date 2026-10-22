@@ -1218,6 +1218,11 @@ pkgs.testers.runNixOSTest {
                   now = stored_at(n, first, "postgres")
                   assert {f: t for f, t in now.items() if f in first_copies[n]} == first_copies[n], n
                   assert set(now) - set(first_copies[n]), n
+              # The tenant's apps waited for their database, so the release reaches them last.
+              server.wait_until_succeeds(
+                  f"kubectl -n flux-system wait kustomization -l suveraen/tenant={first} --for=condition=Ready --timeout=0",
+                  timeout=600,
+              )
 
           with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied"):
               ns = f"{first}-hello"
