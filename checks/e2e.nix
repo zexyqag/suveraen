@@ -1015,16 +1015,21 @@ pkgs.testers.runNixOSTest {
               for other in [{"dbname": "postgres"}, {"dbname": "app"}, {"user": "postgres"}, {"password": "wrong"}]:
                   status, out = psql(f"{first}-hello", "psql", "select 1", **other)
                   assert status != 0 and ("pg_hba.conf" in out or "authentication failed" in out), (other, out)
-              # The other tenant's app, with its own credentials, and a namespace without policies don't get through.
-              client(f"{second}-hello", "db")
-              status, out = psql(f"{second}-hello", "psql", "select 1", host=f"postgres-rw.{first}-postgres.svc")
-              assert status != 0 and "timeout expired" in out, out
+              # The other tenant's app, with its own credentials, and a namespace without policies don't get through:
+              # refused or dropped, as blocked() takes it.
               apply({"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "db", "namespace": "probe"},
                      "stringData": {"host": f"postgres-rw.{first}-postgres.svc", "port": "5432", "dbname": "hello",
                                     "username": "hello", "password": "unknown", "sslmode": "require"}})
               client("probe", "db")
+              client(f"{second}-hello", "db")
+              # Until k3s's policy controller has a new pod's address, every policy that names its clients refuses the
+              # pod, right or wrong. Each sync rebuilds them all from the pods it knows, so the one that lets the newest
+              # pod into its own database knows both.
+              reached(f"{second}-hello", "select 1")
+              status, out = psql(f"{second}-hello", "psql", "select 1", host=f"postgres-rw.{first}-postgres.svc")
+              assert status != 0 and ("Connection refused" in out or "timeout expired" in out), out
               status, out = psql("probe", "psql", "select 1")
-              assert status != 0 and "timeout expired" in out, out
+              assert status != 0 and ("Connection refused" in out or "timeout expired" in out), out
               # Nor do apps reach the object store.
               blocked(f"{inside} http://rook-ceph-rgw-objects.rook-ceph.svc/")
               server.succeed(f"kubectl -n {first}-hello delete pod psql && kubectl -n {second}-hello delete pod psql")
