@@ -811,6 +811,31 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       !(volume || bucket) || $4 != "false" { print $1 }' | paste -sd' ')
   [ -z "$bad" ] || fail "$cluster: storage classes are Ceph's, volumes go with their claims and buckets stay, and" \
     "none is the default: $bad"
+  # The CSI operator runs a driver's plugins as the accounts it names, and creates neither them nor their rights.
+  bad=$({
+    yq ea '[select(.kind == "ClusterRole") | "role ClusterRole/" + .metadata.name] | .[]' "$rendered"/*.yaml
+    yq ea '[select(.kind == "Role") | "role Role/" + .metadata.namespace + "/" + .metadata.name] | .[]' \
+      "$rendered"/*.yaml
+    yq ea '[select(.kind == "ServiceAccount") | "account " + .metadata.namespace + "/" + .metadata.name] | .[]' \
+      "$rendered"/*.yaml
+    yq ea '[select(.kind == "ClusterRoleBinding" or .kind == "RoleBinding") | .kind as $k
+      | (.metadata.namespace // "-") as $ns | .roleRef as $r | .subjects[]? | select(.kind == "ServiceAccount")
+      | "binding " + $k + " " + $ns + " " + $r.kind + " " + $r.name + " " + (.namespace // $ns) + "/" + .name] | .[]' \
+      "$rendered"/*.yaml
+    yq ea '[select(.apiVersion == "csi.ceph.io/v1" and .kind == "Driver") | .metadata.name as $d
+      | .metadata.namespace as $ns | (.spec.controllerPlugin, .spec.nodePlugin)
+      | "driver " + $d + " " + $ns + "/" + (.serviceAccountName // "-")] | .[]' "$rendered"/*.yaml
+  } | awk '$1 == "role" { roles[$2] = 1 }
+    $1 == "account" { accounts[$2] = 1 }
+    $1 == "binding" {
+      if (!((($4 == "Role") ? "Role/" $3 "/" $5 : "ClusterRole/" $5) in roles)) next
+      if ($2 == "ClusterRoleBinding") cluster[$6] = 1
+      else if (index($6, $3 "/") == 1) local[$6] = 1
+    }
+    $1 == "driver" && ($3 ~ /\/-$/ || !($3 in accounts && $3 in cluster && $3 in local)) { print $2 ":" $3 }' \
+    | sort -u | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: each CSI driver names the accounts its plugins run as, and each exists, bound to a" \
+    "ClusterRole and to a Role in its namespace: $bad"
   for issuer in public standby; do
     [ "$(yq ea "[select(.kind == \"ClusterIssuer\" and .metadata.name == \"$issuer\")] | length" "$rendered"/*.yaml)" \
       = 1 ] || fail "$cluster: the cluster has one ClusterIssuer public, which every host's certificate names, and" \

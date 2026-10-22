@@ -1,6 +1,6 @@
 ---
-# What Rook's own operator.yaml sets up for the CSI operator; its drivers chart is published only to a Helm
-# repository, which nothing could pin. Only RBD: no shared file system yet.
+# What Rook's own operator.yaml sets up for the CSI operator, and what its drivers chart would add (csi-accounts.yaml);
+# the chart is published only to a Helm repository, which nothing could pin. Only RBD: no shared file system yet.
 apiVersion: csi.ceph.io/v1
 kind: OperatorConfig
 metadata:
@@ -16,8 +16,6 @@ spec:
       kubeletDirPath: /var/lib/kubelet
     controllerPlugin:
       priorityClassName: platform
-      deploymentStrategy:
-        type: Recreate
 ---
 apiVersion: csi.ceph.io/v1
 kind: Driver
@@ -25,6 +23,13 @@ metadata:
   name: rook-ceph.rbd.csi.ceph.com
   namespace: rook-ceph
 spec:
+  # The accounts as the chart names them; the operator's own default depends on a prefix Rook's chart sets.
   nodePlugin:
+    serviceAccountName: rook-ceph-rbd-csi-ceph-com-nodeplugin-sa
     updateStrategy:
       type: RollingUpdate
+  controllerPlugin:
+    serviceAccountName: rook-ceph-rbd-csi-ceph-com-ctrlplugin-sa
+    # Here: the operator takes no strategy from the defaults for a Driver with a controllerPlugin of its own.
+    deploymentStrategy:
+      type: Recreate

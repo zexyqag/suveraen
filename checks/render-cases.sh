@@ -372,6 +372,20 @@ refuses ceph-bucket-delete "$classes: ceph-bucket" \
 refuses storageclass-local-path "$classes: local" \
   "append $P/storageclasses.yaml '---\napiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n  name: local
 provisioner: rancher.io/local-path\nreclaimPolicy: Retain\n'"
+csi="each CSI driver names the accounts its plugins run as, and each exists, bound to a ClusterRole and to a Role"
+D=rook-ceph.rbd.csi.ceph.com
+A=rook-ceph-rbd-csi-ceph-com
+refuses csi-default-account "$csi in its namespace: $D:rook-ceph/-" \
+  "yq -i 'del(.spec.controllerPlugin.serviceAccountName)' $P/csi.yaml"
+refuses csi-account-missing "$csi in its namespace: $D:rook-ceph/$A-nodeplugin-sa" \
+  "yq -i 'select(.kind != \"ServiceAccount\" or .metadata.name != \"$A-nodeplugin-sa\")' $P/csi-accounts.yaml"
+refuses csi-account-unbound "$csi in its namespace: $D:rook-ceph/$A-ctrlplugin-sa" \
+  "yq -i 'select(.kind != \"ClusterRoleBinding\" or .metadata.name != \"$A-ctrlplugin-crb\")' $P/csi-accounts.yaml"
+refuses csi-role-missing "$csi in its namespace: $D:rook-ceph/$A-nodeplugin-sa" \
+  "yq -i 'select(.kind != \"Role\" or .metadata.name != \"$A-nodeplugin-r\")' $P/csi-accounts.yaml"
+refuses csi-role-elsewhere "$csi in its namespace: $D:rook-ceph/$A-ctrlplugin-sa" \
+  "yq -i '(select(.kind == \"RoleBinding\" or .kind == \"Role\") | select(.metadata.name | test(\"ctrlplugin\"))
+   | .metadata.namespace) = \"reloader\"' $P/csi-accounts.yaml"
 refuses rook-ceph-partial-labels "$privileged: rook-ceph" \
   "sed -i '/audit: privileged/d' components/privileged/kustomization.yaml"
 refuses rook-ceph-baseline "$privileged: rook-ceph" \
