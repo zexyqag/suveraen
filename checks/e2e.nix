@@ -1160,7 +1160,11 @@ pkgs.testers.runNixOSTest {
 
           with subtest("When the cluster's object store has lost a tenant's backups, a release brings its PostgreSQL back from a provider's copy"):
               ns = f"{first}-postgres"
-              suspend = f"kubectl -n flux-system patch kustomization {first}-postgres-cluster --type merge -p"
+              # Flux takes over what kubectl's own field managers set, so the tenant's next apply would drop the suspend.
+              suspend = (
+                  f"kubectl -n flux-system patch kustomization {first}-postgres-cluster"
+                  " --field-manager=flux-client-side-apply --type merge -p"
+              )
               server.succeed(f"""{suspend} '{{"spec":{{"suspend":true}}}}'""")
               server.succeed(f"kubectl -n {ns} delete cluster postgres --timeout=300s")
               # The tenant's bucket in the cluster loses all its backups.
@@ -1190,6 +1194,8 @@ pkgs.testers.runNixOSTest {
               server.wait_until_succeeds(
                   f"kubectl -n flux-system wait kustomization {first}-postgres --for=condition=Ready --timeout=0", timeout=600
               )
+              # The suspend held: a Cluster made before the restore's settings arrived would keep them out.
+              server.fail(f"kubectl -n {ns} get cluster postgres")
               server.succeed(f"""{suspend} '{{"spec":{{"suspend":false}}}}'""")
               server.wait_until_succeeds(f"kubectl -n {ns} wait cluster postgres --for=condition=Ready --timeout=0", timeout=1200)
               server.wait_until_succeeds(
