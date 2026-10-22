@@ -724,7 +724,8 @@ pkgs.testers.runNixOSTest {
           server.succeed(dry(request("private") | {"spec": {"request": "eA==", "issuerRef": own}}))
           acme = {"server": "https://acme.test/dir", "privateKeySecretRef": {"name": "probe"}}
           refused(dry(issuer("private", acme=acme)), "edge-objects")
-          refused(dry(certificate(None, "private", dnsNames=["hello.example.test"])), "edge-objects")
+          # It names no host, so the hostname map can't refuse it as well.
+          refused(dry(certificate(None, "private")), "edge-objects")
           refused(dry(certificate("alpha", dnsNames=["hello.example.test"], issuerRef=own)), "edge-objects")
           refused(dry(certificate("alpha", "alpha-hello", dnsNames=["hello.example.test"], issuerRef=own)), "edge-objects")
           refused(dry(namespace("alpha-ca", "alpha", tier="app", app="ca", **{"private-ca": "true"})), "tenant-namespaces")
