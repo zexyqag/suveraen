@@ -30,6 +30,8 @@ spec:
         variables.tenant == '' ||
         object.metadata.?labels[?'suveraen/app'].orValue('') == object.metadata.name.substring(6)
       message: a tenant's namespace <tenant>-<app> carries the label suveraen/app=<app>
+    - expression: object.metadata.?labels[?'suveraen/passthrough'].orValue('true') == 'true'
+      message: a namespace labelled suveraen/passthrough has it set to true
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

@@ -4,11 +4,12 @@
 # system disks, the kernel maps and decrypts Ceph's volumes without loading modules, and k3s keeps no volumes of its
 # own. An app's charts reach only its own namespace and can neither widen who may act there nor publish ports, no
 # namespace but Ceph's leaves restricted Pod Security, and no Service takes external IPs. A tenant's namespaces, names
-# in flux-system and hosts are its own, Gateways, certificates and ACME orders stay in the gateway namespace, Issuers
-# sign a namespace's own names only where the platform allows a private CA, a tenant's PostgreSQL takes no restore while
-# it runs, and the platform's pods run at a priority no tenant's may ask for. Only the platform's backup jobs and movers
-# reach out of a tenant's namespace, and its apps' charts can change neither what they run nor the keys their copies go
-# with, nor make or delete a volume copied off-site. Hosts and pods resolve names through the node's own resolver, and
+# in flux-system and hosts are its own, Gateways stay in the gateway namespace, and so do certificates and ACME
+# orders unless an app terminates TLS for its one host itself, Issuers sign a namespace's own names only where
+# the platform allows a private CA, a tenant's PostgreSQL takes no restore while it runs, and the platform's
+# pods run at a priority no tenant's may ask for. Only the platform's backup jobs and movers reach out of a
+# tenant's namespace, and its apps' charts can change neither what they run nor the keys their copies go with,
+# nor make or delete a volume copied off-site. Hosts and pods resolve names through the node's own resolver, and
 # clocks use NTS. The watcher's ntfy only takes known publishers and keeps its account API, stats and attachments
 # closed; the server's alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
 # server falls back to a second channel when the watcher is gone. The server and its Flux only take commits signed by a
@@ -114,6 +115,10 @@ let
             {
               group = "gateway.networking.k8s.io";
               kind = "HTTPRoute";
+            }
+            {
+              group = "gateway.networking.k8s.io";
+              kind = "TLSRoute";
             }
             {
               group = "gateway.networking.k8s.io";
@@ -792,12 +797,12 @@ pkgs.testers.runNixOSTest {
               out = server.fail(f"kubectl label namespace rook-ceph pod-security.kubernetes.io/{mode}=baseline --dry-run=server 2>&1")
               assert "pod-security-labels" in out, out
 
-      with subtest("A tenant's namespaces, names and hosts are its own, and Gateways and certificates stay at the gateway"):
+      with subtest("A tenant's namespaces, names and hosts are its own, Gateways stay at the gateway, and so do certificates unless an app terminates TLS itself"):
           server.succeed(
               "kubectl apply -f ${standIns} && kubectl wait --for condition=established crd --all --timeout=120s"
               " && kubectl create namespace gateway && kubectl create namespace cert-manager"
               " && kubectl -n flux-system create configmap hostnames --from-literal=example.test=alpha"
-              " --from-literal=one.test=alpha-hello --from-literal=org.test=bravo"
+              " --from-literal=one.test=alpha-hello --from-literal=org.test=bravo --from-literal=idm.one.test=alpha-kanidm"
           )
           server.succeed(
               "kubectl apply -f ${../kubernetes/platform/policies/app/tenant-namespaces.yaml}"
@@ -824,7 +829,9 @@ pkgs.testers.runNixOSTest {
               spec = {"interval": "1h", "path": "./x", "prune": True, "sourceRef": {"kind": "GitRepository", "name": "x"}}
               return obj | {"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": kind, "spec": spec}
 
-          def gateway(tenant, host, admits, namespace="gateway", source="Selector"):
+          # A listener for HTTPRoutes terminates TLS; one for TLSRoutes passes it through to the app.
+          def gateway(tenant, host, admits, namespace="gateway", source="Selector", kind="HTTPRoute"):
+              terminate = kind == "HTTPRoute"
               return {
                   "apiVersion": "gateway.networking.k8s.io/v1",
                   "kind": "Gateway",
@@ -833,13 +840,16 @@ pkgs.testers.runNixOSTest {
                       "gatewayClassName": "traefik",
                       "listeners": [
                           {
-                              "name": "https",
-                              "protocol": "HTTPS",
+                              "name": "https" if terminate else "tls",
+                              "protocol": "HTTPS" if terminate else "TLS",
                               "port": 8443,
                               "hostname": host,
-                              "tls": {"mode": "Terminate", "certificateRefs": [{"name": "probe-tls"}]},
+                              "tls": (
+                                  {"mode": "Terminate", "certificateRefs": [{"name": "probe-tls"}]} if terminate
+                                  else {"mode": "Passthrough"}
+                              ),
                               "allowedRoutes": {
-                                  "kinds": [{"kind": "HTTPRoute"}],
+                                  "kinds": [{"kind": kind}],
                                   "namespaces": {
                                       "from": source,
                                       "selector": {"matchLabels": {"kubernetes.io/metadata.name": admits}},
@@ -850,13 +860,14 @@ pkgs.testers.runNixOSTest {
                   },
               }
 
-          def route(namespace, host):
+          def route(namespace, host, kind="HTTPRoute"):
+              section = "https" if kind == "HTTPRoute" else "tls"
               return {
                   "apiVersion": "gateway.networking.k8s.io/v1",
-                  "kind": "HTTPRoute",
+                  "kind": kind,
                   "metadata": {"name": "probe", "namespace": namespace},
                   "spec": {
-                      "parentRefs": [{"name": "probe", "namespace": "gateway", "sectionName": "https"}],
+                      "parentRefs": [{"name": "probe", "namespace": "gateway", "sectionName": section}],
                       "hostnames": [host],
                       "rules": [{"backendRefs": [{"name": "hello", "port": 9898}]}],
                   },
@@ -876,12 +887,16 @@ pkgs.testers.runNixOSTest {
               server.succeed(
                   f"echo {shlex.quote(json.dumps(namespace(name, name[:5], tier='app', app=name[6:])))} | kubectl create -f -"
               )
+          passthrough = namespace("alpha-kanidm", "alpha", tier="app", app="kanidm", passthrough="true")
+          server.succeed(f"echo {shlex.quote(json.dumps(passthrough))} | kubectl create -f -")
           refused(dry(namespace("alpha-y", "bravo", tier="app")), "tenant-namespaces")
           refused(dry(namespace("misc", "alpha", tier="app")), "tenant-namespaces")
           refused(dry(namespace("alpha-z", "alpha", tier="platform")), "tenant-namespaces")
           refused(dry(namespace("alpha-p", "alpha", tier="app", app="p", publish="true")), "tenant-namespaces")
           refused(dry(namespace("alpha-q", "alpha", tier="app")), "tenant-namespaces")
           refused(dry(namespace("alpha-q", "alpha", tier="app", app="web")), "tenant-namespaces")
+          refused(dry(namespace("alpha-q", "alpha", tier="app", app="q", passthrough="yes")), "tenant-namespaces")
+          refused("kubectl label namespace alpha-kanidm suveraen/passthrough=yes --overwrite --dry-run=server", "tenant-namespaces")
           refused("kubectl label namespace bravo-hello suveraen/tenant=alpha --overwrite --dry-run=server", "tenant-namespaces")
           refused("kubectl label namespace bravo-hello suveraen/tenant- --dry-run=server", "tenant-namespaces")
           refused(dry(namespace("local-path", tier="platform")), "tenant-namespaces")
@@ -925,17 +940,18 @@ pkgs.testers.runNixOSTest {
           server.succeed(dry(request("cert-manager")))
           refused(f"echo {shlex.quote(json.dumps(request('cert-manager')))} | kubectl create -f -", "edge-objects")
 
-          def order(namespace):
+          def order(namespace, kind="Order"):
               return {
                   "apiVersion": "acme.cert-manager.io/v1",
-                  "kind": "Order",
+                  "kind": kind,
                   "metadata": {"name": "probe", "namespace": namespace},
                   "spec": {"request": "eA==", "issuerRef": {"kind": "ClusterIssuer", "name": "public"}},
               }
 
-          refused(dry(order("alpha-hello")), "edge-objects")
-          refused(dry(order("cert-manager")), "edge-objects")
-          server.succeed(dry(order("gateway")))
+          for kind in ["Order", "Challenge"]:
+              refused(dry(order("alpha-hello", kind)), "edge-objects")
+              refused(dry(order("cert-manager", kind)), "edge-objects")
+              server.succeed(dry(order("gateway", kind)))
           refused(dry(cluster_issuer("alpha")), "edge-objects")
           server.succeed(dry(cluster_issuer(None)))
           refused(
@@ -1028,6 +1044,43 @@ pkgs.testers.runNixOSTest {
               certificate("alpha", dnsNames=["one.test", "hello.example.test"], commonName="one.test"),
           ]:
               server.succeed(dry(obj))
+
+          # An app that terminates TLS itself, in a namespace the platform labels passthrough, holds the certificate for
+          # its one host, which the map gives to that namespace or its tenant, and cert-manager works on it there. Its
+          # route and the listener passing TLS through to it follow the map like any other.
+          idm = "idm.one.test"
+          server.wait_until_succeeds(dry(certificate("alpha", "alpha-kanidm", dnsNames=[idm])))
+          for obj in [route("alpha-kanidm", idm, "TLSRoute"), gateway("alpha", idm, "alpha-kanidm", kind="TLSRoute")]:
+              server.succeed(dry(obj))
+          # Its requests, Orders and Challenges come from cert-manager's controller alone, whatever rights another
+          # account holds. The stand-ins grant the controller none, so here it acts with a cluster admin's.
+          cert_manager = "create --as=system:serviceaccount:cert-manager:cert-manager --as-group=system:masters"
+          def made(namespace):
+              return [request(namespace), order(namespace), order(namespace, "Challenge")]
+
+          for there, unlabelled in zip(made("alpha-kanidm"), made("alpha-hello")):
+              server.succeed(dry(there, cert_manager))
+              refused(dry(there), "edge-objects")
+              refused(dry(unlabelled, cert_manager), "edge-objects")
+          for obj, policy in [
+              (certificate("alpha", "alpha-hello", dnsNames=["one.test"]), "edge-objects"),
+              (certificate("alpha", "alpha-kanidm", dnsNames=[idm], issuerRef=own), "edge-objects"),
+              (certificate("alpha", "alpha-kanidm", dnsNames=[idm, "idm.example.test"]), "edge-objects"),
+              (certificate("alpha", "alpha-kanidm"), "edge-objects"),
+              (certificate("alpha", "alpha-kanidm", dnsNames=["idm.org.test"]), "hostnames"),
+              (gateway("alpha", idm, "alpha-kanidm", namespace="alpha-kanidm", kind="TLSRoute"), "edge-objects"),
+              (gateway("alpha", idm, "alpha-hello", kind="TLSRoute"), "hostnames"),
+              (route("alpha-hello", idm, "TLSRoute"), "hostnames"),
+              (route("bravo-hello", idm, "TLSRoute"), "hostnames"),
+          ]:
+              refused(dry(obj), policy)
+          # Another namespace of the tenant, labelled so, gets a certificate only for a host the map gives it.
+          server.succeed("kubectl label namespace alpha-hello suveraen/passthrough=true")
+          server.wait_until_succeeds(dry(certificate("alpha", "alpha-hello", dnsNames=["one.test"])))
+          refused(dry(certificate("alpha", "alpha-hello", dnsNames=[idm])), "hostnames")
+          server.succeed("kubectl label namespace alpha-hello suveraen/passthrough-")
+          refused(dry(certificate("alpha", "alpha-hello", dnsNames=["one.test"])), "edge-objects")
+
           server.succeed("""kubectl -n flux-system patch configmap hostnames --type merge -p '{"data":{"hello.org.test":"alpha"}}'""")
           refused(dry(gateway("bravo", "hello.org.test", "bravo-hello")), "hostnames")
           server.succeed("kubectl -n flux-system delete configmap hostnames")

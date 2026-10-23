@@ -69,3 +69,9 @@ patches:
               size(status.parents) > 0 && status.parents.all(p,
               p.conditions.exists(c, c.type == 'Accepted' && c.status == 'True') &&
               p.conditions.exists(c, c.type == 'ResolvedRefs' && c.status == 'True'))
+          - apiVersion: gateway.networking.k8s.io/v1
+            kind: TLSRoute
+            current: >-
+              size(status.parents) > 0 && status.parents.all(p,
+              p.conditions.exists(c, c.type == 'Accepted' && c.status == 'True') &&
+              p.conditions.exists(c, c.type == 'ResolvedRefs' && c.status == 'True'))

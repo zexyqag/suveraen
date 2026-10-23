@@ -299,6 +299,8 @@ refuses gateway-pseudonym-in-pods "GATEWAY_PSEUDONYM_V4 overlaps POD_CIDR_V4" \
   "yq -i '.data.GATEWAY_PSEUDONYM_V4 = \"10.0.0.0/8\"' clusters/test/settings.yaml"
 refuses gateway-pseudonym-64 "and its period whole hours: GATEWAY_PSEUDONYM_V6" \
   "yq -i '.data.GATEWAY_PSEUDONYM_V6 = \"3fff::/64\"' clusters/test/settings.yaml"
+refuses passthrough-label "no namespace holds a public certificate of its own yet (suveraen/passthrough): " \
+  "yq -i '.metadata.labels.\"suveraen/passthrough\" = \"true\"' components/app/namespace.yaml"
 
 # Quotas.
 refuses quota-below-memory-default "the LimitRange's default.memory, 128Mi, is above the quota's limits.memory, 64Mi" \

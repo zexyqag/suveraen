@@ -807,6 +807,12 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       | .[]' "$file" | awk -v ks="$name" \
         '$2 != "-" && ($1 != "cloudnative-pg" || ks != "cloudnative-pg" || $2 != "true") { print $1 }')
     [ -z "$bad" ] || fail "$cluster/$name: only cloudnative-pg signs certificates for its own names: $bad"
+    # No app terminates TLS itself yet, and the gateway would log the clients of a route that passes TLS through by
+    # their own addresses (platform/gateway).
+    bad=$(yq ea '[select(.kind == "Namespace" and .metadata.labels."suveraen/passthrough" != null) | .metadata.name]
+      | .[]' "$file")
+    [ -z "$bad" ] || fail "$cluster/$name: no namespace holds a public certificate of its own yet" \
+      "(suveraen/passthrough): $bad"
     # Images in what is rendered here, the PostgreSQL images clusters take from catalogs, Ceph's, and the tags charts
     # are given.
     bad=$({

@@ -36,14 +36,15 @@ spec:
         namespaceObject.metadata.?labels[?'suveraen/tenant'].orValue(request.namespace)
     - name: listeners
       expression: "request.resource.resource in ['gateways', 'listenersets'] ? object.spec.listeners : []"
-    # Each name claimed, with the namespace it takes routes from; a certificate takes none.
+    # Each name claimed, with the namespace it takes routes from; a certificate at the gateway takes none, and one
+    # elsewhere serves its own namespace.
     - name: claims
       expression: >-
         request.resource.resource in ['gateways', 'listenersets'] ? variables.listeners.map(l,
         {'host': string(l.?hostname.orValue('')), 'namespace':
         string(l.?allowedRoutes.namespaces.selector.matchLabels[?'kubernetes.io/metadata.name'].orValue(''))}) :
-        request.resource.resource == 'certificates' ?
-        object.spec.?dnsNames.orValue([]).map(n, {'host': string(n), 'namespace': ''}) :
+        request.resource.resource == 'certificates' ? object.spec.?dnsNames.orValue([]).map(n, {'host': string(n),
+        'namespace': request.namespace == 'gateway' ? '' : request.namespace}) :
         object.spec.?hostnames.orValue([]).map(n, {'host': string(n), 'namespace': request.namespace})
   validations:
     - expression: variables.owner != ''

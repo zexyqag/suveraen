@@ -6,7 +6,10 @@
 # Challenges too stay where cert-manager makes them from certificates. cert-manager's startup check tries a request in
 # its own namespace as a dry run, which makes nothing. What a tenant applies carries its label. Platform namespaces
 # labelled suveraen/private-ca (components/private-ca) sign their own internal names: there a self-signed or CA Issuer,
-# and only certificates it signs.
+# and only certificates it signs. An app that terminates TLS itself, behind a passthrough listener, holds its own
+# public certificate in its namespace, labelled suveraen/passthrough: one host per certificate, which the hostname map
+# gives to that namespace or its tenant. There the requests, Orders and Challenges come from cert-manager's controller
+# alone, as nothing reads the names in them.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -31,6 +34,11 @@ spec:
     - name: privateCA
       expression: >-
         namespaceObject != null && namespaceObject.metadata.?labels[?'suveraen/private-ca'].orValue('') == 'true'
+    - name: passthrough
+      expression: >-
+        namespaceObject != null && namespaceObject.metadata.?labels[?'suveraen/passthrough'].orValue('') == 'true'
+    - name: certManager
+      expression: request.userInfo.username == 'system:serviceaccount:cert-manager:cert-manager'
     # A certificate or request signed by an Issuer of its own namespace, not a ClusterIssuer.
     - name: ownIssuer
       expression: >-
@@ -41,17 +49,20 @@ spec:
     - expression: >-
         request.resource.resource in ['certificates', 'certificaterequests'] && variables.privateCA ?
         variables.ownIssuer :
-        request.resource.resource in ['gateways', 'listenersets', 'certificates', 'certificaterequests', 'orders',
-        'challenges'] ?
-        request.namespace == 'gateway' && !variables.ownIssuer || request.resource.resource == 'certificaterequests'
-        && request.namespace == 'cert-manager' && request.?dryRun.orValue(false) :
+        request.resource.resource in ['gateways', 'listenersets'] ? request.namespace == 'gateway' :
+        request.resource.resource in ['certificates', 'certificaterequests', 'orders', 'challenges'] ?
+        (request.namespace == 'gateway' || variables.passthrough && (request.resource.resource == 'certificates' ?
+        size(object.spec.?dnsNames.orValue([])) == 1 : variables.certManager)) && !variables.ownIssuer ||
+        request.resource.resource == 'certificaterequests' && request.namespace == 'cert-manager' &&
+        request.?dryRun.orValue(false) :
         request.resource.resource == 'issuers' ? variables.privateCA && (has(object.spec.selfSigned) ||
         has(object.spec.ca)) && !has(object.spec.acme) && !has(object.spec.vault) && !has(object.spec.venafi) :
         request.resource.resource == 'clusterissuers' ? object.metadata.?labels[?'suveraen/tenant'].orValue('') == '' :
         false
       message: >-
-        gateways and certificates live at the gateway, ClusterIssuers come from the platform, nothing makes
-        ReferenceGrants, and Issuers only sign their own namespace's names where the platform allows a private CA
+        gateways live at the gateway, and so do certificates, apart from one for the single host of an app that
+        terminates TLS itself and what cert-manager makes from it there; ClusterIssuers come from the platform, nothing
+        makes ReferenceGrants, and Issuers only sign their own namespace's names where the platform allows a private CA
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

@@ -87,7 +87,8 @@ spec:
           mountPath: /plugins-local/src/suveraen/pseudonym
           volumeName: pseudonym
     # The access log and Traefik's lower levels name clients' addresses. Of its warnings and errors, only one for a
-    # panic it recovers from before the pseudonym does.
+    # panic it recovers from before the pseudonym does, and one for every failed connection, a reset one included, on
+    # a route that passes TLS through, where no pseudonym replaces the address.
     log:
       level: WARN
     ports:
