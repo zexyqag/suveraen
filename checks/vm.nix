@@ -18,6 +18,7 @@
 # encrypted to recovery keys, under a prefix its key can neither leave nor empty; with one provider down they still
 # reach the other, and the phone hears of it. Wiped, the server comes back from a provider's copy through its restore
 # command, with its token file alone; another token leaves a running server's own database in place.
+# A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -197,6 +198,12 @@ pkgs.testers.runNixOSTest {
           enableACME = lib.mkForce false;
         });
 
+        # The server's IPv6 node address is on the test network's link, but outside its prefix.
+        networking.interfaces.eth1.ipv6.routes = map (address: {
+          inherit address;
+          prefixLength = 128;
+        }) (lib.filter (lib.hasInfix ":") nodes.server.suveraen.cluster.nodeIP);
+
         networking.hostId = "5c1e0a7d";
         system.stateVersion = "26.05";
         environment.systemPackages = [
@@ -337,6 +344,7 @@ pkgs.testers.runNixOSTest {
       staleDays = toString (nodes.server.suveraen.upgrade.staleAfterDays + 1);
     in
     ''
+      import ipaddress
       import json
       import secrets
       import shlex
@@ -593,6 +601,113 @@ pkgs.testers.runNixOSTest {
           # etcd answers on the node's address, but only to the API server.
           for line in ["open 6443", "open 10250", "closed 2379"]:
               assert line in ports, ports
+
+      with subtest("A load balancer with local traffic policy hands pods the client's own address"):
+          # As the gateway's Service is (platform/gateway): ServiceLB only publishes the node's addresses, and
+          # kube-proxy's rule for them hands a client's packets to a pod on that node, from the client's own address.
+          server.succeed("k3s crictl images | grep -F rancher/klipper-lb")
+          server.succeed("kubectl label namespace probe suveraen/publish=true")
+          # The pod answers with the address each request came from, as it saw it.
+          cgi = '#!/bin/sh\necho Content-Type: text/plain\necho\necho "$REMOTE_ADDR"\n'
+          for obj in [
+              {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": {"name": "lb-probe", "namespace": "probe", "labels": {"app": "lb-probe"}},
+                  "spec": {
+                      "containers": [{
+                          "name": "httpd",
+                          "image": busybox,
+                          "imagePullPolicy": "Never",
+                          "command": [
+                              "sh", "-c", f"mkdir -p /www/cgi-bin && printf %s {shlex.quote(cgi)} > /www/cgi-bin/ip"
+                              " && chmod +x /www/cgi-bin/ip && exec httpd -f -vv -p 8080 -h /www",
+                          ],
+                          "readinessProbe": {"tcpSocket": {"port": 8080}},
+                      }],
+                  },
+              },
+              {
+                  "apiVersion": "v1",
+                  "kind": "Service",
+                  "metadata": {"name": "lb-probe", "namespace": "probe"},
+                  "spec": {
+                      "type": "LoadBalancer",
+                      "ipFamilyPolicy": "PreferDualStack",
+                      "externalTrafficPolicy": "Local",
+                      "selector": {"app": "lb-probe"},
+                      "ports": [{"port": 443, "targetPort": 8080}],
+                  },
+              },
+          ]:
+              server.succeed(f"echo {shlex.quote(json.dumps(obj))} | kubectl apply -f -")
+          server.succeed("kubectl -n probe wait pod lb-probe --for=condition=Ready --timeout=300s")
+          ingress = "kubectl -n probe get service lb-probe -o jsonpath='{.status.loadBalancer.ingress[*].ip}'"
+          server.wait_until_succeeds(f"test $({ingress} | wc -w) = 2", timeout=300)
+          published = {ipaddress.ip_address(a).version: a for a in server.succeed(ingress).split()}
+          assert sorted(published) == [4, 6], published
+          client = {
+              4: ipaddress.ip_address("${nodes.watcher.networking.primaryIPAddress}"),
+              6: ipaddress.ip_address("${nodes.watcher.networking.primaryIPv6Address}"),
+          }
+
+          def seen(version):
+              address = published[version]
+              host = f"[{address}]" if version == 6 else address
+              # From the watcher's own address, not one of the providers' beside it.
+              curl = f"curl -fsS -m 10 -g --interface {client[version]} http://{host}:443/cgi-bin/ip"
+              try:
+                  out = watcher.wait_until_succeeds(curl, timeout=120).strip()
+              except Exception:
+                  print(f"the watcher, at {client[version]}, got no answer from {address}:443")
+                  explain()
+                  raise
+              try:
+                  # busybox's httpd gives an IPv6 address in brackets, and its socket takes both families, so it sees an
+                  # IPv4 client as a mapped IPv6 address.
+                  at = ipaddress.ip_address(out.strip("[]"))
+              except ValueError:
+                  explain()
+                  raise
+              at = getattr(at, "ipv4_mapped", None) or at
+              print(f"the watcher, at {client[version]}, reached {address}:443 and the pod saw it at {at}")
+              return at
+
+          # What rewrote or dropped the packets on the way: kube-proxy's and the host ports' rules, and those ServiceLB's
+          # pod forwards by. Under the local policy that pod hands packets on to the node's NodePort, which this cluster
+          # serves on loopback alone, so those go nowhere. Then the connections as conntrack holds them, whose reply
+          # goes to the address the pod saw.
+          def explain():
+              chains = (
+                  "'lb-probe|-A (PREROUTING|POSTROUTING|KUBE-SERVICES|KUBE-NODEPORTS|KUBE-POSTROUTING) "
+                  "|-A (KUBE-EXT|KUBE-SVL|CNI-HOSTPORT|CNI-DN)-'"
+              )
+              svclb = "k3s crictl pods -q --label svccontroller.k3s.cattle.io/svcname=lb-probe"
+              for cmd in [
+                  "kubectl -n probe logs lb-probe --tail=20",
+                  "kubectl -n kube-system get pods -o wide -l svccontroller.k3s.cattle.io/svcname=lb-probe",
+                  "kubectl -n probe get service lb-probe -o yaml",
+                  *[f"${pkgs.iptables}/bin/{save} -t nat | grep -E {chains}" for save in ["iptables-save", "ip6tables-save"]],
+                  f"for pod in $({svclb}); do for c in $(k3s crictl ps -q --pod $pod); do"
+                  " k3s crictl exec $c sh -c 'iptables-save -t nat; ip6tables-save -t nat; nft list ruleset'; done; done",
+                  *[f"${pkgs.conntrack-tools}/bin/conntrack -L -f {family} -p tcp --dport 443"
+                    for family in ["ipv4", "ipv6"]],
+              ]:
+                  print(f"$ {cmd}\n{server.execute(f'{cmd} 2>&1')[1]}")
+
+          for version in [4, 6]:
+              if seen(version) != client[version]:
+                  explain()
+                  raise AssertionError(f"the pod saw another address than the watcher's {client[version]}")
+
+          # The cluster policy masquerades the packets, which the probe must be able to tell.
+          policy = """kubectl -n probe patch service lb-probe -p '{"spec":{"externalTrafficPolicy":"%s"}}'"""
+          server.succeed(policy % "Cluster")
+          for version in [4, 6]:
+              retry(lambda _: seen(version) != client[version], timeout_seconds=120)
+          server.succeed(policy % "Local")
+          for version in [4, 6]:
+              retry(lambda _: seen(version) == client[version], timeout_seconds=120)
 
       with subtest("No namespace but Ceph's leaves the restricted Pod Security default, not even through Flux's own account"):
           # After the probes above, whose namespace the test labels privileged itself.

@@ -1,6 +1,7 @@
 ---
-# LoadBalancer and NodePort Services get past the host firewall (ServiceLB runs its pods in the exempt kube-system),
-# and ExternalName ones let a route reach any host. Only namespaces with components/publish may create them.
+# LoadBalancer and NodePort Services get past the host firewall: kube-proxy forwards their packets before it sees
+# them, as do the host ports of ServiceLB's pods in the exempt kube-system. ExternalName ones let a route reach any
+# host. Only namespaces with components/publish may create them.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:

@@ -29,6 +29,9 @@ spec:
     image:
       tag: v3.7.14@sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
     deployment:
+      # One on every node, to take the clients the load balancer hands it there (service). It holds no port of the
+      # host's, so an upgrade starts the new pod before it stops the old one.
+      kind: DaemonSet
       # Traefik loads plugins only as it starts: the sha256 of .traefik.yml and pseudonym.go, so a changed plugin
       # restarts it (checks/render.sh).
       podAnnotations:
@@ -107,4 +110,8 @@ spec:
     service:
       spec:
         ipFamilyPolicy: PreferDualStack
+        # kube-proxy hands a client's packets for the nodes' addresses, which ServiceLB publishes as the Service's, to
+        # a gateway pod on the node they reached without masquerading them: the limit and the pseudonym see the
+        # client's own address.
+        externalTrafficPolicy: Local
     priorityClassName: platform

@@ -4,7 +4,7 @@
 # with secretbox, no pod is refused and no job fails; both CAs know our accounts, and every host's certificate comes
 # over DNS-01, its challenge answered in our ACME zone through the node's Knot and removed again, also where an
 # organisation's own DNS points the challenge there; the standby CA, which requires our external account, issues too;
-# every route answers through the host firewall, ServiceLB, the gateway and the app's network policy with a certificate
+# every route answers through the host firewall, kube-proxy, the gateway and the app's network policy with a certificate
 # from the CA, and port 80 redirects there; the platform's pods run ahead of tenants'. Each tenant runs in exactly the
 # namespaces its manifest asks for, and hello answers on each of its hosts with that tenant's own settings and restarts
 # when they change; a tenant's pods reach neither other tenants' services nor the gateway's, and nothing outside reaches
@@ -28,7 +28,9 @@
 # when a copy there changes or has lost its config, and passes for an app that has copied nothing yet, whose first
 # restore left an empty repository at one provider and none at the other; nothing is left of the volumes copies
 # and restores worked on, and every volume in a tenant's namespace is backed up or VolSync's.
-# Apps see a pseudonym per host in place of each client's address, never an address a client names in a header.
+# Apps see a pseudonym per host in place of each client's address, never an address a client names in a header. The
+# gateway gets each client's own address, limits each by it, and changes its key when it restarts; neither it nor a
+# tenant's pod logs a client's address.
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
 # tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
 # records it, its own off-site copies included, none of them late; one more pool still fits, and when it passes its
@@ -80,26 +82,40 @@ let
   s3Address = n: "192.168.1.10${toString n}";
   # Where the servers copy their own state at each provider.
   platformBucket = "test-platform";
+
+  # The clients' way to the server's IPv6 node address, which is on the test network's link but outside its prefix.
+  toServer =
+    nodes:
+    map (address: {
+      inherit address;
+      prefixLength = 128;
+    }) (lib.filter (lib.hasInfix ":") nodes.server.suveraen.cluster.nodeIP);
+  # A third client of the gateway, on acme but in an IPv6 /64 of its own, which the server reaches through acme.
+  apartPrefix = "2001:db8:ffff::";
+  apartClient = "${apartPrefix}1";
 in
 pkgs.testers.runNixOSTest {
   name = "suveraen-e2e";
   # Below the CI job's limit, so the waits in the script run out first and print what went wrong.
   globalTimeout = 9000;
 
-  nodes.forge = {
-    # Read-only smart HTTP; Flux can't fetch over dumb HTTP or git://.
-    services.cgit."forge.test" = {
-      enable = true;
-      scanPath = "/srv/git";
-      gitHttpBackend.checkExportOkFiles = false;
+  nodes.forge =
+    { nodes, ... }:
+    {
+      # Read-only smart HTTP; Flux can't fetch over dumb HTTP or git://.
+      services.cgit."forge.test" = {
+        enable = true;
+        scanPath = "/srv/git";
+        gitHttpBackend.checkExportOkFiles = false;
+      };
+      networking.firewall.allowedTCPPorts = [ 80 ];
+      networking.interfaces.eth1.ipv6.routes = toServer nodes;
+      environment.systemPackages = [
+        pkgs.git
+        pkgs.openssh
+        pkgs.curl
+      ];
     };
-    networking.firewall.allowedTCPPorts = [ 80 ];
-    environment.systemPackages = [
-      pkgs.git
-      pkgs.openssh
-      pkgs.curl
-    ];
-  };
 
   # The internet: two test ACME CAs (Pebble) with a resolver of their own, and a nameserver standing in for both our
   # published secondaries and an organisation's DNS host, which points its challenge into our ACME zone.
@@ -227,6 +243,16 @@ pkgs.testers.runNixOSTest {
         ];
         allowedUDPPorts = [ 53 ];
       };
+      # A second client of the gateway, and from its address in a /64 of its own, a third.
+      networking.interfaces.eth1.ipv6 = {
+        routes = toServer nodes;
+        addresses = lib.mkAfter [
+          {
+            address = apartClient;
+            prefixLength = 64;
+          }
+        ];
+      };
     };
 
   nodes.server =
@@ -240,6 +266,14 @@ pkgs.testers.runNixOSTest {
       imports = [
         module
         ./vm-server.nix
+      ];
+
+      networking.interfaces.eth1.ipv6.routes = [
+        {
+          address = apartPrefix;
+          prefixLength = 64;
+          via = nodes.acme.networking.primaryIPv6Address;
+        }
       ];
 
       # Ceph's three monitors and three OSDs take about 4 GiB; its images take room the monitors want free.
@@ -399,7 +433,7 @@ pkgs.testers.runNixOSTest {
 
       def read(path, key):
           with open(path) as f:
-              value = re.search(rf"^  {key}: (\S+)$", f.read(), re.MULTILINE)
+              value = re.search(rf'^  {key}: "?([^"\s]+)"?$', f.read(), re.MULTILINE)
           assert value, (path, key)
           return value.group(1)
 
@@ -918,8 +952,8 @@ pkgs.testers.runNixOSTest {
                    for rule in r["spec"].get("rules", []) for b in rule.get("backendRefs", [])}
               )
 
-          def fetch(host):
-              return f"curl -fsS --cacert /tmp/ca.crt --resolve {host}:443:${server} https://{host}/"
+          def fetch(host, address="${server}"):
+              return f"curl -fsS --cacert /tmp/ca.crt --resolve {host}:443:{address} https://{host}/"
 
           # Headers in which a client names an address of its own choosing, in several spellings.
           forged = [
@@ -930,9 +964,10 @@ pkgs.testers.runNixOSTest {
           ranges = [ipaddress.ip_network(setting(f"GATEWAY_PSEUDONYM_V{v}")) for v in [4, 6]]
 
           # The client's address as hello's podinfo is told it, from the headers it echoes.
-          def pseudonym(node, host):
+          def pseudonym(node, host, address="${server}", source=None):
               forging = " ".join(f"-H '{name}: 192.0.2.1'" for name in forged)
-              out = node.succeed(f"{fetch(host)}headers {forging}")
+              bind = f" --interface {source}" if source else ""
+              out = node.succeed(f"{fetch(host, address)}headers {forging}{bind}")
               assert "192.0.2.1" not in out, out
               told = {name.lower(): values for name, values in json.loads(out).items()}
               assert "forwarded" not in told and "true-client-ip" not in told, told
@@ -949,6 +984,56 @@ pkgs.testers.runNixOSTest {
               forge_there = pseudonym(forge, there)
               print(f"forge is {forge_there} to {there}")
               assert forge_there != forge_here, "two hosts see the same pseudonym"
+
+              # Another client, with an address of its own. Were the pseudonyms the same, the gateway would have seen
+              # one address for both: the way to it would still masquerade clients.
+              acme.succeed("curl -fsS --cacert ${caCert} --resolve acme.test:15000:127.0.0.1 https://acme.test:15000/roots/0 > /tmp/ca.crt")
+              acme_here = pseudonym(acme, here)
+              print(f"acme is {acme_here} to {here}")
+              assert acme_here != forge_here, "two clients share a pseudonym: the gateway saw one address for both"
+              # Over IPv6 a client is its /64: forge and acme share one, and acme has an address in a /64 of its own
+              # too. Were the pseudonyms of the two /64s the same, the gateway would have seen one address for both.
+              published = server.succeed(
+                  "kubectl -n gateway get service traefik -o jsonpath='{.status.loadBalancer.ingress[*].ip}'"
+              ).split()
+              six = [a for a in published if ipaddress.ip_address(a).version == 6]
+              assert len(six) == 1, published
+              forge_six = pseudonym(forge, here, f"[{six[0]}]")
+              acme_six = pseudonym(acme, here, f"[{six[0]}]")
+              apart_six = pseudonym(acme, here, f"[{six[0]}]", "${apartClient}")
+              print(f"forge is {forge_six}, acme {acme_six} and ${apartClient} {apart_six} to {here} over IPv6")
+              assert forge_six.version == 6 and forge_six == acme_six, (forge_six, acme_six)
+              assert apart_six.version == 6 and apart_six != forge_six, "two /64s share a pseudonym"
+
+              # The limit counts each client apart: forge runs out of requests, acme doesn't.
+              average, burst = int(setting("GATEWAY_RATE_AVERAGE")), int(setting("GATEWAY_RATE_BURST"))
+              statuses = forge.succeed(
+                  f"seq {3 * burst} | xargs -P {burst} -I@ curl -sS -o /dev/null -w '%{{http_code}}\\n'"
+                  f" --cacert /tmp/ca.crt --resolve {here}:443:${server} https://{here}/"
+              ).split()
+              print(f"forge's {len(statuses)} requests at once: {sorted(statuses)}")
+              assert "429" in statuses and "200" in statuses, statuses
+              acme.succeed(f"{fetch(here)} -o /dev/null")
+              # Until forge's allowance is whole again.
+              time.sleep(burst / average)
+
+              # The clients' own addresses reached the gateway but are in none of its logs, nor any tenant's.
+              clients = [
+                  "${nodes.forge.networking.primaryIPAddress}",
+                  "${nodes.forge.networking.primaryIPv6Address}",
+                  "${nodes.acme.networking.primaryIPAddress}",
+                  "${nodes.acme.networking.primaryIPv6Address}",
+                  "${apartClient}",
+              ]
+              namespaces = ["gateway"] + [
+                  n.removeprefix("namespace/") for n in server.succeed("kubectl get namespace -l suveraen/tenant -o name").split()
+              ]
+              logs = shown(
+                  f"for ns in {' '.join(namespaces)}; do for pod in $(kubectl -n $ns get pods -o name); do"
+                  " kubectl -n $ns logs $pod --all-containers --prefix; done; done"
+              )
+              leaked = [a for a in clients if re.search(rf"\b{re.escape(a)}\b", logs)]
+              assert not leaked, [line for line in logs.splitlines() if any(a in line for a in leaked)][:20]
 
           with subtest("Each tenant runs in exactly the namespaces its manifest asks for"):
               for tenant in tenants:
@@ -1865,6 +1950,12 @@ pkgs.testers.runNixOSTest {
               apply(on("after", "restored", "cat /data/marker"))
               assert finished("volumes", "after").strip() == "kept"
               retry(healthy_since(booted), timeout_seconds=900)
+
+          with subtest("After a reboot apps see another pseudonym, as its key lived in the gateway's memory alone"):
+              forge.wait_until_succeeds(f"{fetch(here)} -o /dev/null", timeout=600)
+              forge_after = pseudonym(forge, here)
+              print(f"forge is {forge_after} to {here} after the reboot, {forge_here} before")
+              assert forge_after != forge_here, "the key outlived the reboot"
           memory()
       except Exception:
           diagnose()

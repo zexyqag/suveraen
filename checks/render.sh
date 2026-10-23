@@ -859,9 +859,10 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       || fail "$cluster: route $ns/$route asks ${parent#gateway/https/} for $hosts, which isn't its listener's host" \
         "for routes from $ns"
   done <"$w/routes"
-  # Apps see a pseudonym in place of each client's address (platform/gateway). Traefik takes routes from the Gateway
-  # API alone and trusts no address a client names; on every route it limits each client by its own address, then
-  # replaces it with the plugin as it is here; and it logs no client.
+  # Apps see a pseudonym in place of each client's address (platform/gateway). Traefik gets each client's own address
+  # on the node it reached, takes routes from the Gateway API alone and trusts no address a client names; on every
+  # route it limits each client by its own address, then replaces it with the plugin as it is here; and it logs no
+  # client.
   yq ea -o=json -I=0 '[select(.kind == "ConfigMap" and .metadata.name == "cluster-settings")] | .[0].data // {}' \
     "$rendered/cluster.yaml" >"$w/settings.json"
   bad=$(python3 -I -c "$gatewaysettings" <"$w/settings.json" | paste -sd' ')
@@ -874,6 +875,11 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
   [ "$(yq ea "$traefik | (.providers.kubernetesCRD.enabled | tostring) + \" \"
     + (.providers.kubernetesIngress.enabled | tostring)" "$rendered"/*.yaml)" = "false false" ] \
     || fail "$cluster: the gateway takes routes from the Gateway API alone, not from Traefik's own kinds or Ingresses"
+  [ "$(yq ea "$traefik | (.deployment.kind // \"Deployment\") + \" \" + (.service.spec.externalTrafficPolicy // \"Cluster\")
+    + \" \" + (.hostNetwork // false | tostring) + \" \" + ([.ports // {} | .[] | select(has(\"hostPort\"))] | length
+    | tostring)" "$rendered"/*.yaml)" = "DaemonSet Local false 0" ] \
+    || fail "$cluster: the gateway runs on every node, a DaemonSet that its Service hands the clients reaching that node" \
+      "with their own addresses (externalTrafficPolicy Local), and on none of the host's ports"
   bad=$(yq ea "$traefik | [(.ports // {} | to_entries | .[]
       | select(.value | has(\"forwardedHeaders\") or has(\"proxyProtocol\")) | \"ports.\" + .key),
     (.additionalArguments // [] | .[] | select(test(strenv(options))))] | .[]" "$rendered"/*.yaml | paste -sd' ')

@@ -273,6 +273,10 @@ refuses platform-tenantlike-digit "platform namespaces can't be named like a ten
 G=platform/gateway/app/helmrelease.yaml
 refuses gateway-crd-provider "the gateway takes routes from the Gateway API alone" \
   "yq -i '.spec.values.providers.kubernetesCRD.enabled = true' $G"
+everynode="the gateway runs on every node, a DaemonSet that its Service hands the clients reaching that node"
+refuses gateway-cluster-policy "$everynode" "yq -i '.spec.values.service.spec.externalTrafficPolicy = \"Cluster\"' $G"
+refuses gateway-deployment "$everynode" "yq -i '.spec.values.deployment.kind = \"Deployment\"' $G"
+refuses gateway-host-port "$everynode" "yq -i '.spec.values.ports.websecure.hostPort = 443' $G"
 logs="the gateway keeps no access log and logs warnings and errors alone"
 refuses gateway-access-log "$logs" "yq -i '.spec.values.accessLog.enabled = true' $G"
 refuses gateway-log-info "$logs" "yq -i '.spec.values.log.level = \"INFO\"' $G"
