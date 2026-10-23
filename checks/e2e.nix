@@ -480,6 +480,12 @@ pkgs.testers.runNixOSTest {
               " | while read -r ns pod; do kubectl -n $ns logs $pod --all-containers --tail=30 --prefix; done",
               "free -m",
               "df -h /",
+              # Why k3s stopped or restarted in this boot, and what held up the last poweroff.
+              "journalctl -b -u k3s -o short-precise --no-pager"
+              " | grep -E 'level=fatal| F[0-9]{4} |panic:|k3s\\.service|k3s service|Starting k3s v' | tail -n 60",
+              "journalctl --list-boots --no-pager",
+              "journalctl -b -1 -o short-monotonic --no-pager"
+              " | grep -iE 'timed out|SIGKILL|still around|Failed unmounting|blocked for more than|libceph|rbd' | tail -n 60",
               "journalctl -u host-checks -o cat --no-pager | tail -n 80",
               phone,
           ]:
@@ -525,8 +531,15 @@ pkgs.testers.runNixOSTest {
               "kubectl -n rook-ceph get deploy,ds,rs,sa -o wide",
               "kubectl -n rook-ceph logs deploy/ceph-csi-controller-manager --tail=100",
               # Why any of Rook's containers restarted, and what the CSI controller said before and after.
-              "kubectl -n rook-ceph get pods -o jsonpath='{range .items[*]}{.metadata.name}{range .status.containerStatuses[*]}"
+              "kubectl -n rook-ceph get pods -o jsonpath='{range .items[*]}{.metadata.name}"
+              "{range .status.initContainerStatuses[*]}{\" \"}{.name}={.restartCount}:{.lastState.terminated.reason}"
+              "/{.lastState.terminated.exitCode}{end}{range .status.containerStatuses[*]}"
               "{\" \"}{.name}={.restartCount}:{.lastState.terminated.reason}/{.lastState.terminated.exitCode}{end}{\"\\n\"}{end}'",
+              # What each OSD's activation did last, with xtrace, before and after its last restart.
+              "for pod in $(kubectl -n rook-ceph get pods -l app=rook-ceph-osd -o name); do"
+              " kubectl -n rook-ceph logs $pod -c activate --prefix --tail=100;"
+              " kubectl -n rook-ceph logs $pod -c activate --prefix --previous --tail=100; done",
+              "kubectl get volumeattachments -o wide",
               "kubectl -n rook-ceph logs deploy/rook-ceph.rbd.csi.ceph.com-ctrlplugin --all-containers --prefix --tail=50",
               "kubectl -n rook-ceph logs deploy/rook-ceph.rbd.csi.ceph.com-ctrlplugin --all-containers --prefix --previous --tail=50",
               "lsblk -o NAME,KNAME,TYPE,SIZE,ROTA,PARTLABEL,PARTUUID,FSTYPE,MOUNTPOINTS",
@@ -537,6 +550,9 @@ pkgs.testers.runNixOSTest {
               "dmsetup ls --tree",
               "grep -E '^(dm_crypt|dm_mod|raid1) ' /proc/modules",
               "mdadm --detail /dev/md/osd-db",
+              # Each DB group's metadata headers and copies, with the sequence number each write gave it.
+              "for pv in /dev/disk/by-id/md-name-any:osd-db-part*; do pvck --dump headers $pv;"
+              " pvck --dump metadata_search $pv; done",
               "tail -n 200 /var/lib/rook/rook-ceph/log/ceph-volume.log",
               "for log in /var/log/osd-prepare/*.log; do echo \"==> $log\"; tail -n 150 $log; done",
           ]:
