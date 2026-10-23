@@ -32,7 +32,7 @@
 # tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
 # records it, its own off-site copies included, none of them late; one more pool still fits, and when it passes its
 # quota's warning they alert once, and once more when that clears. Its etcd comes back in place from a provider's copy,
-# decrypted off the server, as it was when copied.
+# decrypted off the server, as it was when copied, and Ceph stays healthy.
 {
   pkgs,
   module,
@@ -663,19 +663,21 @@ pkgs.testers.runNixOSTest {
                       if address["type"] == "InternalIP":
                           within(address["address"], "NODE")
 
+          ceph_cli = (
+              "kubectl -n rook-ceph exec deploy/rook-ceph-operator -- ceph --connect-timeout=10"
+              " --conf=/var/lib/rook/rook-ceph/rook-ceph.config"
+          )
+
           def ceph(args):
-              return parsed(
-                  "kubectl -n rook-ceph exec deploy/rook-ceph-operator -- ceph --connect-timeout=10"
-                  f" --conf=/var/lib/rook/rook-ceph/rook-ceph.config {args} -f json"
-              )
+              return parsed(f"{ceph_cli} {args} -f json")
 
           def apply(obj):
               server.succeed(f"echo {shlex.quote(json.dumps(obj))} | kubectl apply -f -")
 
-          def finished(namespace, pod, timeout=600):
+          def finished(namespace, pod):
               phase = f"kubectl -n {namespace} get pod {pod} -o jsonpath='{{.status.phase}}'"
               try:
-                  server.wait_until_succeeds(f"{phase} | grep -xE 'Succeeded|Failed'", timeout=timeout)
+                  server.wait_until_succeeds(f"{phase} | grep -xE 'Succeeded|Failed'", timeout=600)
                   server.succeed(f"{phase} | grep -x Succeeded")
               except Exception:
                   print(server.execute(
@@ -1741,7 +1743,7 @@ pkgs.testers.runNixOSTest {
               )
               server.succeed(f"kubectl -n {first}-hello get deployment hello")
 
-          with subtest("etcd comes back in place from a provider's copy, decrypted off the server, as it was when copied"):
+          with subtest("etcd comes back in place from a provider's copy, decrypted off the server, as it was when copied, and Ceph stays healthy"):
               server.succeed("kubectl create configmap before --from-literal=value=kept")
               snapshot_name = etcd_snapshot("in-place")
               server.succeed("systemctl start offsite")
@@ -1781,18 +1783,42 @@ pkgs.testers.runNixOSTest {
               server.succeed("kubectl get configmap before")
               server.fail("kubectl get configmap after")
 
+              # Ceph as Rook has checked it since a moment: the health it recorded before says nothing.
+              def healthy_since(t):
+                  def healthy(_):
+                      status, out = server.execute(
+                          "kubectl -n rook-ceph get cephcluster rook-ceph"
+                          " -o jsonpath='{.status.ceph.health} {.status.ceph.lastChecked}'"
+                      )
+                      health, _, checked = out.strip().partition(" ")
+                      return status == 0 and health == "HEALTH_OK" and moment(checked).timestamp() >= t
+
+                  return healthy
+
+              retry(healthy_since(restored), timeout_seconds=600)
+
           with subtest("After a reboot Ceph comes back healthy, and the volumes with their data"):
+              epoch = ceph("osd dump")["epoch"]
               server.shutdown()
               server.start()
               server.wait_for_unit("k3s.service")
+              booted = int(server.succeed("date +%s"))
+
+              # Each OSD marks itself up again as it starts, in a later map than the last before the reboot. Until then
+              # the monitors may still count it up from before.
+              def started(_):
+                  if server.execute(f"{ceph_cli} osd dump -f json > /tmp/shared/output")[0] != 0:
+                      return False
+                  osds = json.loads((server.shared_dir / "output").read_bytes())["osds"]
+                  return len(osds) == len(disks) and all(o["up"] == 1 and o["up_from"] > epoch for o in osds)
+
+              retry(started, timeout_seconds=1200)
+              # Their activations left the DB groups readable.
+              for slot in range(len(disks)):
+                  server.succeed(f"vgs osd{slot}-db")
               apply(on("after", "restored", "cat /data/marker"))
-              assert finished("volumes", "after", timeout=1200).strip() == "kept"
-              server.wait_until_succeeds(
-                  "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}' | grep -x HEALTH_OK",
-                  timeout=900,
-              )
-              osds = ceph("osd dump")["osds"]
-              assert all(o["up"] == 1 for o in osds), osds
+              assert finished("volumes", "after").strip() == "kept"
+              retry(healthy_since(booted), timeout_seconds=900)
           memory()
       except Exception:
           diagnose()
