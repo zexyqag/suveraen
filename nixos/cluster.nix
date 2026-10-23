@@ -2,11 +2,13 @@
   config,
   lib,
   pkgs,
+  utils,
   ...
 }:
 let
   cfg = config.suveraen.cluster;
   source = config.suveraen.source;
+  snapshots = cfg.etcdSnapshots;
 
   # Flux's install grants create rights on its own kinds to the built-in admin and edit roles, while its
   # controllers apply with cluster-admin rights; anyone with admin or edit in a namespace could then take over the
@@ -64,6 +66,71 @@ let
   }";
 
   inherit (cfg.nodeServices) resolver;
+
+  restore = pkgs.writeShellApplication {
+    name = "suveraen-etcd-restore";
+    runtimeInputs = [
+      config.systemd.package
+      pkgs.coreutils
+      pkgs.unzip
+      pkgs.gnugrep
+      pkgs.gnutar
+      pkgs.findutils
+    ];
+    text = ''
+      token_file=${lib.escapeShellArg cfg.tokenFile}
+      if [ $# = 2 ] && [ "$1" = --token-file ]; then
+        token_file=$2
+      elif [ $# != 0 ] || [ -t 0 ]; then
+        echo "usage: suveraen-etcd-restore [--token-file FILE] < snapshot.zip" >&2
+        exit 2
+      fi
+      token=$(<"$token_file")
+
+      server=/var/lib/rancher/k3s/server
+      db=$server/db
+      # Not in the snapshots directory, whose files k3s lists as snapshots.
+      work=$db/restore
+      rm -rf "$work"
+      install -d -m 0700 "$work"
+      trap 'rm -rf "$work"' EXIT
+      cat >"$work/snapshot.zip"
+      unzip -tq "$work/snapshot.zip"
+      # k3s 1.36.4 joins its snapshot directory with the path of a zip it is given, so it only unpacks zips named
+      # from inside that directory.
+      unzip -p "$work/snapshot.zip" >"$work/snapshot"
+
+      systemctl stop k3s
+      # A failed restore leaves the server as it found it. Before a token the snapshot wasn't made with shows, k3s has
+      # written the server's credentials with that token, which a later start would refuse as newer than the
+      # cluster's, and moved the database to etcd-old-<seconds> to put the snapshot in its place.
+      tar -C "$server" --exclude=./db -cf "$work/server.tar" .
+      started=$(date +%s)
+      flagged=$([ -e "$db/reset-flag" ] && echo 1 || true)
+      # k3s as its unit starts it, restoring the snapshot instead. A restore checks for the token before it reads
+      # --token-file, so the token also goes in K3S_TOKEN.
+      K3S_TOKEN=$token ${
+        lib.replaceStrings [ "--token-file ${cfg.tokenFile}" ] [ ''--token-file "$token_file"'' ]
+          config.systemd.services.k3s.serviceConfig.ExecStart
+      } \
+        --cluster-reset --cluster-reset-restore-path="$work/snapshot" 2>&1 | tee "$work/k3s.log" || true
+      if ! grep -q "membership has been reset" "$work/k3s.log"; then
+        for old in "$db"/etcd-old-*; do
+          if [ -d "$old" ] && [ "''${old##*-}" -ge "$started" ]; then
+            rm -rf "$db/etcd"
+            mv "$old" "$db/etcd"
+          fi
+        done
+        [ -n "$flagged" ] || rm -f "$db/reset-flag"
+        find "$server" -mindepth 1 -maxdepth 1 ! -name db -exec rm -rf {} +
+        tar -C "$server" -xpf "$work/server.tar"
+        echo "The snapshot wasn't restored; the server is as it was, and k3s stays stopped." >&2
+        exit 1
+      fi
+      systemctl start k3s
+      echo "Restored. On each other server: stop k3s, move /var/lib/rancher/k3s/server/db/etcd aside, start k3s."
+    '';
+  };
 in
 {
   options.suveraen.cluster = {
@@ -89,9 +156,31 @@ in
       example = "/run/secrets/k3s-token";
       description = ''
         File holding the cluster's server token, a random password (`openssl rand -hex 32`). Every etcd snapshot
-        carries the cluster's CA keys and secrets key encrypted with it, so a snapshot restores only with this token:
-        keep a copy off the machine and apart from the snapshots. Change it only through `k3s token rotate`.
+        carries the cluster's CA keys and secrets key encrypted with it, so a snapshot restores only with this token
+        (`suveraen-etcd-restore [--token-file FILE] < snapshot.zip`): keep a copy off the machine and apart from the
+        snapshots. Change it only through `k3s token rotate`, and keep the old token for as long as snapshots made with
+        it are kept.
       '';
+    };
+
+    etcdSnapshots = {
+      everyHours = lib.mkOption {
+        type = lib.types.ints.between 1 24;
+        default = 6;
+        description = ''
+          How often k3s snapshots etcd, in hours. It divides 24: the schedule starts over at midnight, so the snapshots
+          stay evenly spaced.
+        '';
+      };
+
+      keep = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 8;
+        description = ''
+          How many snapshots k3s keeps. That many compressed snapshots must fit rpool/etcd's reservation beside the
+          database.
+        '';
+      };
     };
 
     sopsAgeKeyFile = lib.mkOption {
@@ -143,6 +232,10 @@ in
         assertion = source.repository != null;
         message = "suveraen.cluster needs suveraen.source.repository for Flux to follow.";
       }
+      {
+        assertion = lib.mod 24 snapshots.everyHours == 0;
+        message = "suveraen.cluster.etcdSnapshots.everyHours must divide 24.";
+      }
     ];
 
     services.k3s = {
@@ -178,6 +271,12 @@ in
         "--resolv-conf=${pkgs.writeText "resolv.conf" "nameserver ${resolver}\n"}"
         # Flux deploys everything; k3s's own chart installer would be one more way to cluster-wide rights.
         "--disable-helm-controller"
+
+        # Snapshots of etcd, which suveraen-etcd-restore restores. The module puts flags into ExecStart as they are,
+        # so the schedule's spaces are quoted for systemd.
+        (utils.escapeSystemdExecArg "--etcd-snapshot-schedule-cron=0 */${toString snapshots.everyHours} * * *")
+        "--etcd-snapshot-retention=${toString snapshots.keep}"
+        "--etcd-snapshot-compress"
       ];
       extraKubeletConfig = {
         # A fork bomb in one pod can't use up the node's process IDs.
@@ -269,10 +368,10 @@ in
       };
     };
 
-    # k3s snapshots etcd at 0:00 and 12:00 by default.
+    # An hour past when the next snapshot was due.
     suveraen.checks.files.etcd-snapshots = {
       path = "/var/lib/rancher/k3s/server/db/snapshots";
-      maxAge = "13h";
+      maxAge = "${toString (snapshots.everyHours + 1)}h";
     };
 
     systemd.services.flux-sops-key = lib.mkIf (cfg.sopsAgeKeyFile != null) {
@@ -317,7 +416,10 @@ in
       "dm_crypt"
     ];
 
-    environment.systemPackages = [ pkgs.kubectl ];
+    environment.systemPackages = [
+      pkgs.kubectl
+      restore
+    ];
     environment.variables.KUBECONFIG = "/etc/rancher/k3s/k3s.yaml";
 
     # Pods may reach the API server, the kubelet and the node's resolver on the host, and on the DNS signer its Knot

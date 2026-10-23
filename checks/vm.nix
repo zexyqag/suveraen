@@ -14,8 +14,9 @@
 # server falls back to a second channel when the watcher is gone. The server and its Flux only take commits signed by a
 # release signer, the server never goes back to an older one, and it alerts when its configuration gets old. The
 # server's checks read how old the backups the cluster records are and Ceph's health with an account that reads nothing
-# else, and alert once per change, also when the cluster can't be read. Wiped, the server comes back from an etcd
-# snapshot with its token file alone.
+# else, and alert once per change, also when the cluster can't be read. Wiped, the server comes back from a compressed
+# etcd snapshot through its restore command, with its token file alone; another token leaves a running server's own
+# database in place.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -288,17 +289,6 @@ pkgs.testers.runNixOSTest {
       releaseFlake = pkgs.lib.escapeShellArg (inVM nodes.server.suveraen.source.flake);
       resolve = inVM nodes.server.systemd.services.nixos-upgrade.preStart;
       inherit (nodes.server.systemd.services.nixos-upgrade) postStart;
-      # k3s as its unit starts it, restoring a snapshot instead, with the given token file. A restore checks for
-      # the token before it reads --token-file, so the token also goes in K3S_TOKEN.
-      restore =
-        token:
-        "env K3S_TOKEN=\\\"$(cat ${token})\\\" "
-        +
-          pkgs.lib.replaceStrings
-            [ "--token-file ${nodes.server.suveraen.cluster.tokenFile}" ]
-            [ "--token-file ${token}" ]
-            nodes.server.systemd.services.k3s.serviceConfig.ExecStart
-        + " --cluster-reset --cluster-reset-restore-path=/root/drill";
       staleDays = toString (nodes.server.suveraen.upgrade.staleAfterDays + 1);
     in
     ''
@@ -1165,26 +1155,43 @@ pkgs.testers.runNixOSTest {
               timeout=300,
           )
 
-      with subtest("A wiped server comes back from an etcd snapshot with its token file, and not with another token"):
+      with subtest("A wiped server comes back from a compressed etcd snapshot with its token file, and not with another token, which leaves a running one as it was"):
           server.succeed(
               "kubectl create secret generic drill --from-literal=value=kept && k3s etcd-snapshot save --name drill"
-              " && cp /var/lib/rancher/k3s/server/db/snapshots/drill-* /root/drill"
+              " && cp /var/lib/rancher/k3s/server/db/snapshots/drill-*.zip /root/drill.zip"
               " && sha256sum /var/lib/rancher/k3s/server/token > /root/token.sum"
           )
+
+          # It prints k3s's whole log, which is long.
+          def restored(args="", timeout=600):
+              status = server.execute(
+                  f"timeout {timeout} suveraen-etcd-restore {args} < /root/drill.zip"
+                  " > /tmp/shared/restore.log 2>&1"
+              )[0]
+              return status, (server.shared_dir / "restore.log").read_text(errors="replace")
+
+          other_token = "--token-file ${pkgs.writeText "other-token" "not-the-cluster-token"}"
+          # In place, a token the snapshot wasn't made with fails and leaves the server as it was, with its own database
+          # and credentials, so it starts again.
+          server.succeed("kubectl create configmap since --from-literal=value=kept")
+          status, out = restored(other_token, timeout=300)
+          assert status != 0 and "the server is as it was" in out, (status, out[-2000:])
+          server.fail("systemctl is-active k3s")
+          server.succeed("systemctl start k3s")
+          server.wait_until_succeeds("kubectl get configmap since", timeout=300)
           # What a new machine has: no CA, keys, encryption config or token of its own.
           wipe = (
               "systemctl stop k3s && rm -rf /var/lib/rancher/k3s/server"
               " && systemd-tmpfiles --create --prefix=/var/lib/rancher/k3s/server"
           )
-          other = """${restore (pkgs.writeText "other-token" "not-the-cluster-token")}"""
-          assert "other-token" in other, other
           server.succeed(wipe)
-          status, out = server.execute(f"timeout 300 {other} 2>&1")
+          status, out = restored(other_token, timeout=300)
           assert status != 0 and "encrypted with different token" in out, (status, out[-2000:])
+          server.fail("systemctl is-active k3s")
           server.succeed(wipe)
-          _, out = server.execute("timeout 300 ${restore nodes.server.suveraen.cluster.tokenFile} 2>&1")
-          assert "membership has been reset" in out, out[-2000:]
-          server.succeed("systemctl start k3s")
+          status, out = restored()
+          assert status == 0 and "membership has been reset" in out, (status, out[-2000:])
+          server.succeed("test ! -e /var/lib/rancher/k3s/server/db/restore")
           server.wait_until_succeeds(
               "kubectl get secret drill -o jsonpath='{.data.value}' | base64 -d | grep -x kept", timeout=300
           )
