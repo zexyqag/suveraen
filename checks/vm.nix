@@ -1170,7 +1170,13 @@ pkgs.testers.runNixOSTest {
           server.succeed("systemctl start host-checks")
           assert len(sent("cluster status unreadable")) == 1
           server.succeed("systemctl start k3s")
-          server.wait_until_succeeds("kubectl get --raw /readyz", timeout=300)
+          # Ready doesn't mean the custom resources are served yet: until their caches fill they answer 429.
+          for path in [
+              "/api/v1/nodes", "/api/v1/persistentvolumeclaims", "/apis/postgresql.cnpg.io/v1/clusters",
+              "/apis/barmancloud.cnpg.io/v1/objectstores", "/apis/volsync.backube/v1alpha1/replicationsources",
+              "/apis/ceph.rook.io/v1/cephclusters",
+          ]:
+              server.wait_until_succeeds(f"kubectl get --raw {path}", timeout=300)
           server.succeed("systemctl start host-checks")
           assert len(sent("cluster status readable again")) == 1
 
