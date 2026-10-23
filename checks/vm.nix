@@ -247,6 +247,11 @@ pkgs.testers.runNixOSTest {
           cores = 2;
         };
 
+        # The test starts these far more often than their timers do.
+        systemd.services.host-checks.startLimitIntervalSec = 0;
+        systemd.services.offsite.startLimitIntervalSec = 0;
+        systemd.services.offsite-collect.startLimitIntervalSec = 0;
+
         networking.hosts = {
           ${nodes.watcher.networking.primaryIPAddress} = [
             "alerts.test"

@@ -248,6 +248,11 @@ pkgs.testers.runNixOSTest {
         diskSize = 32768;
       };
 
+      # The test starts these far more often than their timers do.
+      systemd.services.host-checks.startLimitIntervalSec = 0;
+      systemd.services.offsite.startLimitIntervalSec = 0;
+      systemd.services.offsite-collect.startLimitIntervalSec = 0;
+
       services.unbound.settings = {
         server = {
           # The test network's IPv6 route leads nowhere; without this every lookup waits on IPv6 name servers.
