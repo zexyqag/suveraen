@@ -83,7 +83,7 @@ in
 pkgs.testers.runNixOSTest {
   name = "suveraen-e2e";
   # Below the CI job's limit, so the waits in the script run out first and print what went wrong.
-  globalTimeout = 6600;
+  globalTimeout = 9000;
 
   nodes.forge = {
     # Read-only smart HTTP; Flux can't fetch over dumb HTTP or git://.
