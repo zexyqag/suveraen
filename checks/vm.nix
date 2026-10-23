@@ -1023,7 +1023,8 @@ pkgs.testers.runNixOSTest {
           checker = "--as=system:serviceaccount:kube-system:host-checks"
           review = json.loads(server.succeed(
               """echo '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"default"}}'"""
-              f" | kubectl create -f - -o json {checker}"
+              # Validating it would have kubectl list the CRDs as the account, which it rightly may not.
+              f" | kubectl create -f - -o json --validate=false {checker}"
           ))
           # Beside what every account may do: ask what it may do.
           rules = sorted(
