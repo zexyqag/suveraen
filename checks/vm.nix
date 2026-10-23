@@ -19,6 +19,8 @@
 # reach the other, and the phone hears of it. Wiped, the server comes back from a provider's copy through its restore
 # command, with its token file alone; another token leaves a running server's own database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
+# One address, or one IPv6 /64, opens only so many web connections a second, counted in memory alone; the operator can
+# block one there for a while, and the firewall keeps no record of the connections it refuses.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -296,6 +298,11 @@ pkgs.testers.runNixOSTest {
           cluster = {
             inherit path;
             sopsAgeKeyFile = toString (pkgs.writeText "age-key" "AGE-SECRET-KEY-TEST");
+            # Low enough for one client to reach at once.
+            edge = {
+              rate = 5;
+              burst = 10;
+            };
           };
           checks.files.probe = {
             path = "/var/lib/backup-probe";
@@ -551,10 +558,11 @@ pkgs.testers.runNixOSTest {
           server.succeed("cd /srv/release && git -c user.signingkey=/root/other commit -q --allow-empty -S -m other")
           server.fail(f"nix eval --raw {release_flake}#release")
 
-      with subtest("Only SSH and web ports are open from outside"):
+      with subtest("Only SSH and web ports are open from outside, and the firewall keeps no record of what it refuses"):
           watcher.succeed("nc -z -w 5 server 22")
           watcher.fail("nc -z -w 5 server 6443")
           watcher.fail("nc -z -w 5 server 10250")
+          server.fail("journalctl -k -o cat | grep -F 'refused connection'")
           # NodePorts are forwarded before the host firewall sees them, so they only answer on loopback.
           server.succeed("kubectl -n kube-system rollout status deployment coredns --timeout=300s")
           server.succeed("kubectl -n kube-system expose deployment coredns --name=probe --type=NodePort --port=53 --protocol=TCP")
@@ -708,6 +716,65 @@ pkgs.testers.runNixOSTest {
           server.succeed(policy % "Local")
           for version in [4, 6]:
               retry(lambda _: seen(version) == client[version], timeout_seconds=120)
+
+      with subtest("One address opens only so many web connections a second, and a blocked one opens none"):
+          edge = ${builtins.toJSON nodes.server.suveraen.cluster.edge}
+          # Beside the watcher's own address, with a count of its own.
+          other = "${s3Address 1}"
+          net6 = ipaddress.ip_network(f"{client[6]}/64", strict=False)
+
+          def connect(source, version=4):
+              host = published[version]
+              return f"nc -z -w 2 -s {source} {host} 443"
+
+          flood = watcher.succeed(
+              f"seq 40 | xargs -P 40 -I{{}} sh -c {shlex.quote(connect(client[4]) + ' && echo open || echo closed')}"
+          ).split()
+          opened = flood.count("open")
+          print(f"{opened} of {len(flood)} connections at once got through, at {edge['rate']}/s after {edge['burst']}")
+          assert len(flood) == 40 and 0 < opened < len(flood), flood
+          watcher.succeed(connect(other))
+          watcher.succeed(connect(client[6], 6))
+          # Counted by address, and an IPv6 one by its /64.
+          server.succeed(f"nft list set inet edge new4 | grep -wF {client[4]}")
+          server.succeed(f"nft list set inet edge new6 | grep -wF {net6.network_address}")
+          server.fail(f"nft list set inet edge new6 | grep -wF {client[6]}")
+
+          # Once the watcher's count has come back.
+          watcher.wait_until_succeeds(connect(client[4]), timeout=30)
+          server.succeed(f"suveraen-block {client[4]} 1m")
+          server.succeed(f"nft list set inet edge blocked4 | grep -wF {client[4]} | grep -F 'timeout 1m'")
+          watcher.fail(connect(client[4]))
+          watcher.succeed(connect(other))
+          server.succeed(f"nc -z -w 2 {published[4]} 443")
+          # Blocked again, it takes the new duration.
+          server.succeed(f"suveraen-block {client[4]} 2h")
+          server.succeed(f"nft list set inet edge blocked4 | grep -wF {client[4]} | grep -F 'timeout 2h'")
+          server.succeed(f"suveraen-block --remove {client[4]}")
+          watcher.succeed(connect(client[4]))
+
+          server.succeed(f"suveraen-block {client[6]} 1m")
+          server.succeed(f"nft list set inet edge blocked6 | grep -F '{net6} '")
+          watcher.fail(connect(client[6], 6))
+          server.succeed(f"suveraen-block --remove {net6}")
+          watcher.succeed(connect(client[6], 6))
+
+          server.succeed(f"suveraen-block 192.0.2.0/24 {edge['maxBlockHours']}h")
+          server.succeed("suveraen-block --remove 192.0.2.0/24")
+          for args in [
+              f"192.0.2.0/24 {edge['maxBlockHours'] + 1}h",
+              f"192.0.2.0/24 {edge['maxBlockHours'] * 60 + 1}m",
+              f"{client[6]}/96 1h",
+              "192.0.2.0/0 1h",
+              "server 1h",
+              "192.0.2.1 1w",
+              "192.0.2.1",
+          ]:
+              server.fail(f"suveraen-block {args}")
+          for family in ["4", "6"]:
+              server.fail(f"nft list set inet edge blocked{family} | grep -F 'expires'")
+          # Neither what the firewall dropped nor the blocks left the watcher's address in the kernel's log.
+          server.fail(f"journalctl -k -o cat | grep -wF -e {client[4]} -e {client[6]}")
 
       with subtest("No namespace but Ceph's leaves the restricted Pod Security default, not even through Flux's own account"):
           # After the probes above, whose namespace the test labels privileged itself.

@@ -68,6 +68,72 @@ let
 
   inherit (cfg.nodeServices) resolver;
 
+  inherit (cfg) edge;
+  webPorts = [
+    80
+    443
+  ];
+  limit = "limit rate over ${toString edge.rate}/second burst ${toString edge.burst} packets";
+
+  # Blocks live in the firewall's sets alone, so they end with their timeout, a reboot or a reload of the firewall.
+  block = pkgs.writeShellApplication {
+    name = "suveraen-block";
+    runtimeInputs = [ pkgs.nftables ];
+    text = ''
+      usage() {
+        echo "usage: suveraen-block ADDRESS[/LENGTH] DURATION" >&2
+        echo "       suveraen-block --remove ADDRESS[/LENGTH]" >&2
+        echo "DURATION is in minutes, hours or days (30m, 12h, 3d), at most ${toString edge.maxBlockHours}h." >&2
+        exit 2
+      }
+      if [ $# != 2 ]; then
+        usage
+      elif [ "$1" = --remove ]; then
+        target=$2 duration=
+      else
+        target=$1 duration=$2
+      fi
+      address=''${target%%/*}
+      # Checked here, so that nft never takes a name to look up.
+      if [[ $address =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+        set=blocked4 longest=32
+      elif [[ $address =~ ^[0-9a-fA-F:]*:[0-9a-fA-F:]*$ ]]; then
+        # The firewall counts an IPv6 client by its /64, which is what one client is given.
+        set=blocked6 longest=64
+      else
+        usage
+      fi
+      length=$longest
+      if [[ $target == */* ]]; then
+        length=''${target#*/}
+        if ! [[ $length =~ ^[1-9][0-9]?$ ]] || [ "$length" -gt "$longest" ]; then
+          echo "suveraen-block: the prefix length must be 1 to $longest." >&2
+          exit 2
+        fi
+      fi
+      element="$address/$length"
+      if [ -z "$duration" ]; then
+        exec nft "delete element inet edge $set { $element }"
+      fi
+      if ! [[ $duration =~ ^([1-9][0-9]{0,5})([mhd])$ ]]; then
+        usage
+      fi
+      n=''${BASH_REMATCH[1]}
+      case ''${BASH_REMATCH[2]} in
+        m) minutes=$n ;;
+        h) minutes=$((n * 60)) ;;
+        d) minutes=$((n * 1440)) ;;
+      esac
+      if [ "$minutes" -gt ${toString (edge.maxBlockHours * 60)} ]; then
+        echo "suveraen-block: a block lasts at most ${toString edge.maxBlockHours}h." >&2
+        exit 2
+      fi
+      # Added again, an element keeps the timeout it has, so it is replaced in the same transaction.
+      exec nft "add element inet edge $set { $element }; delete element inet edge $set { $element };" \
+        "add element inet edge $set { $element timeout ''${minutes}m }"
+    '';
+  };
+
   restore = pkgs.writeShellApplication {
     name = "suveraen-etcd-restore";
     runtimeInputs = [
@@ -180,6 +246,31 @@ in
         description = ''
           How many snapshots k3s keeps. That many compressed snapshots must fit rpool/etcd's reservation beside the
           database.
+        '';
+      };
+    };
+
+    edge = {
+      rate = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 50;
+        description = ''
+          New connections a second that one address, or one IPv6 /64, may open to the web ports. The firewall counts
+          them in memory alone, and forgets an address a minute after its last new connection.
+        '';
+      };
+
+      burst = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 200;
+        description = "New connections one address may open at once before its rate applies.";
+      };
+
+      maxBlockHours = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 72;
+        description = ''
+          The longest `suveraen-block ADDRESS[/LENGTH] DURATION` keeps an address or prefix from the web ports.
         '';
       };
     };
@@ -430,6 +521,7 @@ in
     environment.systemPackages = [
       pkgs.kubectl
       restore
+      block
     ];
     environment.variables.KUBECONFIG = "/etc/rancher/k3s/k3s.yaml";
 
@@ -446,9 +538,28 @@ in
         ip6 saddr ${set v6} tcp dport { 6443, 10250 } accept
         ip saddr ${set v4} ip daddr ${resolver} meta l4proto { tcp, udp } th dport 53 accept
       '';
-    networking.firewall.allowedTCPPorts = [
-      80
-      443
-    ];
+    networking.firewall.allowedTCPPorts = webPorts;
+
+    # Ahead of kube-proxy's rules, while packets still carry the node's own address and port.
+    networking.nftables.tables.edge = {
+      family = "inet";
+      content = ''
+        set blocked4 { type ipv4_addr; flags interval, timeout; }
+        set blocked6 { type ipv6_addr; flags interval, timeout; }
+        set new4 { type ipv4_addr; size 65536; flags dynamic, timeout; timeout 1m; }
+        set new6 { type ipv6_addr; size 65536; flags dynamic, timeout; timeout 1m; }
+        chain prerouting {
+          type filter hook prerouting priority dstnat - 10; policy accept;
+          meta l4proto != tcp return
+          fib daddr type != local return
+          tcp dport != { ${lib.concatMapStringsSep ", " toString webPorts} } return
+          ip saddr @blocked4 drop
+          ip6 saddr @blocked6 drop
+          ct state != new return
+          update @new4 { ip saddr ${limit} } drop
+          update @new6 { ip6 saddr & ffff:ffff:ffff:ffff:: ${limit} } drop
+        }
+      '';
+    };
   };
 }
