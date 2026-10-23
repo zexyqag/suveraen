@@ -31,7 +31,8 @@
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
 # tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
 # records it, its own off-site copies included, none of them late; one more pool still fits, and when it passes its
-# quota's warning they alert once, and once more when that clears.
+# quota's warning they alert once, and once more when that clears. Its etcd comes back in place from a provider's copy,
+# decrypted off the server, as it was when copied.
 {
   pkgs,
   module,
@@ -137,8 +138,12 @@ pkgs.testers.runNixOSTest {
           port = 80;
         })
       ];
-      # To find a tenant's copies there by the names its crypt encrypts.
-      environment.systemPackages = [ pkgs.rclone ];
+      environment.systemPackages = [
+        # To find a tenant's copies there by the names its crypt encrypts.
+        pkgs.rclone
+        # To decrypt the server's own copies as the operator does.
+        pkgs.age
+      ];
       systemd.services.pebble.serviceConfig.ExecStart = lib.mkForce (
         lib.getExe (
           pebble "public" ''{"listenAddress": "0.0.0.0:443", "managementListenAddress": "0.0.0.0:15000"}''
@@ -1730,6 +1735,46 @@ pkgs.testers.runNixOSTest {
                   f"kubectl -n flux-system get gitrepository suveraen -o jsonpath='{{.status.artifact.revision}}' | grep -F {signed}"
               )
               server.succeed(f"kubectl -n {first}-hello get deployment hello")
+
+          with subtest("etcd comes back in place from a provider's copy, decrypted off the server, as it was when copied"):
+              server.succeed("kubectl create configmap before --from-literal=value=kept")
+              snapshot_name = etcd_snapshot("in-place")
+              server.succeed("systemctl start offsite")
+              server.succeed("kubectl create configmap after --from-literal=value=lost")
+              # As the operator does: the newest copy at a provider, read with the kit's key and decrypted off the server.
+              kit = (
+                  "RCLONE_CONFIG_KIT_TYPE=s3 RCLONE_CONFIG_KIT_PROVIDER=Other RCLONE_CONFIG_KIT_REGION=us-east-1"
+                  f" RCLONE_CONFIG_KIT_ENDPOINT=http://{providers['1']} RCLONE_CONFIG_KIT_ACCESS_KEY_ID=kit-1"
+                  " RCLONE_CONFIG_KIT_SECRET_ACCESS_KEY=kit-1-test-secret HOME=/tmp"
+              )
+              etcd = f"kit:{platform}/hosts/${nodes.server.networking.hostName}/etcd/"
+              newest = acme.succeed(
+                  f"{kit} rclone lsf --files-only --format tp {etcd} | sort | tail -n 1 | cut -d ';' -f 2"
+              ).strip()
+              assert newest == f"{snapshot_name}.age", newest
+              acme.succeed(
+                  f"{kit} rclone cat {etcd}{newest} | age -d -i ${keys.snakeOilEd25519PrivateKey} > /tmp/shared/etcd.zip"
+              )
+              restored = int(server.succeed("date +%s"))
+              # It prints k3s's whole log, which is long.
+              status = server.execute(
+                  "timeout 600 suveraen-etcd-restore < /tmp/shared/etcd.zip > /tmp/shared/restore.log 2>&1"
+              )[0]
+              out = (server.shared_dir / "restore.log").read_text(errors="replace")
+              assert status == 0 and "membership has been reset" in out, (status, out[-2000:])
+
+              # The snapshot says the node was Ready; only the kubelet's own report since the restore counts.
+              def reported(_):
+                  status, out = server.execute(
+                      "kubectl get node ${nodes.server.networking.hostName} -o jsonpath="
+                      """'{range .status.conditions[?(@.type=="Ready")]}{.status} {.lastHeartbeatTime}{end}'"""
+                  )
+                  state, _, beat = out.strip().partition(" ")
+                  return status == 0 and state == "True" and moment(beat).timestamp() >= restored
+
+              retry(reported, timeout_seconds=600)
+              server.succeed("kubectl get configmap before")
+              server.fail("kubectl get configmap after")
 
           with subtest("After a reboot Ceph comes back healthy, and the volumes with their data"):
               server.shutdown()
