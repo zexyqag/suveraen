@@ -46,3 +46,13 @@ data:
   SERVICE_CIDR_V6: fd43::/112
   NODE_CIDR_V4: 192.168.1.3/32
   NODE_CIDR_V6: fd00::2/128
+  # The gateway's limit on each client's address, in requests a second and the most at once; the test's are low
+  # enough for the e2e to reach.
+  GATEWAY_RATE_AVERAGE: "5"
+  GATEWAY_RATE_BURST: "20"
+  # Apps see each client's address as a keyed hash of it and the host, written into these ranges, under a key that
+  # lives only in the gateway's memory for one period. No client comes from either: 240.0.0.0/4 is reserved, and
+  # 3fff::/20 is for documentation, apart from the test network's 2001:db8::/32.
+  GATEWAY_PSEUDONYM_V4: 240.0.0.0/4
+  GATEWAY_PSEUDONYM_V6: 3fff::/20
+  GATEWAY_PSEUDONYM_PERIOD: 24h

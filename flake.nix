@@ -99,6 +99,10 @@
           kubernetes = ./kubernetes;
         };
         host-checks = import ./checks/host-checks.nix { inherit pkgs; };
+        pseudonym = import ./checks/pseudonym.nix {
+          inherit pkgs;
+          source = ./kubernetes/platform/gateway/app/pseudonym;
+        };
 
         vm = import ./checks/vm.nix {
           inherit pkgs;

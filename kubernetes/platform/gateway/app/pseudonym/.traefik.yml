@@ -1,0 +1,9 @@
+displayName: Client address pseudonym
+type: middleware
+runtime: yaegi
+import: suveraen/pseudonym
+summary: Replaces the client's address that routes pass on with a keyed pseudonym per host that changes every period.
+testData:
+  ipv4: 240.0.0.0/4
+  ipv6: 3fff::/20
+  period: 24h

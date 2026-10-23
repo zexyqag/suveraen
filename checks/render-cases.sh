@@ -269,6 +269,33 @@ refuses platform-tenantlike-ns "platform namespaces can't be named like a tenant
 refuses platform-tenantlike-digit "platform namespaces can't be named like a tenant's app" \
   "sed -i 's/NAMESPACE: reloader/NAMESPACE: relod-9x/' platform/reloader/ks.yaml"
 
+# The gateway.
+G=platform/gateway/app/helmrelease.yaml
+refuses gateway-crd-provider "the gateway takes routes from the Gateway API alone" \
+  "yq -i '.spec.values.providers.kubernetesCRD.enabled = true' $G"
+logs="the gateway keeps no access log and logs warnings and errors alone"
+refuses gateway-access-log "$logs" "yq -i '.spec.values.accessLog.enabled = true' $G"
+refuses gateway-log-info "$logs" "yq -i '.spec.values.log.level = \"INFO\"' $G"
+chain="on every route the gateway limits each client by its own address, then gives apps its pseudonym"
+refuses gateway-middlewares-swapped "$chain" \
+  "yq -i '.spec.values.ports.websecure.http.middlewares = [\"pseudonym@file\", \"ratelimit@file\"]' $G"
+refuses gateway-no-pseudonym "$chain" "yq -i 'del(.spec.values.ports.websecure.http.middlewares[1])' $G"
+trusts="the gateway trusts no address a client names, and takes no arguments of its own for its logs, entry points,"
+refuses gateway-trusted-ips "$trusts providers or plugins: ports.websecure" \
+  "yq -i '.spec.values.ports.websecure.forwardedHeaders.trustedIPs = [\"10.42.0.0/16\"]' $G"
+refuses gateway-log-argument "$trusts providers or plugins: --accesslog=true" \
+  "yq -i '.spec.values.additionalArguments = [\"--accesslog=true\"]' $G"
+refuses gateway-remote-plugin "the gateway runs no plugin from elsewhere" \
+  "yq -i '.spec.values.experimental.plugins.x = {\"moduleName\": \"github.com/example/x\", \"version\": \"v1.0.0\"}' $G"
+refuses gateway-plugin-edited "the gateway's pods are annotated suveraen/pseudonym" \
+  "echo '// edited' >>platform/gateway/app/pseudonym/pseudonym.go"
+refuses gateway-plugin-substituted "ConfigMap gateway/pseudonym holds" \
+  "yq -i 'del(.configMapGenerator[0].options.annotations)' platform/gateway/app/kustomization.yaml"
+refuses gateway-pseudonym-in-pods "GATEWAY_PSEUDONYM_V4 overlaps POD_CIDR_V4" \
+  "yq -i '.data.GATEWAY_PSEUDONYM_V4 = \"10.0.0.0/8\"' clusters/test/settings.yaml"
+refuses gateway-pseudonym-64 "and its period whole hours: GATEWAY_PSEUDONYM_V6" \
+  "yq -i '.data.GATEWAY_PSEUDONYM_V6 = \"3fff::/64\"' clusters/test/settings.yaml"
+
 # Quotas.
 refuses quota-below-memory-default "the LimitRange's default.memory, 128Mi, is above the quota's limits.memory, 64Mi" \
   "knob HELLO_QUOTA_MEMORY 64Mi"

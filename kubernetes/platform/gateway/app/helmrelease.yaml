@@ -26,6 +26,17 @@ spec:
       # Otherwise Traefik asks update.traefik.io for new versions, and Traefik Labs keeps the addresses.
       checkNewVersion: false
       sendAnonymousUsage: false
+    image:
+      tag: v3.7.14@sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
+    deployment:
+      # Traefik loads plugins only as it starts: the sha256 of .traefik.yml and pseudonym.go, so a changed plugin
+      # restarts it (checks/render.sh).
+      podAnnotations:
+        suveraen/pseudonym: "b3965e76d534be1eb28c093a8197014d6d60cad304337a21e5f739f79988c2bc"
+      additionalVolumes:
+        - name: pseudonym
+          configMap:
+            name: pseudonym
     api:
       dashboard: false
     # Routes come only through the Gateway API, to the Gateways of tenants' hosts (kubernetes/edge).
@@ -40,16 +51,59 @@ spec:
         enabled: true
         # Routes elsewhere can't point at Traefik's own services, such as its API.
         crossProviderNamespaces: [gateway]
+      file:
+        enabled: true
+        content:
+          http:
+            middlewares:
+              # Counts each client's own address, an IPv6 one by its /64.
+              ratelimit:
+                rateLimit:
+                  average: ${GATEWAY_RATE_AVERAGE}
+                  burst: ${GATEWAY_RATE_BURST}
+                  period: 1s
+                  sourceCriterion:
+                    ipStrategy:
+                      ipv6Subnet: 64
+              # Apps get a keyed hash of the client's address and the host in place of the address (./pseudonym).
+              pseudonym:
+                plugin:
+                  pseudonym:
+                    ipv4: ${GATEWAY_PSEUDONYM_V4}
+                    ipv6: ${GATEWAY_PSEUDONYM_V6}
+                    period: ${GATEWAY_PSEUDONYM_PERIOD}
     gateway:
       enabled: false
+    experimental:
+      # A pod whose plugin won't load stops, so a rollout leaves the one before it serving.
+      abortOnPluginFailure: true
+      localPlugins:
+        pseudonym:
+          type: localPath
+          moduleName: suveraen/pseudonym
+          mountPath: /plugins-local/src/suveraen/pseudonym
+          volumeName: pseudonym
+    # The access log and Traefik's lower levels name clients' addresses. Of its warnings and errors, only one for a
+    # panic it recovers from before the pseudonym does.
+    log:
+      level: WARN
     ports:
       web:
         http:
+          # Such as X_Forwarded_For, which an app might read as X-Forwarded-For.
+          aliasHeadersStrategy: delete
           redirections:
             entryPoint:
               to: websecure
               scheme: https
               permanent: true
+      websecure:
+        http:
+          aliasHeadersStrategy: delete
+          # On every route, in this order: the limit counts clients' own addresses, which the pseudonym then replaces.
+          middlewares:
+            - ratelimit@file
+            - pseudonym@file
     service:
       spec:
         ipFamilyPolicy: PreferDualStack

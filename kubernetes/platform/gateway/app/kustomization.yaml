@@ -5,3 +5,16 @@ resources:
   - ./ocirepository.yaml
   - ./helmrelease.yaml
   - ./networkpolicy.yaml
+# The plugin's source, which Traefik mounts and interprets (helmrelease.yaml).
+configMapGenerator:
+  - name: pseudonym
+    namespace: gateway
+    files:
+      - ./pseudonym/.traefik.yml
+      - ./pseudonym/pseudonym.go
+    options:
+      # The chart names it as it is.
+      disableNameSuffixHash: true
+      # Go source: its text is its own.
+      annotations:
+        kustomize.toolkit.fluxcd.io/substitute: disabled

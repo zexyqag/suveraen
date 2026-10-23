@@ -44,6 +44,47 @@ pgkinds=',ObjectBucketClaim.objectbucket.io,ObjectStore.barmancloud.cnpg.io,Job.
 export quotas hard appkinds
 privileged=pod-security.kubernetes.io/audit=privileged,pod-security.kubernetes.io/enforce=privileged
 privileged+=,pod-security.kubernetes.io/warn=privileged
+# Traefik's options that could log or trust clients' addresses, or bypass the gateway's own settings for them.
+options='(?i)^--?(accesslog|log|entrypoints|forwardedheaders|proxyprotocol|experimental|providers)([.=]|$)'
+export options
+# Prints each of the gateway's settings in cluster-settings (JSON on stdin) that the plugin or Traefik won't take.
+gatewaysettings='
+import ipaddress, json, re, sys
+s = json.load(sys.stdin)
+for v, longest in (4, 8), (6, 48):
+    key = f"GATEWAY_PSEUDONYM_V{v}"
+    try:
+        net = ipaddress.ip_network(s.get(key, ""))
+    except ValueError:
+        net = None
+    if net is None or net.version != v or net.prefixlen > longest:
+        print(key)
+        continue
+    for kind in "POD", "SERVICE", "NODE":
+        try:
+            if net.overlaps(ipaddress.ip_network(s.get(f"{kind}_CIDR_V{v}", ""), strict=False)):
+                print(f"{key} overlaps {kind}_CIDR_V{v}")
+        except ValueError:
+            print(f"{kind}_CIDR_V{v}")
+for key, form in ("GATEWAY_RATE_AVERAGE", "[1-9][0-9]*"), ("GATEWAY_RATE_BURST", "[1-9][0-9]*"), \
+        ("GATEWAY_PSEUDONYM_PERIOD", "[1-9][0-9]*h"):
+    if not re.fullmatch(form, s.get(key, "")):
+        print(key)
+'
+# Fails unless the one ConfigMap (a JSON list on stdin) holds the plugin's files in the directory given, byte for
+# byte, and Flux substitutes nothing in them.
+sameplugin='
+import json, os, sys
+maps = json.load(sys.stdin)
+files = [".traefik.yml", "pseudonym.go"]
+assert len(maps) == 1 and "binaryData" not in maps[0], maps
+assert maps[0]["metadata"].get("annotations", {}).get("kustomize.toolkit.fluxcd.io/substitute") == "disabled"
+data = maps[0].get("data", {})
+assert sorted(data) == files, sorted(data)
+for f in files:
+    with open(os.path.join(sys.argv[1], f), "rb") as source:
+        assert data[f].encode() == source.read(), f
+'
 
 # A whole Kubernetes quantity in thousandths of its unit, so CPU's "m" compares too.
 quantity() {
@@ -818,6 +859,57 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       || fail "$cluster: route $ns/$route asks ${parent#gateway/https/} for $hosts, which isn't its listener's host" \
         "for routes from $ns"
   done <"$w/routes"
+  # Apps see a pseudonym in place of each client's address (platform/gateway). Traefik takes routes from the Gateway
+  # API alone and trusts no address a client names; on every route it limits each client by its own address, then
+  # replaces it with the plugin as it is here; and it logs no client.
+  yq ea -o=json -I=0 '[select(.kind == "ConfigMap" and .metadata.name == "cluster-settings")] | .[0].data // {}' \
+    "$rendered/cluster.yaml" >"$w/settings.json"
+  bad=$(python3 -I -c "$gatewaysettings" <"$w/settings.json" | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: GATEWAY_PSEUDONYM_V4 and GATEWAY_PSEUDONYM_V6 are ranges of their family no longer" \
+    "than /8 and /48, apart from the cluster's pods, Services and nodes; the gateway's rates are whole numbers above" \
+    "zero, and its period whole hours: $bad"
+  [ "$(yq ea '[select(.kind == "HelmRelease" and .metadata.name == "traefik")] | length' "$rendered"/*.yaml)" = 1 ] \
+    || fail "$cluster: the gateway is one HelmRelease, traefik"
+  traefik='[select(.kind == "HelmRelease" and .metadata.name == "traefik")] | .[0].spec.values'
+  [ "$(yq ea "$traefik | (.providers.kubernetesCRD.enabled | tostring) + \" \"
+    + (.providers.kubernetesIngress.enabled | tostring)" "$rendered"/*.yaml)" = "false false" ] \
+    || fail "$cluster: the gateway takes routes from the Gateway API alone, not from Traefik's own kinds or Ingresses"
+  bad=$(yq ea "$traefik | [(.ports // {} | to_entries | .[]
+      | select(.value | has(\"forwardedHeaders\") or has(\"proxyProtocol\")) | \"ports.\" + .key),
+    (.additionalArguments // [] | .[] | select(test(strenv(options))))] | .[]" "$rendered"/*.yaml | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: the gateway trusts no address a client names, and takes no arguments of its own for" \
+    "its logs, entry points, providers or plugins: $bad"
+  read -r average burst v4 v6 period <<<"$(yq -p=json -oy '[.GATEWAY_RATE_AVERAGE, .GATEWAY_RATE_BURST,
+    .GATEWAY_PSEUDONYM_V4, .GATEWAY_PSEUDONYM_V6, .GATEWAY_PSEUDONYM_PERIOD] | join(" ")' "$w/settings.json")"
+  want='[["ratelimit@file","pseudonym@file"],"delete","delete",{"content":{"http":{"middlewares":{"pseudonym":{"plugin":'
+  want+='{"pseudonym":{"ipv4":"'$v4'","ipv6":"'$v6'","period":"'$period'"}}},"ratelimit":{"rateLimit":{"average":'
+  want+=$average',"burst":'$burst',"period":"1s","sourceCriterion":{"ipStrategy":{"ipv6Subnet":64}}}}}}},"enabled":true}]'
+  [ "$(yq ea -o=json -I=0 "$traefik | [.ports.websecure.http.middlewares, .ports.web.http.aliasHeadersStrategy,
+    .ports.websecure.http.aliasHeadersStrategy, (.providers.file | sort_keys(..))]" "$rendered"/*.yaml)" = "$want" ] \
+    || fail "$cluster: on every route the gateway limits each client by its own address, then gives apps its" \
+      "pseudonym (ratelimit@file, pseudonym@file, from the file provider alone, with the cluster's GATEWAY_* settings)," \
+      "and it deletes headers that alias another's name on both entry points"
+  [[ $(yq ea "$traefik | (.accessLog.enabled // false | tostring) + \" \" + (.log.level // \"INFO\")" \
+    "$rendered"/*.yaml) =~ ^false\ (WARN|ERROR)$ ]] \
+    || fail "$cluster: the gateway keeps no access log and logs warnings and errors alone, as its other lines name" \
+      "clients' addresses"
+  want='[0,true,{"pseudonym":{"moduleName":"suveraen/pseudonym","mountPath":"/plugins-local/src/suveraen/pseudonym",'
+  want+='"type":"localPath","volumeName":"pseudonym"}},[{"configMap":{"name":"pseudonym"},"name":"pseudonym"}]]'
+  [ "$(yq ea -o=json -I=0 "$traefik | [(.experimental.plugins // {} | length), .experimental.abortOnPluginFailure,
+    (.experimental.localPlugins | sort_keys(..)),
+    [.deployment.additionalVolumes[]? | select(.name == \"pseudonym\") | sort_keys(..)]]" "$rendered"/*.yaml)" \
+    = "$want" ] \
+    || fail "$cluster: the gateway runs no plugin from elsewhere, and doesn't start without the pseudonym from" \
+      "ConfigMap pseudonym"
+  plugin=kubernetes/platform/gateway/app/pseudonym
+  yq ea -o=json -I=0 '[select(.kind == "ConfigMap" and .metadata.namespace == "gateway"
+    and .metadata.name == "pseudonym")]' "$rendered"/*.yaml | python3 -I -c "$sameplugin" "$plugin" \
+    || fail "$cluster: ConfigMap gateway/pseudonym holds $plugin/.traefik.yml and pseudonym.go as they are," \
+      "unsubstituted"
+  hash=$(cat "$plugin/.traefik.yml" "$plugin/pseudonym.go" | sha256sum | cut -d' ' -f1)
+  [ "$(yq ea "$traefik | .deployment.podAnnotations.\"suveraen/pseudonym\" // \"\"" "$rendered"/*.yaml)" = "$hash" ] \
+    || fail "$cluster: the gateway's pods are annotated suveraen/pseudonym: \"$hash\", the sha256 of the plugin's" \
+      ".traefik.yml and pseudonym.go, so a changed plugin restarts them"
   # The hostnames policy refuses every host without the map; where it is readable, its owners must match too.
   yq ea -e '[select(.kind == "ConfigMap" and .metadata.name == "hostnames" and .metadata.namespace == "flux-system")]
     | length == 1' "$rendered/cluster.yaml" >/dev/null \

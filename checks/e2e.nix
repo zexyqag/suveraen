@@ -28,6 +28,7 @@
 # when a copy there changes or has lost its config, and passes for an app that has copied nothing yet, whose first
 # restore left an empty repository at one provider and none at the other; nothing is left of the volumes copies
 # and restores worked on, and every volume in a tenant's namespace is backed up or VolSync's.
+# Apps see a pseudonym per host in place of each client's address, never an address a client names in a header.
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
 # tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
 # records it, its own off-site copies included, none of them late; one more pool still fits, and when it passes its
@@ -919,6 +920,35 @@ pkgs.testers.runNixOSTest {
 
           def fetch(host):
               return f"curl -fsS --cacert /tmp/ca.crt --resolve {host}:443:${server} https://{host}/"
+
+          # Headers in which a client names an address of its own choosing, in several spellings.
+          forged = [
+              "X-Forwarded-For", "X-Real-Ip", "Forwarded", "True-Client-Ip", "X.Forwarded.For", "X_Forwarded_For",
+              "Client-Ip", "X-Forwarded", "Forwarded-For", "X-Originating-Ip", "Proxy-Client-Ip", "WL-Proxy-Client-IP",
+              "X-Appengine-User-Ip", "Cf-Pseudo-Ipv4", "HTTP_CLIENT_IP",
+          ]
+          ranges = [ipaddress.ip_network(setting(f"GATEWAY_PSEUDONYM_V{v}")) for v in [4, 6]]
+
+          # The client's address as hello's podinfo is told it, from the headers it echoes.
+          def pseudonym(node, host):
+              forging = " ".join(f"-H '{name}: 192.0.2.1'" for name in forged)
+              out = node.succeed(f"{fetch(host)}headers {forging}")
+              assert "192.0.2.1" not in out, out
+              told = {name.lower(): values for name, values in json.loads(out).items()}
+              assert "forwarded" not in told and "true-client-ip" not in told, told
+              assert len(told.get("x-forwarded-for", [])) == 1 and told["x-forwarded-for"] == told.get("x-real-ip"), told
+              address = ipaddress.ip_address(told["x-real-ip"][0])
+              assert any(address in r for r in ranges), (address, ranges)
+              return address
+
+          with subtest("Apps see a pseudonym per host, never a client's address or the headers it forges"):
+              here, there = hosts_of(first, f"{first}-hello")[0], hosts_of(second, f"{second}-hello")[0]
+              forge_here = pseudonym(forge, here)
+              print(f"forge is {forge_here} to {here}")
+              assert pseudonym(forge, here) == forge_here, "the pseudonym changed within its period"
+              forge_there = pseudonym(forge, there)
+              print(f"forge is {forge_there} to {there}")
+              assert forge_there != forge_here, "two hosts see the same pseudonym"
 
           with subtest("Each tenant runs in exactly the namespaces its manifest asks for"):
               for tenant in tenants:

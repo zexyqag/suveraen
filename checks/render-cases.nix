@@ -10,6 +10,7 @@ pkgs.runCommand "render-cases"
     nativeBuildInputs = [
       pkgs.fluxcd
       pkgs.yq-go
+      pkgs.python3
     ];
   }
   ''
