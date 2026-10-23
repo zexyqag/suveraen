@@ -9,6 +9,7 @@ let
   cfg = config.suveraen.cluster;
   source = config.suveraen.source;
   snapshots = cfg.etcdSnapshots;
+  snapshotDir = "/var/lib/rancher/k3s/server/db/snapshots";
 
   # Flux's install grants create rights on its own kinds to the built-in admin and edit roles, while its
   # controllers apply with cluster-admin rights; anyone with admin or edit in a namespace could then take over the
@@ -236,6 +237,10 @@ in
         assertion = lib.mod 24 snapshots.everyHours == 0;
         message = "suveraen.cluster.etcdSnapshots.everyHours must divide 24.";
       }
+      {
+        assertion = lib.length (lib.attrNames config.suveraen.offsite.targets) >= 2;
+        message = "suveraen.cluster needs two suveraen.offsite.targets, at independent providers: the cluster's state goes to both.";
+      }
     ];
 
     services.k3s = {
@@ -370,8 +375,14 @@ in
 
     # An hour past when the next snapshot was due.
     suveraen.checks.files.etcd-snapshots = {
-      path = "/var/lib/rancher/k3s/server/db/snapshots";
+      path = snapshotDir;
       maxAge = "${toString (snapshots.everyHours + 1)}h";
+    };
+    suveraen.offsite.sources.etcd = {
+      directory = snapshotDir;
+      pattern = "*.zip";
+      verify = "${lib.getExe pkgs.unzip} -tq";
+      inherit (snapshots) keep everyHours;
     };
 
     systemd.services.flux-sops-key = lib.mkIf (cfg.sopsAgeKeyFile != null) {

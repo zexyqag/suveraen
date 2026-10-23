@@ -28,9 +28,10 @@
 # when a copy there changes or has lost its config, and passes for an app that has copied nothing yet, whose first
 # restore left an empty repository at one provider and none at the other; nothing is left of the volumes copies
 # and restores worked on, and every volume in a tenant's namespace is backed up or VolSync's.
-# The server's alerts reach a phone. Its checks find every backup's last good copy where its controller records it,
-# none of them late; one more pool still fits, and when it passes its quota's warning they alert once, and once more
-# when that clears.
+# The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
+# tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
+# records it, its own off-site copies included, none of them late; one more pool still fits, and when it passes its
+# quota's warning they alert once, and once more when that clears.
 {
   pkgs,
   module,
@@ -75,6 +76,8 @@ let
     2
   ];
   s3Address = n: "192.168.1.10${toString n}";
+  # Where the servers copy their own state at each provider.
+  platformBucket = "test-platform";
 in
 pkgs.testers.runNixOSTest {
   name = "suveraen-e2e";
@@ -126,6 +129,10 @@ pkgs.testers.runNixOSTest {
         (pkgs.path + "/nixos/tests/common/acme/server")
         (import ./providers.nix {
           cluster = clusterIn nodes;
+          platform = {
+            bucket = platformBucket;
+            hosts = [ nodes.server.networking.hostName ];
+          };
           address = s3Address;
           port = 80;
         })
@@ -217,7 +224,12 @@ pkgs.testers.runNixOSTest {
     };
 
   nodes.server =
-    { lib, nodes, ... }:
+    {
+      config,
+      lib,
+      nodes,
+      ...
+    }:
     {
       imports = [
         module
@@ -318,6 +330,20 @@ pkgs.testers.runNixOSTest {
           transferKeyFile = toString transferKey.file;
           backup.recipients = [ keys.snakeOilEd25519PublicKey ];
         };
+        offsite = {
+          recipients = [ keys.snakeOilEd25519PublicKey ];
+          targets = lib.genAttrs (map toString providers) (n: {
+            endpoint = "http://s3-${n}.test";
+            region = "us-east-1";
+            bucket = platformBucket;
+            credentialsFile = toString (
+              pkgs.writeText "offsite-${n}" ''
+                AWS_ACCESS_KEY_ID=${config.networking.hostName}-${n}
+                AWS_SECRET_ACCESS_KEY=${config.networking.hostName}-${n}-test-secret
+              ''
+            );
+          });
+        };
         alerts = {
           urlFile = toString (pkgs.writeText "alerts-url" "http://127.0.0.1:2587/ops");
           tokenFile = "${alertSecrets}/publisher-token";
@@ -374,8 +400,8 @@ pkgs.testers.runNixOSTest {
           assert base64.b64decode(setting("ACME_CA_BUNDLE")) == ca.read(), "ACME_CA_BUNDLE isn't nixpkgs' test CA"
 
       start_all()
-      # The server's checks run when the test says.
-      server.succeed("systemctl stop host-checks.timer")
+      # The server's checks and copies run when the test says.
+      server.succeed("systemctl stop host-checks.timer offsite.timer")
 
       with subtest("The forge serves a commit signed by a release signer"):
           forge.wait_for_unit("nginx.service")
@@ -1497,6 +1523,29 @@ pkgs.testers.runNixOSTest {
               return [(a["title"], a.get("priority", 3)) for a in alerts() if a.get("title", "").removeprefix(
                   "${nodes.server.networking.hostName}: ").startswith(("backups ", "Ceph ", "cluster status ", "still: "))]
 
+          # A new etcd snapshot, as if k3s had made it a while ago: the copy leaves out one younger than a minute, which
+          # may still be being written.
+          def etcd_snapshot(name):
+              server.succeed(f"k3s etcd-snapshot save --name {name}")
+              [path] = server.succeed(f"ls /var/lib/rancher/k3s/server/db/snapshots/{name}-*.zip").split()
+              server.succeed(f"touch -d '-2 minutes' {path}")
+              return path.rsplit("/", 1)[1]
+
+          platform = "${platformBucket}"
+
+          def etcd_copies(n):
+              return f"/var/lib/s3-{n}/data/{platform}/hosts/${nodes.server.networking.hostName}/etcd"
+
+          with subtest("The server's cluster state goes to both providers, encrypted, under a key that reaches nothing else"):
+              snapshot_name = etcd_snapshot("e2e")
+              server.succeed("systemctl start offsite")
+              for n in providers:
+                  acme.succeed(f"test \"$(head -c 21 {etcd_copies(n)}/{snapshot_name}.age)\" = age-encryption.org/v1")
+                  server_keys = (f"${nodes.server.networking.hostName}-{n}", f"${nodes.server.networking.hostName}-{n}-test-secret")
+                  for tenant in tenants:
+                      refused_at(n, server_keys, f"s3api list-objects-v2 --bucket {bucket_at(n, tenant)}")
+                      refused_at(n, keys_of(tenant, n), f"s3api list-objects-v2 --bucket {platform}")
+
           with subtest("The server finds every backup's last good copy where its controller records it, and none is late"):
               # When each backup was last good, as the controllers record it, under the name the server gives it.
               def recorded():
@@ -1536,7 +1585,8 @@ pkgs.testers.runNixOSTest {
               archiving = {f"{c['metadata']['namespace']}/{c['metadata']['name']} WAL archiving"
                            for c in items("clusters.postgresql.cnpg.io")}
               assert len(archiving) == len(tenants), archiving
-              assert findings.keys() == before.keys() | archiving | {"Ceph status", "cluster status", "etcd-snapshots"}, findings
+              offsite = {f"etcd-offsite-{n}" for n in providers}
+              assert findings.keys() == before.keys() | archiving | offsite | {"Ceph status", "cluster status", "etcd-snapshots"}, findings
               assert all(state == "ok" for state, _ in findings.values()), findings
               for key in before:
                   detail, times = findings[key][1], [before[key], after[key]]
@@ -1545,6 +1595,11 @@ pkgs.testers.runNixOSTest {
                   else:
                       m = re.match(r"last (\S+) \(", detail)
                       assert m and moment(m.group(1)) in {moment(t) for t in times if t}, (key, detail, times)
+              # The off-site copies count from the snapshot each provider holds last.
+              for n in providers:
+                  stamp = int(server.succeed(f"stat -c %Y /var/lib/offsite/state/etcd.{n}"))
+                  m = re.match(r"last (\S+) \(", findings[f"etcd-offsite-{n}"][1])
+                  assert m and moment(m.group(1)).timestamp() == stamp, (n, findings[f"etcd-offsite-{n}"], stamp)
               assert findings["Ceph status"][1].startswith("HEALTH_OK, "), findings["Ceph status"]
               assert checks_said() == [], checks_said()
 

@@ -50,6 +50,27 @@
       tokenFile = "/run/secrets/k3s-token";
       sopsAgeKeyFile = "/run/secrets/flux-age-key";
     };
+    offsite = {
+      # A recovery key's and a hardware key's.
+      recipients = [
+        "age125r3azdpjeglz7whc2natav2czgdyeka0dc2d3c249gxuykvkyjsjfte6v"
+        "age1yubikey1qvymz94g0fft5s0yhl3gmv00ev0k5fg7y5uypdmu3lyj0ynted365lt42r4"
+      ];
+      targets = {
+        "1" = {
+          endpoint = "https://s3.example.org";
+          region = "example";
+          bucket = "example-platform";
+          credentialsFile = "/run/secrets/offsite-1";
+        };
+        "2" = {
+          endpoint = "https://s3.example.net";
+          region = "example";
+          bucket = "example-platform";
+          credentialsFile = "/run/secrets/offsite-2";
+        };
+      };
+    };
     dns.self = "example";
     alerts = {
       urlFile = "/run/secrets/alerts-url";

@@ -2,11 +2,15 @@
 # address of its own. Each is as it is at onboarding: each of the cluster's tenants' buckets locked, and a key for each
 # of the tenant's apps with copies there, which may list and write under the app's own prefix alone: postgres/, whose
 # copies it never deletes, or volsync/<app>/, where restic deletes what it prunes but never the repository's config or
-# keys. None of them unlocks a copy, which outlives any delete for as long as it is locked. The root keys are the
-# provider's own, test stand-ins.
+# keys. The platform's bucket is locked too, with a key for each server, <host>-<n>, that may list, read and write
+# under hosts/<host>/ alone and delete nothing, and a read-only key for the recovery kit, kit-<n>; kit/marker stands in
+# for the kit itself. None of them unlocks a copy, which outlives any delete for as long as it is locked. The root keys
+# are the provider's own; every key's secret is its name followed by -test-secret.
 {
-  # The cluster's directory: its settings name the buckets, and its tenants' secrets the apps' keys.
+  # The cluster's directory: its settings name the buckets, and its tenants' secrets the apps' keys. Null for none.
   cluster,
+  # { bucket; hosts; }: the bucket servers copy their own state to, and those servers' host names.
+  platform,
   # Provider n's address, which the node takes on eth1.
   address,
   port,
@@ -47,18 +51,28 @@ in
             export AWS_ACCESS_KEY_ID=root-${toString n} AWS_SECRET_ACCESS_KEY=root-${toString n}-test-secret
             export AWS_DEFAULT_REGION=us-east-1 AWS_ENDPOINT_URL=${endpoint} HOME=$RUNTIME_DIRECTORY
             until curl -s -o /dev/null ${endpoint}; do sleep 1; done
+            locked() {
+              aws s3api create-bucket --bucket "$1" --object-lock-enabled-for-bucket
+              aws s3api put-object-lock-configuration --bucket "$1" --object-lock-configuration \
+                '{"ObjectLockEnabled": "Enabled", "Rule": {"DefaultRetention": {"Mode": "COMPLIANCE", "Days": 1}}}'
+            }
+            user() {
+              versitygw admin ${root} --endpoint-url ${endpoint} create-user --role user --access "$1" --secret "$2"
+            }
+            policy() {
+              aws s3api put-bucket-policy --bucket "$1" --policy "$(jq -cs '{Version: "2012-10-17", Statement: add}')"
+            }
+          ''
+          + lib.optionalString (cluster != null) ''
             prefix=$(yq .data.BACKUP_${toString n}_BUCKET_PREFIX ${cluster}/settings.yaml)
             for secrets in ${cluster}/tenants/*/secrets.yaml; do
               bucket=$prefix$(basename "$(dirname "$secrets")")
-              aws s3api create-bucket --bucket "$bucket" --object-lock-enabled-for-bucket
-              aws s3api put-object-lock-configuration --bucket "$bucket" --object-lock-configuration \
-                '{"ObjectLockEnabled": "Enabled", "Rule": {"DefaultRetention": {"Mode": "COMPLIANCE", "Days": 1}}}'
+              locked "$bucket"
               statements=()
               for app in $(yq '.stringData | keys | .[] | select(test("_BACKUP_${toString n}_ACCESS_KEY_ID$"))
                 | sub("_BACKUP_.*", "")' "$secrets"); do
                 key=$(yq ".stringData.''${app}_BACKUP_${toString n}_ACCESS_KEY_ID" "$secrets")
-                versitygw admin ${root} --endpoint-url ${endpoint} create-user --role user --access "$key" \
-                  --secret "$(yq ".stringData.''${app}_BACKUP_${toString n}_SECRET_ACCESS_KEY" "$secrets")"
+                user "$key" "$(yq ".stringData.''${app}_BACKUP_${toString n}_SECRET_ACCESS_KEY" "$secrets")"
                 if [ "$app" = POSTGRES ]; then
                   path=postgres/ actions='["s3:GetObject", "s3:PutObject", "s3:PutObjectRetention"]' pruned='[]'
                 else
@@ -74,9 +88,32 @@ in
                     + if $pruned == [] then [] else [{Effect: "Allow", Principal: {AWS: [$key]},
                       Action: ["s3:DeleteObject"], Resource: [$pruned[] | "arn:aws:s3:::\($bucket)/\($path)\(.)*"]}] end')")
               done
-              aws s3api put-bucket-policy --bucket "$bucket" \
-                --policy "$(printf '%s\n' "''${statements[@]}" | jq -cs '{Version: "2012-10-17", Statement: add}')"
+              printf '%s\n' "''${statements[@]}" | policy "$bucket"
             done
+          ''
+          + ''
+            bucket=${platform.bucket}
+            locked "$bucket"
+            statements=()
+            hosts=(${lib.escapeShellArgs platform.hosts})
+            for host in "''${hosts[@]}"; do
+              key=$host-${toString n}
+              user "$key" "$key-test-secret"
+              statements+=("$(jq -cn --arg key "$key" --arg bucket "$bucket" --arg path "hosts/$host/" '[
+                {Effect: "Allow", Principal: {AWS: [$key]}, Action: ["s3:ListBucket"],
+                  Resource: ["arn:aws:s3:::\($bucket)"], Condition: {StringLike: {"s3:prefix": ["\($path)*"]}}},
+                {Effect: "Allow", Principal: {AWS: [$key]}, Action: ["s3:GetObject", "s3:PutObject"],
+                  Resource: ["arn:aws:s3:::\($bucket)/\($path)*"]}]')")
+            done
+            user kit-${toString n} kit-${toString n}-test-secret
+            statements+=("$(jq -cn --arg bucket "$bucket" '[
+              {Effect: "Allow", Principal: {AWS: ["kit-${toString n}"]}, Action: ["s3:ListBucket"],
+                Resource: ["arn:aws:s3:::\($bucket)"]},
+              {Effect: "Allow", Principal: {AWS: ["kit-${toString n}"]}, Action: ["s3:GetObject"],
+                Resource: ["arn:aws:s3:::\($bucket)/*"]}]')")
+            printf '%s\n' "''${statements[@]}" | policy "$bucket"
+            echo kit >"$RUNTIME_DIRECTORY/marker"
+            aws s3api put-object --bucket "$bucket" --key kit/marker --body "$RUNTIME_DIRECTORY/marker"
           '';
         };
       in

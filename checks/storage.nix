@@ -56,6 +56,15 @@ in
       tokenFile = "/run/secrets/alerts-token";
       smart = false;
     };
+    offsite = {
+      recipients = [ keys.snakeOilEd25519PublicKey ];
+      targets = lib.genAttrs [ "1" "2" ] (n: {
+        endpoint = "https://s3.example.org";
+        region = "example";
+        bucket = "example-platform";
+        credentialsFile = "/run/secrets/offsite-${n}";
+      });
+    };
   };
 
   # Runs on the installed system once it has booted, from vda and vdb.

@@ -1,8 +1,8 @@
 # Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and pointed at the repository,
 # out of reach of namespace admins, pods held to the restricted Pod Security Standard, secrets encrypted at rest with
-# secretbox and only SSH and web ports open. Ceph's disks have stable names, their DB volumes lie on an array over
-# both system disks, the kernel maps and decrypts Ceph's volumes without loading modules, and k3s keeps no volumes of
-# its own. An app's charts reach only its own namespace and can neither widen who may act there nor publish ports, no
+# secretbox and only SSH and web ports open. Ceph's disks have stable names, their DB volumes lie on an array over both
+# system disks, the kernel maps and decrypts Ceph's volumes without loading modules, and k3s keeps no volumes of its
+# own. An app's charts reach only its own namespace and can neither widen who may act there nor publish ports, no
 # namespace but Ceph's leaves restricted Pod Security, and no Service takes external IPs. A tenant's namespaces, names
 # in flux-system and hosts are its own, Gateways, certificates and ACME orders stay in the gateway namespace, Issuers
 # sign a namespace's own names only where the platform allows a private CA, a tenant's PostgreSQL takes no restore while
@@ -14,9 +14,10 @@
 # server falls back to a second channel when the watcher is gone. The server and its Flux only take commits signed by a
 # release signer, the server never goes back to an older one, and it alerts when its configuration gets old. The
 # server's checks read how old the backups the cluster records are and Ceph's health with an account that reads nothing
-# else, and alert once per change, also when the cluster can't be read. Wiped, the server comes back from a compressed
-# etcd snapshot through its restore command, with its token file alone; another token leaves a running server's own
-# database in place.
+# else, and alert once per change, also when the cluster can't be read. Its etcd snapshots reach both providers
+# encrypted to recovery keys, under a prefix its key can neither leave nor empty; with one provider down they still
+# reach the other, and the phone hears of it. Wiped, the server comes back from a provider's copy through its restore
+# command, with its token file alone; another token leaves a running server's own database in place.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -163,15 +164,32 @@ let
   phone = "-u phone:${phonePassword}";
   # Phones read through the public host name and nginx, as the apps do.
   ops = "curl -fsS ${phone} 'http://alerts.test/ops/json?poll=1'";
+
+  # The two providers the server copies its own state to, on the watcher at addresses of their own; its nginx holds
+  # port 80.
+  s3Address = n: "192.168.1.10${toString n}";
+  s3Port = 9000;
+  platformBucket = "test-platform";
 in
 pkgs.testers.runNixOSTest {
   name = "suveraen";
 
   nodes = {
     watcher =
-      { lib, ... }:
+      { lib, nodes, ... }:
       {
-        imports = [ module ];
+        imports = [
+          module
+          (import ./providers.nix {
+            cluster = null;
+            platform = {
+              bucket = platformBucket;
+              hosts = [ nodes.server.networking.hostName ];
+            };
+            address = s3Address;
+            port = s3Port;
+          })
+        ];
 
         # Plain HTTP in the VM; certificates are nginx's ordinary ACME setup.
         services.nginx.virtualHosts = lib.genAttrs [ "alerts.test" "status.test" ] (_: {
@@ -184,6 +202,10 @@ pkgs.testers.runNixOSTest {
         environment.systemPackages = [
           pkgs.netcat
           pkgs.jq
+          # What the operator restores the server with.
+          pkgs.rclone
+          pkgs.age
+          pkgs.unzip
         ];
 
         suveraen = {
@@ -212,7 +234,7 @@ pkgs.testers.runNixOSTest {
       };
 
     server =
-      { nodes, ... }:
+      { config, nodes, ... }:
       {
         imports = [
           module
@@ -225,10 +247,14 @@ pkgs.testers.runNixOSTest {
           cores = 2;
         };
 
-        networking.hosts.${nodes.watcher.networking.primaryIPAddress} = [
-          "alerts.test"
-          "status.test"
-        ];
+        networking.hosts = {
+          ${nodes.watcher.networking.primaryIPAddress} = [
+            "alerts.test"
+            "status.test"
+          ];
+          ${s3Address 1} = [ "s3-1.test" ];
+          ${s3Address 2} = [ "s3-2.test" ];
+        };
 
         # A name only the node's own resolver knows, to show pods resolve through it.
         services.unbound.settings.server.local-data = [ ''"probe.test. A 192.0.2.53"'' ];
@@ -263,6 +289,20 @@ pkgs.testers.runNixOSTest {
             path = "/var/lib/backup-probe";
             maxAge = "1h";
           };
+          offsite = {
+            recipients = [ keys.snakeOilEd25519PublicKey ];
+            targets = pkgs.lib.genAttrs [ "1" "2" ] (n: {
+              endpoint = "http://s3-${n}.test:${toString s3Port}";
+              region = "us-east-1";
+              bucket = platformBucket;
+              credentialsFile = toString (
+                pkgs.writeText "offsite-${n}" ''
+                  AWS_ACCESS_KEY_ID=${config.networking.hostName}-${n}
+                  AWS_SECRET_ACCESS_KEY=${config.networking.hostName}-${n}-test-secret
+                ''
+              );
+            });
+          };
           alerts = {
             urlFile = toString (pkgs.writeText "alerts-url" "http://alerts.test/ops");
             tokenFile = "${secrets}/publisher-token";
@@ -293,11 +333,12 @@ pkgs.testers.runNixOSTest {
     in
     ''
       import json
+      import secrets
       import shlex
 
       start_all()
-      # The checks run when the test says.
-      server.succeed("systemctl stop host-checks.timer")
+      # The checks and copies run when the test says.
+      server.succeed("systemctl stop host-checks.timer offsite.timer")
 
       watcher.wait_for_unit("ntfy-sh.service")
       watcher.wait_for_unit("gatus.service")
@@ -1127,6 +1168,93 @@ pkgs.testers.runNixOSTest {
           server.succeed("systemctl start host-checks")
           assert len(sent("cluster status readable again")) == 1
 
+      snapshots = "/var/lib/rancher/k3s/server/db/snapshots"
+      platform = "${platformBucket}"
+      providers = ${
+        builtins.toJSON (pkgs.lib.genAttrs [ "1" "2" ] (n: "${s3Address n}:${toString s3Port}"))
+      }
+
+      # A new etcd snapshot, as if k3s had made it a while ago: the copy leaves out one younger than a minute, which
+      # may still be being written.
+      def snapshot(name):
+          server.succeed(f"k3s etcd-snapshot save --name {name}")
+          [path] = server.succeed(f"ls {snapshots}/{name}-*.zip").split()
+          server.succeed(f"touch -d '-2 minutes' {path}")
+          return path.removeprefix(f"{snapshots}/")
+
+      def copies(n):
+          return f"/var/lib/s3-{n}/data/{platform}/hosts/server/etcd"
+
+      # What provider n holds of the platform's bucket, old versions included.
+      def held(n):
+          return watcher.succeed(f"find /var/lib/s3-{n}/data/{platform} /var/lib/s3-{n}/versions -type f -printf '%p %s %T@\\n'")
+
+      def stamp(n):
+          return server.succeed(f"stat -c %Y /var/lib/offsite/state/etcd.{n}").strip()
+
+      def mtime(name):
+          return server.succeed(f"stat -c %Y {snapshots}/{name}").strip()
+
+      def refused_at(n, key, args):
+          status, out = watcher.execute(
+              f"AWS_ACCESS_KEY_ID={key} AWS_SECRET_ACCESS_KEY={key}-test-secret AWS_DEFAULT_REGION=us-east-1"
+              f" AWS_ENDPOINT_URL=http://{providers[str(n)]} HOME=/tmp aws {args} 2>&1"
+          )
+          assert status != 0 and "AccessDenied" in out, (n, args, out)
+
+      with subtest("The server's etcd snapshots reach both providers encrypted to the recovery keys, under a prefix its key can neither leave nor empty"):
+          marker = f"plain-marker-{secrets.token_hex(8)}"
+          server.succeed(
+              f"kubectl create configmap marker --from-literal=value={marker}"
+              " && kubectl create secret generic drill --from-literal=value=kept"
+          )
+          drill = snapshot("drill")
+          server.succeed("systemctl start offsite")
+          for n in [1, 2]:
+              watcher.succeed(f"test -s {copies(n)}/{drill}.age")
+              watcher.succeed(
+                  f"find /var/lib/s3-{n}/data/{platform}/hosts -type f"
+                  " | while read -r f; do test \"$(head -c 21 \"$f\")\" = age-encryption.org/v1 || exit 1; done"
+              )
+              watcher.fail(f"grep -rqF {marker} /var/lib/s3-{n}")
+              watcher.succeed(
+                  f"age -d -i ${keys.snakeOilEd25519PrivateKey} -o /tmp/drill.zip {copies(n)}/{drill}.age"
+                  f" && unzip -p /tmp/drill.zip | grep -aqF {marker}"
+              )
+              key = f"server-{n}"
+              refused_at(n, key, f"s3api delete-object --bucket {platform} --key hosts/server/etcd/{drill}.age")
+              refused_at(n, key, f"s3api list-objects-v2 --bucket {platform} --prefix hosts/other/")
+              refused_at(n, key, f"s3api put-object --bucket {platform} --key kit/x --body /etc/hostname")
+              refused_at(n, key, f"s3api get-object --bucket {platform} --key kit/marker /tmp/marker")
+              assert stamp(n) == mtime(drill), (n, stamp(n), mtime(drill))
+          uploaded = {n: held(n) for n in [1, 2]}
+          server.succeed("systemctl start offsite")
+          assert {n: held(n) for n in [1, 2]} == uploaded, uploaded
+          # Nor is a snapshot encrypted again once its copy has left the spool, as when a rollback brings an older one
+          # back among the newest: the providers would take the new ciphertext for a changed copy.
+          server.succeed(f"rm /var/lib/offsite/spool/etcd/{drill}.age && systemctl start offsite")
+          server.fail(f"test -e /var/lib/offsite/spool/etcd/{drill}.age")
+          assert {n: held(n) for n in [1, 2]} == uploaded, uploaded
+
+      with subtest("A provider that is down holds up neither the other's copy nor the alert"):
+          watcher.succeed("systemctl stop s3-1")
+          first = stamp(1)
+          drill2 = snapshot("drill2")
+          server.fail("systemctl start offsite")
+          # The alert carries the unit's journal, which names the provider.
+          server.wait_until_succeeds(
+              "${ops} | jq -r 'select(.title == \"server: offsite.service failed\") | .message'"
+              " | grep -Fx 'The copy to 1 failed.'"
+          )
+          watcher.succeed(f"test -s {copies(2)}/{drill2}.age")
+          watcher.fail(f"test -e {copies(1)}/{drill2}.age")
+          assert stamp(2) == mtime(drill2) and stamp(1) == first, (stamp(1), stamp(2), first)
+          watcher.succeed("systemctl start s3-1")
+          watcher.wait_until_succeeds(f"curl -s -o /dev/null http://{providers['1']}")
+          server.succeed("systemctl start offsite")
+          watcher.succeed(f"test -s {copies(1)}/{drill2}.age")
+          assert stamp(1) == mtime(drill2), stamp(1)
+
       with subtest("The watcher keeps no record of who reads alerts"):
           # The phone account has read alerts through nginx above.
           watcher.fail("test -s /var/log/nginx/access.log")
@@ -1155,17 +1283,27 @@ pkgs.testers.runNixOSTest {
               timeout=300,
           )
 
-      with subtest("A wiped server comes back from a compressed etcd snapshot with its token file, and not with another token, which leaves a running one as it was"):
-          server.succeed(
-              "kubectl create secret generic drill --from-literal=value=kept && k3s etcd-snapshot save --name drill"
-              " && cp /var/lib/rancher/k3s/server/db/snapshots/drill-*.zip /root/drill.zip"
-              " && sha256sum /var/lib/rancher/k3s/server/token > /root/token.sum"
+      with subtest("A wiped server comes back from a provider's copy, decrypted with a recovery key, with its token file and not another, which leaves a running one as it was"):
+          server.succeed("sha256sum /var/lib/rancher/k3s/server/token > /root/token.sum")
+          # As the operator does: the newest copy at a provider, read with the kit's key and decrypted off the server.
+          kit = (
+              "RCLONE_CONFIG_KIT_TYPE=s3 RCLONE_CONFIG_KIT_PROVIDER=Other RCLONE_CONFIG_KIT_REGION=us-east-1"
+              f" RCLONE_CONFIG_KIT_ENDPOINT=http://{providers['2']} RCLONE_CONFIG_KIT_ACCESS_KEY_ID=kit-2"
+              " RCLONE_CONFIG_KIT_SECRET_ACCESS_KEY=kit-2-test-secret HOME=/tmp"
+          )
+          etcd = f"kit:{platform}/hosts/server/etcd/"
+          newest = watcher.succeed(
+              f"{kit} rclone lsf --files-only --format tp {etcd} | sort | tail -n 1 | cut -d ';' -f 2"
+          ).strip()
+          assert newest == f"{drill2}.age", newest
+          watcher.succeed(
+              f"{kit} rclone cat {etcd}{newest} | age -d -i ${keys.snakeOilEd25519PrivateKey} > /tmp/shared/restore.zip"
           )
 
           # It prints k3s's whole log, which is long.
           def restored(args="", timeout=600):
               status = server.execute(
-                  f"timeout {timeout} suveraen-etcd-restore {args} < /root/drill.zip"
+                  f"timeout {timeout} suveraen-etcd-restore {args} < /tmp/shared/restore.zip"
                   " > /tmp/shared/restore.log 2>&1"
               )[0]
               return status, (server.shared_dir / "restore.log").read_text(errors="replace")
@@ -1195,6 +1333,7 @@ pkgs.testers.runNixOSTest {
           server.wait_until_succeeds(
               "kubectl get secret drill -o jsonpath='{.data.value}' | base64 -d | grep -x kept", timeout=300
           )
+          server.succeed(f"kubectl get configmap marker -o jsonpath='{{.data.value}}' | grep -x {marker}")
           server.succeed("sha256sum -c /root/token.sum")
           stored_with_secretbox()
     '';
