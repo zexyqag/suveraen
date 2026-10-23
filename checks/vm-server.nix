@@ -21,8 +21,9 @@ let
   ceph = config.suveraen.storage.ceph;
   slots = lib.range 0 (ceph.dbSlots - 1);
   members = lib.concatMapStringsSep " " disk dbDisks;
-  # nixos/storage.nix's volume group for the DBs.
-  group = "osd-db";
+  # The partition disko gives a slot's DB on the array, which nixos/storage.nix names as its volume group.
+  name = slot: "osd${toString slot}-db";
+  part = slot: config.disko.devices.mdadm.osd-db.content.partitions.${name slot};
 in
 {
   virtualisation.emptyDiskImages = map (serial: {
@@ -30,13 +31,14 @@ in
     driveConfig.deviceExtraOpts.serial = serial;
   }) (hdds ++ dbDisks);
 
-  # What disko makes on a real server's two system disks: a RAID1 array over both, and on it a volume group with a
-  # logical volume per slot.
+  # What disko makes on a real server's two system disks: a RAID1 array over both, on it a partition per slot at the
+  # size disko gives it, and on each a volume group that a single logical volume fills.
   systemd.services.osd-db-volumes = {
     description = "Make the DB volumes of Ceph's OSDs";
     wantedBy = [ "k3s.service" ];
     before = [ "k3s.service" ];
     path = [
+      pkgs.gptfdisk
       pkgs.mdadm
       config.services.lvm.package
       config.systemd.package
@@ -49,20 +51,21 @@ in
       udevadm wait --timeout=60 ${members}
       if ! mdadm --examine ${disk (lib.head dbDisks)} >/dev/null 2>&1; then
         echo y | mdadm --create /dev/md/osd-db --run --level=1 --raid-devices=2 --homehost=any ${members}
+        udevadm settle
+        sgdisk --align-end ${
+          lib.concatMapStringsSep " " (
+            slot: "--new=${toString (part slot)._index}:0:${(part slot).end}"
+          ) slots
+        } /dev/md/osd-db
+        udevadm settle
+        ${lib.concatMapStrings (slot: ''
+          pvcreate --yes ${(part slot).device}
+          vgcreate ${name slot} ${(part slot).device}
+          lvcreate --yes -l 100%FREE -n db ${name slot}
+        '') slots}
       fi
       udevadm settle
       [ -e /dev/md/osd-db ] || mdadm --assemble /dev/md/osd-db ${members}
-      udevadm settle
-      if ! vgs ${group} >/dev/null 2>&1; then
-        pvcreate --yes /dev/md/osd-db
-        vgcreate ${group} /dev/md/osd-db
-      fi
-    ''
-    + lib.concatMapStrings (slot: ''
-      lvs ${group}/osd${toString slot}-db >/dev/null 2>&1 \
-        || lvcreate --yes -L ${ceph.dbSize} -n osd${toString slot}-db ${group}
-    '') slots
-    + ''
       udevadm settle
       udevadm wait --timeout=60 ${
         lib.concatMapStringsSep " " (slot: "/dev/disk/by-osd/osd${toString slot}-db") slots

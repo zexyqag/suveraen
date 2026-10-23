@@ -381,7 +381,7 @@ pkgs.testers.runNixOSTest {
           )
           server.wait_until_succeeds("kubectl -n flux-system get secret sops-age", timeout=300)
 
-      with subtest("Ceph's disks have stable names and DB volumes on an array over both disks, and k3s keeps no volumes"):
+      with subtest("Ceph's disks have stable names and DB volumes, each filling a group of its own on an array over both disks, and k3s keeps no volumes"):
           server.wait_for_unit("osd-db-volumes.service")
           for module in ["rbd", "dm_crypt"]:
               server.succeed(f"grep -q '^{module} ' /proc/modules")
@@ -389,9 +389,13 @@ pkgs.testers.runNixOSTest {
           assert len(disks) == 3, disks
           for slot, disk in enumerate(disks):
               server.succeed(f"test $(readlink -f /dev/disk/by-osd/osd{slot}) = $(readlink -f {disk})")
-              # On the array over the test's stand-ins for the two system disks.
-              below = server.succeed(f"lsblk -snro NAME,TYPE $(readlink -f /dev/disk/by-osd/osd{slot}-db)")
-              assert below.split("\n")[0].endswith(" lvm") and " raid1\n" in below, below
+              volume = f"/dev/disk/by-osd/osd{slot}-db"
+              server.succeed(f"test $(readlink -f {volume}) = $(readlink -f /dev/osd{slot}-db/db)")
+              counts = server.succeed(f"vgs --noheadings -o pv_count,lv_count,vg_free_count osd{slot}-db").split()
+              assert counts == ["1", "1", "0"], (slot, counts)
+              # On a partition of the array over the test's stand-ins for the two system disks.
+              below = server.succeed(f"lsblk -snro NAME,TYPE $(readlink -f {volume})").split("\n")
+              assert below[0].endswith(" lvm") and below[1].endswith(" part") and below[2].endswith(" raid1"), below
               for half in range(2):
                   name = server.succeed(f"basename $(readlink -f /dev/disk/by-id/virtio-db{half})").strip()
                   assert f"{name} disk" in below, (slot, below)

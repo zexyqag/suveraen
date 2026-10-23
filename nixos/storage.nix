@@ -43,53 +43,63 @@ let
   slots = lib.range 0 (cfg.ceph.dbSlots - 1);
   withDb = slots != [ ];
 
-  # BlueStore's DBs, a logical volume per OSD slot in this group, which the cluster finds as
-  # /dev/disk/by-osd/osdN-db. Volumes, not partitions: ceph-volume 20.2 fails to prepare an encrypted OSD whose DB is a
-  # partition. On two system disks the group lies on a RAID1 array over a partition of each: an OSD dies with its DB,
-  # and with copies spread over the OSDs of one server, a disk taking half the DBs with it would take every copy of
-  # some data.
-  dbGroup = "osd-db";
-  dbVolume = {
-    type = "lvm_pv";
-    vg = dbGroup;
-  };
+  # BlueStore's DBs, a logical volume per OSD slot, which the cluster finds as /dev/disk/by-osd/osdN-db. Volumes, not
+  # partitions: ceph-volume 20.2 fails to prepare an encrypted OSD whose DB is a partition. Each fills a group of its
+  # own on a partition of its own: Rook's OSD activation resizes the group its DB lies in from inside the pod, outside
+  # the host's LVM locks, so OSDs starting together would tear a shared group's metadata, and a full group leaves it
+  # nothing to grow. On two system disks the partitions lie on a RAID1 array over a partition of each: an OSD dies with
+  # its DB, and with copies spread over the OSDs of one server, a disk taking half the DBs with it would take every copy
+  # of some data.
+  dbName = slot: "osd${toString slot}-db";
 
-  # Each disk's share holds every DB, and room for the array's metadata (up to 128 MiB on large disks), LVM's own,
-  # and each volume rounded up to whole extents.
-  dbShare =
+  dbKiB =
     let
       unit = lib.substring (lib.stringLength cfg.ceph.dbSize - 1) 1 cfg.ceph.dbSize;
-      kib =
-        lib.toInt (lib.removeSuffix unit cfg.ceph.dbSize)
-        * {
-          K = 1;
-          M = 1024;
-          G = 1024 * 1024;
-          T = 1024 * 1024 * 1024;
-        }
-        .${unit};
     in
-    {
-      osd-db = {
-        size = "${toString (cfg.ceph.dbSlots * kib + 256 * 1024)}K";
-        priority = 1100;
-        content =
-          if mirrored then
-            {
-              type = "mdraid";
-              name = "osd-db";
-            }
-          else
-            dbVolume;
+    lib.toInt (lib.removeSuffix unit cfg.ceph.dbSize)
+    * {
+      K = 1;
+      M = 1024;
+      G = 1024 * 1024;
+      T = 1024 * 1024 * 1024;
+    }
+    .${unit};
+
+  # Each with room for LVM's metadata and the rounding to whole extents.
+  dbPartitionKiB = dbKiB + 8 * 1024;
+  dbPartitions = lib.listToAttrs (
+    map (
+      slot:
+      lib.nameValuePair (dbName slot) {
+        size = "${toString dbPartitionKiB}K";
+        priority = 1100 + slot;
+        content = {
+          type = "lvm_pv";
+          vg = dbName slot;
+        };
+      }
+    ) slots
+  );
+
+  # Each disk's share of that array holds every DB partition, and room for the array's metadata (up to 128 MiB on
+  # large disks) and the partition table on it.
+  dbShare = {
+    osd-db = {
+      size = "${toString (cfg.ceph.dbSlots * dbPartitionKiB + 256 * 1024)}K";
+      priority = 1100;
+      content = {
+        type = "mdraid";
+        name = "osd-db";
       };
     };
+  };
 
   systemDisk = i: device: {
     type = "disk";
     inherit device;
     content = {
       type = "gpt";
-      partitions = lib.optionalAttrs withDb dbShare // {
+      partitions = lib.optionalAttrs withDb (if mirrored then dbShare else dbPartitions) // {
         bios = {
           size = "1M";
           type = "EF02";
@@ -194,8 +204,8 @@ in
         default = lib.length cfg.ceph.disks;
         defaultText = lib.literalExpression "length config.suveraen.storage.ceph.disks";
         description = ''
-          BlueStore DB volumes made at install, on the system disk or mirrored over both. Their group has room for
-          these alone, so reserve one for every disk the machine may ever give Ceph.
+          BlueStore DB volumes made at install, on the system disk or mirrored over both. There is room for these
+          alone, so reserve one for every disk the machine may ever give Ceph.
         '';
       };
 
@@ -204,8 +214,8 @@ in
         default = null;
         example = "150G";
         description = ''
-          Size of each DB volume, about 1% of its disk. With two system disks each holds all of them, dbSlots times
-          this size.
+          Least size of each DB volume, about 1% of its disk: each fills a partition 8 MiB larger, less LVM's
+          metadata. With two system disks each holds all of them, dbSlots times this size.
         '';
       };
     };
@@ -292,24 +302,22 @@ in
           osd-db = {
             type = "mdadm";
             level = 1;
-            content = dbVolume;
+            content = {
+              type = "gpt";
+              partitions = dbPartitions;
+            };
           };
         };
 
-      lvm_vg = lib.optionalAttrs withDb {
-        ${dbGroup} = {
-          type = "lvm_vg";
-          lvs = lib.listToAttrs (
-            map (
-              slot:
-              lib.nameValuePair "osd${toString slot}-db" {
-                size = cfg.ceph.dbSize;
-                priority = 1000 + slot;
-              }
-            ) slots
-          );
-        };
-      };
+      lvm_vg = lib.listToAttrs (
+        map (
+          slot:
+          lib.nameValuePair (dbName slot) {
+            type = "lvm_vg";
+            lvs.db.size = "100%";
+          }
+        ) slots
+      );
 
       # Apart from rpool/var and bounded, so a full disk of images or pods can't stop etcd or the monitors. Images and
       # pods' state go without snapshots.
@@ -333,7 +341,7 @@ in
         SUBSYSTEM=="block", SYMLINK=="${lib.removePrefix "/dev/" disk}", SYMLINK+="disk/by-osd/osd${toString (i - 1)}"
       '') cfg.ceph.disks
       + lib.optionalString withDb ''
-        SUBSYSTEM=="block", ENV{DM_VG_NAME}=="${dbGroup}", ENV{DM_LV_NAME}=="osd[0-9]*-db", SYMLINK+="disk/by-osd/$env{DM_LV_NAME}"
+        SUBSYSTEM=="block", ENV{DM_VG_NAME}=="osd[0-9]*-db", ENV{DM_LV_NAME}=="db", SYMLINK+="disk/by-osd/$env{DM_VG_NAME}"
       '';
 
     # ceph-volume, in Rook's OSD prepare pods, runs LVM's commands on the host through nsenter, found by the

@@ -1,8 +1,8 @@
-# A server's disk layout as disko installs it on two blank disks, booted: BlueStore DB volumes for Ceph's OSDs lie on a
-# RAID1 array over both system disks, at their size and with nothing on them, LVM's commands reach them by an ordinary
-# PATH, and all stay readable when one disk fails; k3s's and the monitors' datasets are bounded or reserved as set and
-# mounted outside rpool/var; and containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter
-# there.
+# A server's disk layout as disko installs it on two blank disks, booted: BlueStore DB volumes for Ceph's OSDs each fill
+# a volume group of their own on a partition of a RAID1 array over both system disks, at least at their size and with
+# nothing on them, LVM's commands reach them by an ordinary PATH, and all stay readable when one disk fails; k3s's and
+# the monitors' datasets are bounded or reserved as set and mounted outside rpool/var; and containerd's dataset takes
+# overlay mounts, so k3s keeps its overlayfs snapshotter there.
 { lib, pkgs, ... }:
 let
   keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
@@ -72,18 +72,22 @@ in
     machine.succeed("zpool status rpool | grep -qw mirror-0")
     machine.succeed("mdadm --detail /dev/md/osd-db | grep -Eq 'Raid Level : raid1'")
     volumes = [f"/dev/disk/by-osd/osd{slot}-db" for slot in range(4)]
-    for volume in volumes:
-        # A logical volume, and below it the array and both disks.
+    for slot, volume in enumerate(volumes):
+        # LVM activates each group as its partition shows up, which may come after the file systems.
+        machine.wait_for_file(volume)
+        # The one logical volume of its own group, which it fills, on a partition of the array over both disks.
+        machine.succeed(f"test $(readlink -f {volume}) = $(readlink -f /dev/osd{slot}-db/db)")
+        counts = machine.succeed(f"vgs --noheadings -o pv_count,lv_count,vg_free_count osd{slot}-db").split()
+        assert counts == ["1", "1", "0"], (slot, counts)
         below = machine.succeed(f"lsblk -snro NAME,TYPE $(readlink -f {volume})").split("\n")
-        assert below[0].endswith(" lvm"), (volume, below)
-        assert any(line.endswith(" raid1") for line in below), below
+        assert below[0].endswith(" lvm") and below[1].endswith(" part") and below[2].endswith(" raid1"), below
         for disk in ["vda", "vdb"]:
             assert f"{disk} disk" in below, (volume, below)
-        machine.succeed(f"test $(lsblk -bno SIZE {volume}) = ${mib 64}")
+        machine.succeed(f"test $(lsblk -bno SIZE {volume}) -ge ${mib 64}")
         machine.succeed(f"test -z \"$(lsblk -no FSTYPE {volume})\"")
     machine.fail("test -e /dev/disk/by-osd/osd4-db")
     # As ceph-volume finds them from Rook's prepare pods: by a container image's PATH.
-    machine.succeed("env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin lvs osd-db/osd0-db")
+    machine.succeed("env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin lvs osd0-db/db")
     machine.succeed("mdadm /dev/md/osd-db --fail $(mdadm --detail /dev/md/osd-db | grep -o '/dev/vdb[0-9]*')")
     machine.succeed("mdadm --detail /dev/md/osd-db | grep -q degraded")
     for volume in volumes:
