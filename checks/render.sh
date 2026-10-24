@@ -1017,6 +1017,8 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     "network " + (.network.provider // "pods") + "/" + (.network.connections.encryption.enabled // false | tostring),
     "osdMemoryGuaranteed " + ((.resources.osd.requests.memory // "") == (.resources.osd.limits.memory // "-")
       | tostring),
+    "priorities " + (.priorityClassNames.all // "-") + " mon=" + (.priorityClassNames.mon // "-") + " osd="
+      + (.priorityClassNames.osd // "-"),
     "useAllNodes " + (.storage.useAllNodes // false | tostring),
     "nodes " + (.storage | has("nodes") | tostring),
     "useAllDevices " + (.storage.useAllDevices // false | tostring),
@@ -1027,14 +1029,16 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       | map("+" + .) | join(""))] | join(" "))] | .[]' "$rendered"/*.yaml \
     | sed 's|^network host/true$|network encrypted|; s|^network pods/.*$|network encrypted|' >"$w/cephcluster"
   printf '%s\n' "dataDirHostPath /var/lib/rook" "allowUnsupported false" "mons 3" "monsShareNode $share" \
-    "mgrsShareNode $share" "requireMsgr2 true" "network encrypted" "osdMemoryGuaranteed true" "useAllNodes true" \
-    "nodes false" "useAllDevices false" "filters false/false" "config encryptedDevice=true" "devices ${devices% }" \
+    "mgrsShareNode $share" "requireMsgr2 true" "network encrypted" "osdMemoryGuaranteed true" \
+    "priorities platform mon=system-node-critical osd=system-node-critical" "useAllNodes true" "nodes false" \
+    "useAllDevices false" "filters false/false" "config encryptedDevice=true" "devices ${devices% }" \
     >"$w/cephcluster.want"
   bad=$(diff "$w/cephcluster.want" "$w/cephcluster" | sed -n 's/^> //p' | paste -sd';' || true)
   [ -z "$bad" ] || fail "$cluster: the CephCluster keeps its state in /var/lib/rook, runs a supported Ceph with three" \
     "monitors, lets daemons share a node only while copies spread over OSDs, speaks msgr2 alone, encrypted when on" \
-    "the hosts' network, guarantees its OSDs their memory, and takes encrypted OSDs from every node on slots from" \
-    "osd0 on, each with its DB on its own volume: $bad"
+    "the hosts' network, guarantees its OSDs their memory, runs its monitors and OSDs at system-node-critical, which" \
+    "a shutdown stops last, and the rest at the platform's priority, and takes encrypted OSDs from every node on" \
+    "slots from osd0 on, each with its DB on its own volume: $bad"
   # Placement groups follow the OSDs and pools, not the order the pools came in.
   [ "$(yq ea '[select(.kind == "CephCluster")] | .[0].spec.cephConfig.mgr."mgr/pg_autoscaler/threshold"
     | select(tag == "!!str")' "$rendered"/*.yaml)" = 1.0 ] \
@@ -1083,6 +1087,20 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     | sort -u | paste -sd' ')
   [ -z "$bad" ] || fail "$cluster: each CSI driver names the accounts its plugins run as, and each exists, bound to a" \
     "ClusterRole and to a Role in its namespace: $bad"
+  bad=$(yq ea '([select(.apiVersion == "csi.ceph.io/v1" and .kind == "OperatorConfig")]
+    | .[0].spec.driverSpecDefaults.nodePlugin.priorityClassName // "") as $default
+    | [select(.apiVersion == "csi.ceph.io/v1" and .kind == "Driver")
+      | select((.spec.nodePlugin.priorityClassName // $default) != "system-node-critical") | .metadata.name] | .[]' \
+    "$rendered"/*.yaml | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: each CSI driver's node plugin runs at system-node-critical, which a shutdown stops" \
+    "last: $bad"
+  cephcsi=$(yq ea '[select(.kind == "HelmRelease" and .metadata.name == "rook-ceph")] | .[0].spec.values.csi.cephcsi
+    | .repository + ":" + .tag' "$rendered"/*.yaml)
+  barrier=$(yq ea '[select(.kind == "DaemonSet" and .metadata.namespace == "rook-ceph"
+    and .metadata.name == "unmap-barrier") | .spec.template.spec.containers[].image] | join(" ")' "$rendered"/*.yaml)
+  [ "$barrier" = "$cephcsi" ] || fail "$cluster: the DaemonSet unmap-barrier in rook-ceph, which holds a shutdown" \
+    "until no volume is mapped, runs the CSI node plugin's image, already on every node that maps volumes," \
+    "$cephcsi: $barrier"
   for issuer in public standby; do
     [ "$(yq ea "[select(.kind == \"ClusterIssuer\" and .metadata.name == \"$issuer\")] | length" "$rendered"/*.yaml)" \
       = 1 ] || fail "$cluster: the cluster has one ClusterIssuer public, which every host's certificate names, and" \

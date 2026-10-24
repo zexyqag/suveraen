@@ -1,0 +1,59 @@
+---
+# A node's shutdown stops pods by priority and waits for their own mounts, not for their volumes to be unmounted and
+# unmapped. Stopped with the platform's pods, this one holds that group until the node has no RBD image mapped or still
+# being released, so Ceph and its node plugin, stopped after it, still take the volumes' last writes and their clients'
+# locks (nixos/cluster.nix). At the platform's priority, the last group keeps only Kubernetes' own pods, CoreDNS among
+# them, with Ceph's.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: unmap-barrier
+  namespace: rook-ceph
+spec:
+  selector:
+    matchLabels:
+      app: unmap-barrier
+  template:
+    metadata:
+      labels:
+        app: unmap-barrier
+    spec:
+      priorityClassName: platform
+      # The platform's share of a shutdown (nixos/cluster.nix).
+      terminationGracePeriodSeconds: 60
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wait
+          # The node plugin's image (platform/rook-ceph), already on every node that maps volumes.
+          image: quay.io/cephcsi/cephcsi:v3.18.1@sha256:a8c0653a9565049ee7b36a585753e5e0e8fe2e4e5a67e9db3a5f8d9d7e890635
+          # As PID 1 the shell would ignore TERM without a trap, and every stop would take the whole grace period.
+          command: [sh, -c, "trap 'exit 0' TERM; while :; do sleep 3600 & wait; done"]
+          lifecycle:
+            preStop:
+              exec:
+                # sysfs keeps only network devices apart by namespace, so these are the host's. An image leaves the bus
+                # before its client unlocks and unwatches it, and lets go of the rbd module only after.
+                command:
+                  - sh
+                  - -c
+                  - >-
+                    while [ -n "$(ls /sys/bus/rbd/devices)" ]
+                    || [ "$(cat /sys/module/rbd/refcnt 2>/dev/null || echo 0)" != 0 ]; do sleep 1; done
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 1m
+              memory: 8Mi
+            limits:
+              memory: 32Mi

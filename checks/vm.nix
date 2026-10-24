@@ -7,7 +7,7 @@
 # in flux-system and hosts are its own, Gateways stay in the gateway namespace, and so do certificates and ACME
 # orders unless an app terminates TLS for its one host itself, Issuers sign a namespace's own names only where
 # the platform allows a private CA, a tenant's PostgreSQL takes no restore while it runs, and the platform's
-# pods run at a priority no tenant's may ask for. Only the platform's backup jobs and movers reach out of a
+# pods, and Ceph's, run at priorities no tenant's may ask for. Only the platform's backup jobs and movers reach out of a
 # tenant's namespace, and its apps' charts can change neither what they run nor the keys their copies go with,
 # nor make or delete a volume copied off-site. Hosts and pods resolve names through the node's own resolver, and
 # clocks use NTS. The watcher's ntfy only takes known publishers and keeps its account API, stats and attachments
@@ -1087,7 +1087,7 @@ pkgs.testers.runNixOSTest {
           server.succeed("kubectl -n flux-system delete configmap hostnames")
           refused(dry(gateway("alpha", "hello.example.test", "alpha-hello")), "hostnames")
 
-      with subtest("The platform's pods run ahead of tenants', whose pods can't ask for its priority"):
+      with subtest("The platform's pods run ahead of tenants', whose pods can't ask for its priority or Ceph's"):
           server.succeed("kubectl get priorityclass tenant -o jsonpath='{.globalDefault}' | grep -x true")
           classes = server.succeed("kubectl -n flux-system get pods -o jsonpath='{.items[*].spec.priorityClassName}'").split()
           assert classes and set(classes) == {"platform"}, classes
@@ -1109,6 +1109,7 @@ pkgs.testers.runNixOSTest {
               return {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "probe", "namespace": namespace}, "spec": spec}
 
           refused(dry(pod("alpha-hello", "platform")), "tenant-priority")
+          refused(dry(pod("alpha-hello", "system-node-critical")), "tenant-priority")
           out = server.succeed(f"{dry(pod('alpha-hello'))} -o jsonpath='{{.spec.priorityClassName}}'")
           assert out.strip() == "tenant", out
           server.succeed(dry(pod("member", "platform")))

@@ -406,6 +406,8 @@ refuses one-monitor "$cc" "yq -i '.spec.mon.count = 1' $P/cluster.yaml"
 refuses mons-share-node-with-host-domain "$cc" \
   "yq -i '.data.CEPH_FAILURE_DOMAIN = \"host\"' clusters/test/settings.yaml"
 refuses osd-memory-burstable "$cc" "yq -i '.spec.resources.osd.requests.memory = \"512Mi\"' $P/cluster.yaml"
+refuses mon-priority "$cc" "yq -i '.spec.priorityClassNames.mon = \"platform\"' $P/cluster.yaml"
+refuses osd-priority-default "$cc" "yq -i 'del(.spec.priorityClassNames.osd)' $P/cluster.yaml"
 refuses ceph-unsupported "$cc" "yq -i '.spec.cephVersion.allowUnsupported = true' $P/cluster.yaml"
 refuses pg-threshold-default "Ceph's autoscaler acts on every change it recommends" \
   "yq -i 'del(.spec.cephConfig.mgr.\"mgr/pg_autoscaler/threshold\")' $P/cluster.yaml"
@@ -438,6 +440,16 @@ refuses csi-role-missing "$csi in its namespace: $D:rook-ceph/$A-nodeplugin-sa" 
 refuses csi-role-elsewhere "$csi in its namespace: $D:rook-ceph/$A-ctrlplugin-sa" \
   "yq -i '(select(.kind == \"RoleBinding\" or .kind == \"Role\") | select(.metadata.name | test(\"ctrlplugin\"))
    | .metadata.namespace) = \"reloader\"' $P/csi-accounts.yaml"
+nodeplugin="each CSI driver's node plugin runs at system-node-critical, which a shutdown stops last"
+refuses nodeplugin-default-priority "$nodeplugin: $D" \
+  "yq -i '(select(.kind == \"OperatorConfig\") | .spec.driverSpecDefaults.nodePlugin.priorityClassName)
+   = \"platform\"' $P/csi.yaml"
+refuses nodeplugin-driver-priority "$nodeplugin: $D" \
+  "yq -i '(select(.kind == \"Driver\") | .spec.nodePlugin.priorityClassName) = \"platform\"' $P/csi.yaml"
+barrier="unmap-barrier in rook-ceph, which holds a shutdown until no volume is mapped, runs the CSI node plugin's image"
+refuses barrier-image-stale "$barrier, already on every node that maps volumes, quay.io/cephcsi/cephcsi:v3.18.2@" \
+  "sed -i 's/tag: v3.18.1@sha256:/tag: v3.18.2@sha256:/' platform/rook-ceph/app/helmrelease.yaml"
+refuses barrier-missing "$barrier" "sed -i '/unmap-barrier.yaml/d' $P/kustomization.yaml"
 refuses rook-ceph-partial-labels "$privileged: rook-ceph" \
   "sed -i '/audit: privileged/d' components/privileged/kustomization.yaml"
 refuses rook-ceph-baseline "$privileged: rook-ceph" \

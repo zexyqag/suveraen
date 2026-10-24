@@ -9,6 +9,7 @@ resources:
   - ./pools.yaml
   - ./csi.yaml
   - ./csi-accounts.yaml
+  - ./unmap-barrier.yaml
   - ./storageclasses.yaml
   - ./objectstore.yaml
   - ./networkpolicy.yaml

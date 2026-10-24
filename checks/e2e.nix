@@ -5,7 +5,8 @@
 # over DNS-01, its challenge answered in our ACME zone through the node's Knot and removed again, also where an
 # organisation's own DNS points the challenge there; the standby CA, which requires our external account, issues too;
 # every route answers through the host firewall, kube-proxy, the gateway and the app's network policy with a certificate
-# from the CA, and port 80 redirects there; the platform's pods run ahead of tenants'. Each tenant runs in exactly the
+# from the CA, and port 80 redirects there; the platform's pods run ahead of tenants', and Ceph's monitors, OSDs and CSI
+# node plugin at the node's priority, above every pod with a volume. Each tenant runs in exactly the
 # namespaces its manifest asks for, and hello answers on each of its hosts with that tenant's own settings and restarts
 # when they change; a tenant's pods reach neither other tenants' services nor the gateway's, and nothing outside reaches
 # theirs; tenants can't take each other's namespaces or hosts or keep Gateways outside the gateway namespace, and stay
@@ -696,12 +697,23 @@ pkgs.testers.runNixOSTest {
               # The Barman plugin's certificates for its connection with the operator, from its own namespace's CA.
               server.succeed("kubectl -n cloudnative-pg wait certificate --all --for=condition=Ready --timeout=0")
 
-          with subtest("The platform's pods run at its priority, tenants' at theirs"):
+          with subtest("The platform's pods run at its priority, tenants' at theirs, and Ceph's monitors, OSDs and CSI node plugin at the node's, which a shutdown stops last"):
               labels = {n["metadata"]["name"]: n["metadata"].get("labels", {}) for n in items("namespaces")}
+              # Rook gives the monitors' class to their canaries and to each controller's version check too, and the
+              # OSDs' to their prepare jobs.
+              last = {"rook-ceph-mon", "rook-ceph-osd", "rook-ceph-osd-prepare", "rook-ceph.rbd.csi.ceph.com-nodeplugin"}
+              platform = int(server.succeed("kubectl get priorityclass platform -o jsonpath='{.value}'"))
               for p in items("pods"):
-                  ns = p["metadata"]["namespace"]
+                  ns, app = p["metadata"]["namespace"], p["metadata"].get("labels", {}).get("app", "")
+                  # The platform's group of a shutdown waits for every volume to be unmapped, so no pod with one stops
+                  # after it.
+                  if any("persistentVolumeClaim" in v for v in p["spec"].get("volumes", [])):
+                      priority = p["spec"].get("priority", 0)
+                      assert priority <= platform, (p["metadata"]["name"], ns, priority)
                   if "suveraen/tenant" in labels[ns]:
                       want = "tenant"
+                  elif ns == "rook-ceph" and (app in last or app.endswith("-detect-version")):
+                      want = "system-node-critical"
                   elif ns == "flux-system" or labels[ns].get("suveraen/tier") == "platform":
                       want = "platform"
                   else:

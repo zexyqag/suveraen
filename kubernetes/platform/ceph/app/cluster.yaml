@@ -41,10 +41,14 @@ spec:
       # Between nodes the pod network already runs over WireGuard.
       encryption:
         enabled: false
+  # A shutdown stops the monitors and OSDs last, with the CSI node plugin, once every volume is unmapped
+  # (nixos/cluster.nix, unmap-barrier.yaml).
   priorityClassNames:
     all: platform
+    mon: system-node-critical
+    osd: system-node-critical
   resources:
-    # Ceph sizes the OSD's caches from its limit; requests match, so the OSDs are the last pods evicted.
+    # Ceph sizes the OSD's caches from its limit, which requests match.
     osd:
       requests:
         cpu: 250m

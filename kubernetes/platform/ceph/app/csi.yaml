@@ -12,7 +12,8 @@ spec:
       name: rook-csi-operator-image-set-configmap
     fsGroupPolicy: File
     nodePlugin:
-      priorityClassName: platform
+      # Stopped last on a shutdown, with Ceph, so it serves every unmap.
+      priorityClassName: system-node-critical
       kubeletDirPath: /var/lib/kubelet
     controllerPlugin:
       priorityClassName: platform
