@@ -1934,6 +1934,8 @@ pkgs.testers.runNixOSTest {
               server.shutdown()
               server.start()
               server.wait_for_unit("k3s.service")
+              # The boot started the server's checks and copies again.
+              server.succeed("systemctl stop host-checks.timer offsite.timer")
               booted = int(server.succeed("date +%s"))
 
               # Each OSD marks itself up again as it starts, in a later map than the last before the reboot. Until then
