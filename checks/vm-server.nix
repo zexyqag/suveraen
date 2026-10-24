@@ -50,7 +50,7 @@ in
     script = ''
       udevadm wait --timeout=60 ${members}
       if ! mdadm --examine ${disk (lib.head dbDisks)} >/dev/null 2>&1; then
-        echo y | mdadm --create /dev/md/osd-db --run --level=1 --raid-devices=2 --homehost=any ${members}
+        echo y | mdadm --create /dev/md/osd-db --run --level=1 --raid-devices=2 --bitmap=internal --homehost=any ${members}
         udevadm settle
         sgdisk --align-end ${
           lib.concatMapStringsSep " " (

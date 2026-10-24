@@ -401,7 +401,7 @@ pkgs.testers.runNixOSTest {
           )
           server.wait_until_succeeds("kubectl -n flux-system get secret sops-age", timeout=300)
 
-      with subtest("Ceph's disks have stable names and DB volumes, each filling a group of its own on an array over both disks, and k3s keeps no volumes"):
+      with subtest("Ceph's disks have stable names and DB volumes, each filling a group of its own on an array over both disks that keeps a write-intent bitmap, and k3s keeps no volumes"):
           server.wait_for_unit("osd-db-volumes.service")
           for module in ["rbd", "dm_crypt"]:
               server.succeed(f"grep -q '^{module} ' /proc/modules")
@@ -419,6 +419,7 @@ pkgs.testers.runNixOSTest {
               for half in range(2):
                   name = server.succeed(f"basename $(readlink -f /dev/disk/by-id/virtio-db{half})").strip()
                   assert f"{name} disk" in below, (slot, below)
+          server.succeed("mdadm --detail /dev/md/osd-db | grep -q 'Intent Bitmap : Internal'")
           server.fail("test -e /dev/disk/by-osd/osd3")
           server.succeed("test ! -e /var/lib/rancher/k3s/server/manifests/local-storage.yaml")
           server.succeed("test -z \"$(kubectl get storageclass -o name)\"")

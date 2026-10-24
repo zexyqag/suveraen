@@ -302,6 +302,8 @@ in
           osd-db = {
             type = "mdadm";
             level = 1;
+            # An unclean stop then resyncs only what was written since, not the whole array.
+            extraArgs = [ "--bitmap=internal" ];
             content = {
               type = "gpt";
               partitions = dbPartitions;
