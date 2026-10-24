@@ -998,8 +998,9 @@ pkgs.testers.runNixOSTest {
               ).split()
               six = [a for a in published if ipaddress.ip_address(a).version == 6]
               assert len(six) == 1, published
-              forge_six = pseudonym(forge, here, f"[{six[0]}]")
-              acme_six = pseudonym(acme, here, f"[{six[0]}]")
+              # Each from the address meant: both of acme's suit the server's alike, and it would send from the newer.
+              forge_six = pseudonym(forge, here, f"[{six[0]}]", "${nodes.forge.networking.primaryIPv6Address}")
+              acme_six = pseudonym(acme, here, f"[{six[0]}]", "${nodes.acme.networking.primaryIPv6Address}")
               apart_six = pseudonym(acme, here, f"[{six[0]}]", "${apartClient}")
               print(f"forge is {forge_six}, acme {acme_six} and ${apartClient} {apart_six} to {here} over IPv6")
               assert forge_six.version == 6 and forge_six == acme_six, (forge_six, acme_six)
