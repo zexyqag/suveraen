@@ -1207,6 +1207,11 @@ pkgs.testers.runNixOSTest {
           )
           refused(f"kubectl -n alpha-hello create secret generic offsite-2 --dry-run=server {deployer}", "backup-keys")
           server.succeed(f"kubectl -n alpha-hello create secret generic other --dry-run=server {deployer}")
+          # Deleting the namespace takes its Secrets, the keys among them, as one collection.
+          server.succeed(
+              "kubectl delete --raw '/api/v1/namespaces/alpha-hello/secrets?dryRun=All'"
+              f" {by('kube-system:namespace-controller')} >/dev/null"
+          )
           volume = {
               "apiVersion": "v1",
               "kind": "PersistentVolumeClaim",
