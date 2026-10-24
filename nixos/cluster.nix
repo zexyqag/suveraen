@@ -373,6 +373,16 @@ in
         (utils.escapeSystemdExecArg "--etcd-snapshot-schedule-cron=0 */${toString snapshots.everyHours} * * *")
         "--etcd-snapshot-retention=${toString snapshots.keep}"
         "--etcd-snapshot-compress"
+
+        # A controller that can't renew its lease in time ends k3s, and the API server and kubelet with it. The
+        # upstream ones k3s runs allow 10s, which etcd can take while every pod starts after a boot; k3s's own
+        # controllers allow 30s.
+        "--kube-controller-manager-arg=leader-elect-lease-duration=45s"
+        "--kube-controller-manager-arg=leader-elect-renew-deadline=30s"
+        "--kube-scheduler-arg=leader-elect-lease-duration=45s"
+        "--kube-scheduler-arg=leader-elect-renew-deadline=30s"
+        "--kube-cloud-controller-manager-arg=leader-elect-lease-duration=45s"
+        "--kube-cloud-controller-manager-arg=leader-elect-renew-deadline=30s"
       ];
       extraKubeletConfig = {
         # A fork bomb in one pod can't use up the node's process IDs.
