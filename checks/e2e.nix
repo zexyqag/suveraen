@@ -16,19 +16,21 @@
 # disks, three copies on every pool and as many placement groups as its OSDs and pools call for, with room for one more
 # pool, and the pools that hold data capped at what its disks hold with room to recover; block volumes bind, snapshot
 # and restore, and go with their claims; the object store hands out buckets with keys of their own to the pods allowed
-# to reach it; and after a reboot Ceph comes back with its data. Each tenant's PostgreSQL archives WAL and base backups
-# to its own bucket, takes no restore while it runs, and lets each app reach its own database alone, from its own
-# namespace; a removed tenant's cluster and bucket go only with its namespaces. The bucket's running generation goes
-# off-site to two providers, encrypted with the tenant's own key and locked for as long as the template says, where the
-# cluster's keys can neither delete nor unlock a copy, nor reach another app's; when the cluster's object store has lost
-# it, a release brings the tenant's PostgreSQL back from a provider's copy as a new generation, with its apps' data, and
-# later copies leave the old generation's alone. A check that only reads proves each provider's copy whole and
-# decrypting to what the bucket holds, and fails at that provider alone when a copy there changes or goes. An app's
-# volume goes to both providers too, encrypted with the app's own password, and comes back from either as it was copied,
-# without the files deleted before, and a check without restic's lock reads each copy back, fails at that provider alone
-# when a copy there changes or has lost its config, and passes for an app that has copied nothing yet, whose first
-# restore left an empty repository at one provider and none at the other; nothing is left of the volumes copies
-# and restores worked on, and every volume in a tenant's namespace is backed up or VolSync's.
+# to reach it; and a poweroff stops tenants' pods first and Ceph's last, once every volume is unmapped, so PostgreSQL
+# shuts down cleanly, no lock is left behind, and after the reboot Ceph comes back with its data and the volumes with
+# what was written just before. Each tenant's PostgreSQL archives WAL and base backups to its own bucket, takes no
+# restore while it runs, and lets each app reach its own database alone, from its own namespace; a removed tenant's
+# cluster and bucket go only with its namespaces. The bucket's running generation goes off-site to two providers,
+# encrypted with the tenant's own key and locked for as long as the template says, where the cluster's keys can neither
+# delete nor unlock a copy, nor reach another app's; when the cluster's object store has lost it, a release brings the
+# tenant's PostgreSQL back from a provider's copy as a new generation, with its apps' data, and later copies leave the
+# old generation's alone. A check that only reads proves each provider's copy whole and decrypting to what the bucket
+# holds, and fails at that provider alone when a copy there changes or goes. An app's volume goes to both providers too,
+# encrypted with the app's own password, and comes back from either as it was copied, without the files deleted before,
+# and a check without restic's lock reads each copy back, fails at that provider alone when a copy there changes or has
+# lost its config, and passes for an app that has copied nothing yet, whose first restore left an empty repository at
+# one provider and none at the other; nothing is left of the volumes copies and restores worked on, and every volume in
+# a tenant's namespace is backed up or VolSync's.
 # Apps see a pseudonym per host in place of each client's address, never an address a client names in a header. The
 # gateway gets each client's own address, limits each by it, and changes its key when it restarts; neither it nor a
 # tenant's pod logs a client's address.
@@ -535,8 +537,22 @@ pkgs.testers.runNixOSTest {
               " | grep -E 'level=fatal| F[0-9]{4} |panic:|[Ll]eaderelection lost|k3s\\.service|k3s service|Starting k3s '"
               " | grep -vE 'left-over process|unclean termination|remains running after' | tail -n 120",
               "journalctl --list-boots --no-pager",
+              # Without the kernel's retries to reach a stopped monitor, three lines each, which would hide where a hang
+              # began.
               "journalctl -b -1 -o short-monotonic --no-pager"
-              " | grep -iE 'timed out|SIGKILL|still around|Failed unmounting|blocked for more than|libceph|rbd' | tail -n 60",
+              " | grep -iE 'timed out|SIGKILL|still around|Failed unmounting|blocked for more than|libceph|rbd'"
+              " | grep -vE 'libceph: (connect \\(|ceph_tcp_connect failed|mon[0-9]+ .* connect error)' | tail -n 60",
+              # How the kubelet's last shutdown went: when it began and ended, when it told each pod to stop (it logs
+              # its groups' progress only at a higher verbosity), what it unmounted, and how long logind held the
+              # poweroff back for it.
+              "cat /var/lib/kubelet/graceful_node_shutdown_state;"
+              " kubectl get events -A --field-selector reason=NodeShutdown;"
+              " kubectl get events -A --field-selector reason=Killing --sort-by=.lastTimestamp"
+              " -o custom-columns=LAST:.lastTimestamp,NAMESPACE:.metadata.namespace,POD:.involvedObject.name,MESSAGE:.message"
+              " | tail -n 150;"
+              " journalctl -b -1 -u systemd-logind -o short-monotonic --no-pager | tail -n 20;"
+              " journalctl -b -1 -u k3s -o short-monotonic --no-pager"
+              " | grep -iE 'shutdown manager|UnmountDevice|Failed while waiting' | tail -n 60",
               "journalctl -u host-checks -o cat --no-pager | tail -n 80",
               phone,
           ]:
@@ -1948,14 +1964,73 @@ pkgs.testers.runNixOSTest {
 
               retry(healthy_since(restored), timeout_seconds=600)
 
-          with subtest("After a reboot Ceph comes back healthy, and the volumes with their data"):
+          with subtest("A poweroff stops tenants' pods first and Ceph's last, once every volume is unmapped, and after the reboot Ceph comes back healthy, and the volumes with what was written just before"):
+              groups = ${builtins.toJSON nodes.server.services.k3s.extraKubeletConfig.shutdownGracePeriodByPodPriority}
+              login = "org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager"
+
+              # k3s restarted with the restore; its kubelet holds logind's delay lock again.
+              def held(_):
+                  status, out = server.execute(f"busctl --json=short call {login} ListInhibitors")
+                  return status == 0 and any(
+                      i[:2] == ["shutdown", "kubelet"] and i[3] == "delay" for i in json.loads(out)["data"][0]
+                  )
+
+              retry(held, timeout_seconds=300)
+              pg = f"{first}-postgres"
+              # PostgreSQL turns from a smart to a fast shutdown in time to stop within the tenants' group.
+              postgres = f"kubectl -n {pg} get cluster postgres -o jsonpath="
+              smart = int(server.succeed(f"{postgres}'{{.spec.smartShutdownTimeout}}'"))
+              assert 2 * smart <= groups[0]["shutdownGracePeriodSeconds"], (smart, groups)
+              primary = server.succeed(f"{postgres}'{{.status.currentPrimary}}'").strip()
               epoch = ceph("osd dump")["epoch"]
+              # Written just before the poweroff, and read back after it.
+              ns, token = f"{first}-hello", str(time.time_ns())
+              server.succeed(f"kubectl -n {ns} exec deploy/hello -- sh -c 'echo {token} > /data/unsynced'")
+              mapped = server.succeed("ls /sys/bus/rbd/devices").split()
+              assert mapped, "no volume is mapped"
+              # What the pod that holds the platform's group sees is the host's: the images mapped, and the rbd
+              # module's references, which each image holds until its client has let go of it.
+              barrier = "kubectl -n rook-ceph exec ds/unmap-barrier --"
+              seen = server.succeed(f"{barrier} ls /sys/bus/rbd/devices").split()
+              assert seen == mapped, (seen, mapped)
+              references = shown(f"{barrier} cat /sys/module/rbd/refcnt").strip()
+              assert references.isdigit() and int(references) >= len(mapped), (references, mapped)
+              # It may take the platform's whole share of the shutdown.
+              grace = server.succeed(
+                  "kubectl -n rook-ceph get ds unmap-barrier -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}'"
+              )
+              assert int(grace) == groups[1]["shutdownGracePeriodSeconds"], (grace, groups)
+              asked = int(server.succeed("date +%s"))
+              start = time.monotonic()
               server.shutdown()
+              took = time.monotonic() - start
+              print(f"the poweroff took {took:.0f} seconds")
               server.start()
               server.wait_for_unit("k3s.service")
               # The boot started the server's checks and copies again.
               server.succeed("systemctl stop host-checks.timer offsite.timer")
               booted = int(server.succeed("date +%s"))
+
+              # A single unmount that hangs on a stopped Ceph costs systemd 900 seconds here.
+              assert took < 600, took
+              hangs = [
+                  "blocked for more than", "Mount process", "Unmounting timed out",
+                  "Failed unmounting /var/lib/kubelet/", "Syncing filesystems and block devices - timed out",
+                  "Delay lock is active", "Failed while waiting for all the volumes",
+                  # An OSD closing an idle connection is logged in state OPEN, and does no harm.
+                  "libceph: .*(error|failed|socket closed \\(con state (PREOPEN|V[12]_))",
+              ]
+              since = f"journalctl -b -1 --since @{asked} -o cat --no-pager"
+              hung = shown(f"{since} | grep -E {shlex.quote('|'.join(hangs))}")
+              assert not hung.strip(), hung
+              # The kubelet stopped every group, and let the poweroff go before logind would have.
+              state = json.loads(server.succeed("cat /var/lib/kubelet/graceful_node_shutdown_state"))
+              began, ended = moment(state["startTime"]).timestamp(), moment(state["endTime"]).timestamp()
+              most = ${toString nodes.server.services.logind.settings.Login.InhibitDelayMaxSec}
+              assert asked <= began <= ended <= began + most, (asked, state)
+              # Every volume mapped then was written back and unmounted while Ceph still ran.
+              for n in mapped:
+                  server.succeed(f"{since} -k | grep -qF 'EXT4-fs (rbd{n}): unmounting filesystem'")
 
               # Each OSD marks itself up again as it starts, in a later map than the last before the reboot. Until then
               # the monitors may still count it up from before.
@@ -1972,6 +2047,28 @@ pkgs.testers.runNixOSTest {
               apply(on("after", "restored", "cat /data/marker"))
               assert finished("volumes", "after").strip() == "kept"
               retry(healthy_since(booted), timeout_seconds=900)
+              # hello's new pod reads what it wrote last.
+              server.wait_until_succeeds(f"kubectl -n {ns} exec deploy/hello -- true", timeout=600)
+              unsynced = shown(f"kubectl -n {ns} exec deploy/hello -- cat /data/unsynced").strip()
+              assert unsynced == token, (unsynced, token)
+
+              # PostgreSQL's new instance pod starts from a clean shutdown, with no recovery to run.
+              def restarted(_):
+                  status, out = server.execute(
+                      f"kubectl -n {pg} get pod {primary} -o jsonpath="
+                      """'{.metadata.creationTimestamp} {.status.conditions[?(@.type=="Ready")].status}'"""
+                  )
+                  created, _, ready = out.strip().partition(" ")
+                  return status == 0 and ready == "True" and moment(created).timestamp() >= asked
+
+              retry(restarted, timeout_seconds=900)
+              pglog = shown(f"kubectl -n {pg} logs {primary} -c postgres")
+              assert "database system was shut down at" in pglog and "not properly shut down" not in pglog, (
+                  [line for line in pglog.splitlines() if re.search("shut down|recovery|redo", line)][-40:] or pglog[-3000:]
+              )
+              # Their clients unmapped the volumes at the poweroff, so none left a lock to break.
+              broken = shown("journalctl -b -k --no-pager | grep -E 'rbd: rbd[0-9]+: breaking (header|object map) lock'")
+              assert not broken.strip(), broken
 
           with subtest("After a reboot apps see another pseudonym, as its key lived in the gateway's memory alone"):
               forge.wait_until_succeeds(f"{fetch(here)} -o /dev/null", timeout=600)

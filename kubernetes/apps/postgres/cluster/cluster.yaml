@@ -24,6 +24,9 @@ spec:
     limits:
       memory: ${MEMORY}
   enableSuperuserAccess: false
+  # Past this a shutdown turns fast, so PostgreSQL stops within what a node's shutdown gives tenants' pods
+  # (nixos/cluster.nix), however long a client stays connected.
+  smartShutdownTimeout: 60
   # Its pods reach the object store (apps/postgres/app, platform/ceph), and its volumes are backed up by Barman.
   inheritedMetadata:
     labels:

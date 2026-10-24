@@ -22,6 +22,7 @@
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections a second, counted in memory alone; the operator can
 # block one there for a while, and the firewall keeps no record of the connections it refuses.
+# A poweroff waits, within logind's limit, while the kubelet stops pods by priority.
 { pkgs, module }:
 let
   repository = "https://example.invalid/suveraen.git";
@@ -527,6 +528,23 @@ pkgs.testers.runNixOSTest {
           kubelet = json.loads(server.succeed("kubectl get --raw /api/v1/nodes/server/proxy/configz"))["kubeletconfig"]
           assert kubelet["podPidsLimit"] == ${toString nodes.server.services.k3s.extraKubeletConfig.podPidsLimit}, kubelet
           assert kubelet["seccompDefault"], kubelet
+
+      with subtest("A poweroff waits while the kubelet stops pods by priority, for as long as its groups take"):
+          groups = ${builtins.toJSON nodes.server.services.k3s.extraKubeletConfig.shutdownGracePeriodByPodPriority}
+          assert kubelet["shutdownGracePeriodByPodPriority"] == groups, kubelet
+          login = "org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager"
+          delay = json.loads(server.succeed(f"busctl --json=short get-property {login} InhibitDelayMaxUSec"))["data"]
+          assert delay == ${toString nodes.server.services.logind.settings.Login.InhibitDelayMaxSec} * 10**6, delay
+          assert delay > sum(g["shutdownGracePeriodSeconds"] for g in groups) * 10**6, (delay, groups)
+
+          def held(_):
+              inhibitors = json.loads(server.succeed(f"busctl --json=short call {login} ListInhibitors"))["data"][0]
+              return any(i[:2] == ["shutdown", "kubelet"] and i[3] == "delay" for i in inhibitors)
+
+          retry(held, timeout_seconds=120)
+          # The limit is logind's own, and the kubelet's first start, which it never tries again, took the lock.
+          server.fail("test -e /etc/systemd/logind.conf.d/99-kubelet.conf")
+          server.fail("journalctl -u k3s --no-pager | grep -F 'Failed to start node shutdown manager'")
 
       with subtest("Flux and the server only deploy commits signed by a release signer"):
           server.succeed("kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.verify.mode}' | grep -x HEAD")

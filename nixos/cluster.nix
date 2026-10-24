@@ -59,6 +59,33 @@ let
     }
   );
 
+  # The priority classes' values (manifests below). Kubernetes' own, system-cluster-critical and system-node-critical,
+  # start at 2000000000.
+  priorities = {
+    tenant = 1000;
+    platform = 100000;
+    system = 2000000000;
+  };
+
+  # On a shutdown the kubelet stops pods a group at a time, from the lowest priority up, each group for at most its
+  # seconds: tenants', which hold the volumes, with room for PostgreSQL to shut down (kubernetes/apps/postgres); the
+  # platform's, which a pod holds until no volume is mapped (kubernetes/platform/ceph); then Kubernetes' own and Ceph's
+  # with its CSI node plugin, which the unmaps need.
+  shutdownGroups = [
+    {
+      priority = priorities.tenant;
+      shutdownGracePeriodSeconds = 120;
+    }
+    {
+      priority = priorities.platform;
+      shutdownGracePeriodSeconds = 60;
+    }
+    {
+      priority = priorities.system;
+      shutdownGracePeriodSeconds = 60;
+    }
+  ];
+
   inherit (cfg) podCIDRs serviceCIDRs;
 
   # Named after its keys, so a changed list replaces the Secret instead of leaving removed keys in it.
@@ -389,6 +416,7 @@ in
         podPidsLimit = 4096;
         # Pods that don't name a seccomp profile get the runtime's default filter.
         seccompDefault = true;
+        shutdownGracePeriodByPodPriority = shutdownGroups;
       };
       manifests = {
         # When the nodes run short, the platform's pods (priorityClassName platform) are scheduled ahead of tenants',
@@ -398,14 +426,14 @@ in
             apiVersion = "scheduling.k8s.io/v1";
             kind = "PriorityClass";
             metadata.name = "platform";
-            value = 100000;
+            value = priorities.platform;
             description = "The platform every tenant relies on.";
           }
           {
             apiVersion = "scheduling.k8s.io/v1";
             kind = "PriorityClass";
             metadata.name = "tenant";
-            value = 1000;
+            value = priorities.tenant;
             globalDefault = true;
             description = "Tenants' apps.";
           }
@@ -473,6 +501,16 @@ in
         };
       };
     };
+
+    # logind holds a poweroff back while the kubelet stops its groups, with time for its steps between them.
+    services.logind.settings.Login.InhibitDelayMaxSec = lib.foldl' (
+      sum: group: sum + group.shutdownGracePeriodSeconds
+    ) 30 shutdownGroups;
+    # A switch applies it at once. The kubelet it restarts would otherwise find the old limit and write its own, the
+    # bare sum, to /etc/systemd/logind.conf.d, where it would stay.
+    systemd.services.systemd-logind.reloadTriggers = [
+      config.environment.etc."systemd/logind.conf".source
+    ];
 
     # An hour past when the next snapshot was due.
     suveraen.checks.files.etcd-snapshots = {
