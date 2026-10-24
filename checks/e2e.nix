@@ -506,6 +506,9 @@ pkgs.testers.runNixOSTest {
               " kubectl -n $ns get pod $pod -o jsonpath='{.status.containerStatuses[*].state.terminated}{\"\\n\"}';"
               " kubectl -n $ns logs $pod --all-containers --tail=30 --prefix; done",
               "kubectl get networkpolicies -A",
+              # What each namespace being deleted still waits for.
+              "kubectl get namespaces --field-selector status.phase=Terminating"
+              " -o jsonpath='{range .items[*]}{.metadata.name} {.status.conditions}{\"\\n\"}{end}'",
               "kubectl get events -A --sort-by=.lastTimestamp | tail -n 100",
               "kubectl get events -A --field-selector reason=FailedCreate",
               "kubectl -n flux-system logs deploy/source-controller --tail=50",
@@ -1888,8 +1891,16 @@ pkgs.testers.runNixOSTest {
                   forge.succeed(f"{fetch(host)} -o /dev/null")
               for host in theirs:
                   forge.wait_until_fails(f"{fetch(host)} -o /dev/null", timeout=120)
+              asked = int(server.succeed("date +%s"))
+              start = time.monotonic()
               server.succeed(f"kubectl delete namespace -l suveraen/tenant={second} --timeout=300s")
-              gone(f"namespace -l suveraen/tenant={second}")
+              print(f"the tenant's namespaces took {time.monotonic() - start:.0f} seconds to go")
+              # No policy stood in the namespace controller's way.
+              refusals = shown(
+                  f"journalctl -u k3s --since @{asked} -o cat --no-pager"
+                  " | grep -F 'Deletion of namespace failed' | grep -F forbidden"
+              )
+              assert not refusals.strip(), refusals
 
           with subtest("An unsigned commit is never applied"):
               forge.succeed(
