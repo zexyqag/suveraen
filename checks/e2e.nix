@@ -100,7 +100,7 @@ in
 pkgs.testers.runNixOSTest {
   name = "suveraen-e2e";
   # Below the CI job's limit, so the waits in the script run out first and print what went wrong.
-  globalTimeout = 9000;
+  globalTimeout = 6600;
 
   nodes.forge =
     { nodes, ... }:
