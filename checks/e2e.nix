@@ -491,6 +491,9 @@ pkgs.testers.runNixOSTest {
           return [json.loads(line) for line in (server.shared_dir / "alerts").read_text().splitlines() if line]
 
       def diagnose():
+          memory()
+          # Most of what follows asks the API server, which may be restarting.
+          server.execute("timeout 180 sh -c 'until kubectl get --raw /readyz >/dev/null 2>&1; do sleep 5; done'")
           for cmd in [
               "kubectl get gitrepositories,ocirepositories,kustomizations,helmreleases -A",
               "kubectl get pods -A -o wide",
@@ -521,9 +524,15 @@ pkgs.testers.runNixOSTest {
               " | while read -r ns pod; do kubectl -n $ns logs $pod --all-containers --tail=30 --prefix; done",
               "free -m",
               "df -h /",
-              # Why k3s stopped or restarted in this boot, and what held up the last poweroff.
-              "journalctl -b -u k3s -o short-precise --no-pager"
-              " | grep -E 'level=fatal| F[0-9]{4} |panic:|k3s\\.service|k3s service|Starting k3s v' | tail -n 60",
+              # How starved the server is: steal (st) is time the runner didn't give it.
+              "uptime; vmstat 1 5; grep . /proc/pressure/*; cat /proc/mdstat",
+              "journalctl -b -k -o short-monotonic --no-pager"
+              " | grep -iE 'clocksource|blocked for more than|\\bmd[0-9]+|resync' | tail -n 30",
+              # Why k3s stopped or restarted in this boot, without the leftover containers each restart lists, and what
+              # held up the last poweroff.
+              "systemctl show k3s -p NRestarts; journalctl -b -u k3s -o short-precise --no-pager"
+              " | grep -E 'level=fatal| F[0-9]{4} |panic:|[Ll]eaderelection lost|k3s\\.service|k3s service|Starting k3s '"
+              " | grep -vE 'left-over process|unclean termination|remains running after' | tail -n 120",
               "journalctl --list-boots --no-pager",
               "journalctl -b -1 -o short-monotonic --no-pager"
               " | grep -iE 'timed out|SIGKILL|still around|Failed unmounting|blocked for more than|libceph|rbd' | tail -n 60",
@@ -572,10 +581,10 @@ pkgs.testers.runNixOSTest {
               "{range .status.initContainerStatuses[*]}{\" \"}{.name}={.restartCount}:{.lastState.terminated.reason}"
               "/{.lastState.terminated.exitCode}{end}{range .status.containerStatuses[*]}"
               "{\" \"}{.name}={.restartCount}:{.lastState.terminated.reason}/{.lastState.terminated.exitCode}{end}{\"\\n\"}{end}'",
-              # What each OSD's activation did last, with xtrace, before and after its last restart.
-              "for pod in $(kubectl -n rook-ceph get pods -l app=rook-ceph-osd -o name); do"
-              " kubectl -n rook-ceph logs $pod -c activate --prefix --tail=100;"
-              " kubectl -n rook-ceph logs $pod -c activate --prefix --previous --tail=100; done",
+              # What each OSD's activation did last, with xtrace, before and after its last restart; from the kubelet's
+              # files, as the API server may be down.
+              "for log in /var/log/pods/rook-ceph_rook-ceph-osd-[0-9]*/activate/*.log; do"
+              " echo \"==> $log\"; tail -n 100 $log; done",
               "kubectl get volumeattachments -o wide",
               "kubectl -n rook-ceph logs deploy/rook-ceph.rbd.csi.ceph.com-ctrlplugin --all-containers --prefix --tail=50",
               "kubectl -n rook-ceph logs deploy/rook-ceph.rbd.csi.ceph.com-ctrlplugin --all-containers --prefix --previous --tail=50",
@@ -603,7 +612,7 @@ pkgs.testers.runNixOSTest {
           )
           print(out)
 
-      # QEMU's peak memory per running machine, and what the runner has left.
+      # QEMU's peak memory per running machine, and what the runner has left of memory and CPU.
       def memory():
           for machine in machines_qemu:
               if machine.pid is not None:
@@ -611,6 +620,7 @@ pkgs.testers.runNixOSTest {
                       print(machine.name, [line.strip() for line in status if line.startswith(("VmHWM", "VmRSS"))])
           with open("/proc/meminfo") as meminfo:
               print([line.strip() for line in meminfo if line.startswith("MemAvailable")])
+          print("runner load", os.getloadavg(), "on", os.cpu_count(), "CPUs")
 
       server.wait_for_unit("k3s.service")
       try:
