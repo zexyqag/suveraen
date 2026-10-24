@@ -477,6 +477,12 @@ pkgs.testers.runNixOSTest {
           server.execute(f"set +e; ( {cmd} ) > /tmp/shared/output 2>&1")
           return (server.shared_dir / "output").read_bytes().decode(errors="replace")
 
+      # Ceph through the operator, as there's no toolbox.
+      ceph_cli = (
+          "kubectl -n rook-ceph exec deploy/rook-ceph-operator -- timeout 30 ceph --connect-timeout=10"
+          " --conf=/var/lib/rook/rook-ceph/rook-ceph.config"
+      )
+
       # The server's alerts so far, as the phone reads them.
       phone = "curl -fsS -u phone:${phonePassword} 'http://127.0.0.1:2587/ops/json?poll=1'"
 
@@ -532,10 +538,6 @@ pkgs.testers.runNixOSTest {
       # Rook, Ceph through the operator (there's no toolbox), the object store and who may reach it, the CSI drivers,
       # the host's disks, and last ceph-volume's and the OSD prepare pods' own logs.
       def diagnose_ceph():
-          ceph = (
-              "kubectl -n rook-ceph exec deploy/rook-ceph-operator -- timeout 30 ceph --connect-timeout=10"
-              " --conf=/var/lib/rook/rook-ceph/rook-ceph.config"
-          )
           operator = "kubectl -n rook-ceph logs deploy/rook-ceph-operator --tail=-1"
           errors = "grep -E ' (E|W) \\| |op-osd|failed to provision|exec timeout' | tail -n 200"
           for cmd in [
@@ -548,7 +550,7 @@ pkgs.testers.runNixOSTest {
               f"{operator} | {errors}",
               f"{operator} --previous | {errors}",
               "kubectl -n rook-ceph logs deploy/rook-ceph-operator --tail=100",
-              *[f"{ceph} {args}" for args in
+              *[f"{ceph_cli} {args}" for args in
                 ["status", "health detail", "osd tree", "osd dump", "osd crush class ls", "pg stat", "df", "crash ls"]],
               "kubectl get objectbucketclaims,objectbuckets -A -o wide",
               # Endpoints, claims and phases; the keys stay in the claims' Secrets.
@@ -713,11 +715,6 @@ pkgs.testers.runNixOSTest {
                   for address in n["status"]["addresses"]:
                       if address["type"] == "InternalIP":
                           within(address["address"], "NODE")
-
-          ceph_cli = (
-              "kubectl -n rook-ceph exec deploy/rook-ceph-operator -- ceph --connect-timeout=10"
-              " --conf=/var/lib/rook/rook-ceph/rook-ceph.config"
-          )
 
           def ceph(args):
               return parsed(f"{ceph_cli} {args} -f json")
