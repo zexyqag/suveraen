@@ -93,6 +93,8 @@ in
   };
 
   services.k3s.images = [ config.services.k3s.package.airgap-images ];
+  # With this file k3s remembers what it imported, rather than unpacking the tarball again on every start.
+  systemd.tmpfiles.rules = [ "f /var/lib/rancher/k3s/agent/images/.cache.json" ];
 
   # The provider and key that encrypted each Secret, as etcd holds them.
   environment.systemPackages = [
