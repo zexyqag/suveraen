@@ -1977,11 +1977,15 @@ pkgs.testers.runNixOSTest {
 
               retry(held, timeout_seconds=300)
               pg = f"{first}-postgres"
-              # PostgreSQL turns from a smart to a fast shutdown in time to stop within the tenants' group.
               postgres = f"kubectl -n {pg} get cluster postgres -o jsonpath="
               smart = int(server.succeed(f"{postgres}'{{.spec.smartShutdownTimeout}}'"))
-              assert 2 * smart <= groups[0]["shutdownGracePeriodSeconds"], (smart, groups)
               primary = server.succeed(f"{postgres}'{{.status.currentPrimary}}'").strip()
+              # PostgreSQL turns from a smart to a fast shutdown in time to stop within the tenants' group, which is all
+              # its pod asks for.
+              stop = server.succeed(
+                  f"kubectl -n {pg} get pod {primary} -o jsonpath='{{.spec.terminationGracePeriodSeconds}}'"
+              )
+              assert 2 * smart <= int(stop) == groups[0]["shutdownGracePeriodSeconds"], (smart, stop, groups)
               epoch = ceph("osd dump")["epoch"]
               # Written just before the poweroff, and read back after it.
               ns, token = f"{first}-hello", str(time.time_ns())

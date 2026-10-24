@@ -24,6 +24,9 @@ spec:
     limits:
       memory: ${MEMORY}
   enableSuperuserAccess: false
+  # Its pods' grace period: what a node's shutdown gives tenants' pods (nixos/cluster.nix). Kubernetes paces a
+  # namespace's deletion by its pods' grace periods, and with CloudNativePG's 30 minutes it would stall for minutes.
+  stopDelay: 120
   # Past this a shutdown turns fast, so PostgreSQL stops within what a node's shutdown gives tenants' pods
   # (nixos/cluster.nix), however long a client stays connected.
   smartShutdownTimeout: 60
