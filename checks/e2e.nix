@@ -1347,6 +1347,10 @@ pkgs.testers.runNixOSTest {
               assert "platform-admins has no attestation CA list" in out, out
               out = server.succeed(f"suveraen-idm admin {first} platform e2eops 'E2E operator' /tmp/cas.json")
               [token] = re.findall(rf"This link: https://{re.escape(idm[first])}/ui/reset\?token=(\S+)", out)
+              # It comes with the way to open it pinned to the server, and with nothing else that holds the token, such
+              # as a code a phone would open by DNS.
+              hosts_line = f'"${lib.head nodes.server.suveraen.cluster.nodeIP} {idm[first]}"'
+              assert hosts_line in out and out.count(token) == 1, out
               # The link lets them enrol a passkey of an approved make and model, and nothing else.
               exchanged = json.loads(server.succeed(
                   f"curl -fsS {reach[first]} -H 'Content-Type: application/json' -d '\"{token}\"'"

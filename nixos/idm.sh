@@ -582,9 +582,20 @@ case $command in
     fi
     # The client says when it made no link, but exits 0 all the same.
     link=$(cli person credential create-reset-token "$login" --ttl 3600)
-    printf '%s\n' "$link"
     if [[ $link != *"This link: $origin/ui/reset?token="* ]]; then
+      printf '%s\n' "$link"
       fail "$t: Kanidm made no link for $login."
+    elif [ "$role" = platform ]; then
+      # Whoever answers for the identity host takes the link, and with it the account, which then enrols a passkey of
+      # theirs: an organisation's own DNS may name a host of its own. So a platform admin gets no code to scan, which a
+      # phone opens by DNS, and opens the link, and signs in after, only pinned to the gateway, as suveraen-idm does.
+      host=${origin#https://}
+      echo "$t: $login enrols passkeys within an hour at the link below. Open it, and sign in to $host from then on,"
+      echo "only with $host pinned to this server, $gateway, never through DNS, which may lead elsewhere: with a hosts"
+      echo "line \"$gateway $host\", or in Chromium with --host-resolver-rules=\"MAP $host $at\"."
+      sed -n "s#^\(This link: $origin/ui/reset?token=[^[:space:]]*\)\$#\1#p" <<<"$link"
+    else
+      printf '%s\n' "$link"
     fi
     sign_out "$t" "$origin"
     ;;

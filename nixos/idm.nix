@@ -1,7 +1,8 @@
 # Each tenant's Kanidm from the servers, with suveraen-idm (idm.sh):
 #   admin TENANT platform|tenant LOGIN DISPLAY-NAME [ATTESTATION-CA-LIST]: a new person in platform-admins or
-#     tenant-admins, with a link to enrol passkeys within an hour; platform-admins needs the list of the makes and
-#     models it trusts once (fido-mds-tool). It also sets Kanidm's own groups, which no migration reaches;
+#     tenant-admins, with a link to enrol passkeys within an hour, a platform admin's to open only pinned to this
+#     server; platform-admins needs the list of the makes and models it trusts once (fido-mds-tool). It also sets
+#     Kanidm's own groups, which no migration reaches;
 #   sync [TENANT]: copies each confidential client's secret from Kanidm into its app's Secret sso where that doesn't
 #     pass the probe, and sets the flags each client's attachment asks for, for apps a release added, and after an etcd
 #     restore or a cluster rebuilt;
