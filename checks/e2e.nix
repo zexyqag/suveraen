@@ -806,10 +806,11 @@ pkgs.testers.runNixOSTest {
                   raise
               return server.succeed(f"kubectl -n {namespace} logs {pod}")
 
-          # A pod that meets the restricted standard, with the app's image, which has a shell and curl.
+          # A pod that meets the restricted standard, with the app's image, which has a shell and curl. No grep -m1:
+          # under pipefail its early exit fails the pipe once the list outgrows tr's buffer.
           podinfo = server.succeed(
-              "kubectl get pods -A -o jsonpath='{.items[*].spec.containers[*].image}' | tr ' ' '\\n' | grep -m1 podinfo"
-          ).strip()
+              "kubectl get pods -A -o jsonpath='{.items[*].spec.containers[*].image}' | tr ' ' '\\n' | grep podinfo"
+          ).split()[0]
 
           def restricted(namespace, name, command, labels={}, **spec):
               return {
