@@ -25,6 +25,9 @@ spec:
     reloader:
       # Restarts only apps; platform pieces are rolled by their own charts.
       namespaceSelector: suveraen/tier=app
+      # Also when a ConfigMap or Secret an app reads appears, such as an app's migration for Kanidm (components/sso),
+      # which Kanidm reads only as it starts; not for those already there when Reloader starts.
+      reloadOnCreate: true
       readOnlyRootFileSystem: true
       deployment:
         priorityClassName: platform

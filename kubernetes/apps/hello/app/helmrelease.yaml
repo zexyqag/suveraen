@@ -21,6 +21,13 @@ spec:
             envFrom:
               - configMapRef:
                   name: hello
+            # As an app takes its client's secret (components/sso-secret).
+            env:
+              OIDC_CLIENT_SECRET:
+                valueFrom:
+                  secretKeyRef:
+                    name: sso
+                    key: client-secret
             probes:
               liveness:
                 enabled: true

@@ -4,6 +4,7 @@
   pkgs,
   kubernetes,
   ranges,
+  kanidm,
 }:
 pkgs.runCommand "render"
   {
@@ -14,6 +15,6 @@ pkgs.runCommand "render"
     ];
   }
   ''
-    export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges}
+    export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges} KANIDM_VERSION=${kanidm.version}
     bash ${./render.sh} ${kubernetes} $out
   ''

@@ -1,0 +1,31 @@
+---
+# hello's group and its confidential client in its tenant's Kanidm (components/sso). IDs are fixed for good: Kanidm
+# finds an entry by its ID, and never takes one back once a removal named it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sso-hello
+  namespace: ${TENANT}-kanidm
+data:
+  50-hello.json: |
+    {
+      "id": "ab4d46e6-9285-4dae-90a3-8a48117bc333",
+      "assertions": [
+        {
+          "state": "present",
+          "id": "b66c8c43-0175-4dd8-b8fe-ebf2a5cc90c4",
+          "class": ["group"],
+          "name": "hello-users"
+        },
+        {
+          "state": "present",
+          "id": "bb28c86c-bcef-4823-ab4c-6471f17617be",
+          "class": ["account", "oauth2_resource_server", "oauth2_resource_server_basic"],
+          "name": "hello-oidc",
+          "displayname": "hello",
+          "oauth2_rs_origin": ["https://hello.${TENANT_APP_DOMAIN}/oauth2/callback"],
+          "oauth2_rs_origin_landing": "https://hello.${TENANT_APP_DOMAIN}/",
+          "oauth2_rs_scope_map": [{ "group": "hello-users", "scopes": ["openid", "profile"] }]
+        }
+      ]
+    }

@@ -2,9 +2,11 @@
 # other Kustomizations create: the cluster's, each tenant's, then the tenant's apps and hosts. Each gets the values
 # its own sources hold, a stand-in for each encrypted one, and strict substitution. Then checks the rules Flux itself
 # wouldn't catch, on what was rendered rather than on what a file says.
-# Usage: CLUSTER_RANGES=<the servers' ranges> render.sh <kubernetes directory> <output directory>
+# Usage: CLUSTER_RANGES=<the servers' ranges> KANIDM_VERSION=<the Kanidm client's version> \
+#   render.sh <kubernetes directory> <output directory>
 set -euo pipefail
 : "${CLUSTER_RANGES:?the ranges the servers give k3s (nixos/cluster.nix), as <setting>=<range> words}"
+: "${KANIDM_VERSION:?the version of the Kanidm client the platform builds, which the Kanidm server must match}"
 out=$(realpath -m "$2")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -44,6 +46,10 @@ pgkinds=',ObjectBucketClaim.objectbucket.io,ObjectStore.barmancloud.cnpg.io,Job.
 export quotas hard appkinds
 privileged=pod-security.kubernetes.io/audit=privileged,pod-security.kubernetes.io/enforce=privileged
 privileged+=,pod-security.kubernetes.io/warn=privileged
+# Apps that terminate their users' TLS themselves, behind a listener that passes it through (edge/passthrough), which
+# skips the gateway's limits and pseudonyms, as it reads no request: an identity server, which must see its users'
+# passwords and passkeys where nothing else does.
+passthroughapps=kanidm
 # Traefik's options that could log or trust clients' addresses, or bypass the gateway's own settings for them.
 options='(?i)^--?(accesslog|log|entrypoints|forwardedheaders|proxyprotocol|experimental|providers)([.=]|$)'
 export options
@@ -85,6 +91,203 @@ for f in files:
     with open(os.path.join(sys.argv[1], f), "rb") as source:
         assert data[f].encode() == source.read(), f
 '
+# Prints the settings of Kanidm's server.toml that are wrong for the host given, from the rendered app (a JSON list on
+# stdin).
+kanidmconfig='
+import json, sys, tomllib
+docs = [d for d in json.load(sys.stdin) if isinstance(d, dict)]
+host = sys.argv[1]
+config = [d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == "kanidm"]
+release = [d for d in docs if d.get("kind") == "HelmRelease"]
+c = tomllib.loads(config[0].get("data", {}).get("server.toml", "")) if len(config) == 1 else {}
+mounts = release[0]["spec"]["values"]["persistence"]["migrations"].get("globalMounts", []) if release else []
+bad = [k for k in ("ldapbindaddress", "http_client_address_info", "ldap_client_address_info", "replication",
+                   "log_level", "otel_grpc_endpoint") if k in c]
+bad += [k for k, v in (("domain", host), ("origin", "https://" + host)) if c.get(k) != v]
+if [m.get("path") for m in mounts] != [c.get("migration_path")]:
+    bad.append("migration_path")
+print(" ".join(bad))
+'
+# One line of JSON for each source of a tenant's Kanidm migrations: its ConfigMap, and for an app the hosts its
+# listeners name and its Secret sso, in files named by the arguments after the cluster, tenant, source and app.
+migrationsource='
+import json, sys
+cluster, tenant, source, app, configmap, hosts, secrets = sys.argv[1:]
+cm = json.load(open(configmap))
+print(json.dumps({"cluster": cluster, "tenant": tenant, "source": source, "app": app, "files": cm.get("data") or {},
+                  "annotations": (cm.get("metadata") or {}).get("annotations") or {},
+                  "hosts": json.load(open(hosts)), "secrets": json.load(open(secrets))}))
+'
+# Prints what is wrong with the migrations every tenant's Kanidm applies (JSON lines from migrationsource on stdin).
+# Kanidm applies each file in its own transaction and only logs what fails, so render refuses what it would skip.
+migrations='
+import json, re, sys
+from urllib.parse import urlsplit
+uuid = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+# Kanidm makes its builtin entries below this, out of reach of migrations, which skip them without a word.
+dynamic = "00000000-0000-0000-0001-000000000000"
+basic = ["account", "oauth2_resource_server", "oauth2_resource_server_basic"]
+public = ["account", "oauth2_resource_server", "oauth2_resource_server_public"]
+clientkeys = {"state", "id", "class", "name", "displayname", "description", "oauth2_rs_origin",
+              "oauth2_rs_origin_landing", "oauth2_rs_scope_map", "oauth2_rs_sup_scope_map", "oauth2_rs_claim_map",
+              "oauth2_prefer_short_username", "oauth2_consent_prompt_enable"}
+policykeys = {"credential_type_minimum", "authsession_expiry", "privilege_expiry", "entry_managed_by"}
+# Nested in idm_admins, a group takes members only from its manager, so idm_admins manages platform-admins.
+managers = {"platform-admins": ["idm_admins"], "tenant-admins": ["tenant-admins"]}
+# What no migration can set on a client: a confidential one that sends no PKCE, a public one that redirects to the
+# device it runs on.
+flags = {"suveraen/disable-pkce": basic, "suveraen/localhost-redirects": public}
+kinds = {"suveraen/disable-pkce": "confidential", "suveraen/localhost-redirects": "public"}
+placeholder = {"annotations": {"kustomize.toolkit.fluxcd.io/ssa": "IfNotPresent"},
+               "stringData": {"client-secret": "pending"}}
+problems, ids, names, present, absent = [], {}, {}, set(), {}
+
+def bad(where, what):
+    if f"{where}: {what}" not in problems:
+        problems.append(f"{where}: {what}")
+
+def claim(table, key, owner, where, what):
+    if table.setdefault(key, owner) != owner:
+        bad(where, f"{what} {key} is also {table[key]}")
+
+def url(where, value, hosts):
+    parts = urlsplit(value) if isinstance(value, str) else None
+    if parts is None or parts.scheme != "https" or parts.hostname not in {h.lower() for h in hosts} or parts.port \
+            or parts.username:
+        bad(where, f"a client sends members only to https on its own app hosts, not {value}")
+
+for line in sys.stdin:
+    s = json.loads(line)
+    app, source, tenant = s["app"], s["source"], s["cluster"] + "/" + s["tenant"]
+    groups = {"members"} if source != "kanidm-migrations" else set()
+    clients = []
+    for key, text in sorted(s["files"].items()):
+        where = f"{tenant} {source}/{key}"
+        own = f"{source}/{key}"
+        if source == "kanidm-migrations":
+            if not re.fullmatch(r"[0-9]{2}-[a-z0-9-]+[.]json", key):
+                bad(where, "files are named NN-<name>.json")
+        elif key != f"50-{app}.json":
+            bad(where, f"an app adds one file, 50-{app}.json")
+        try:
+            m = json.loads(text)
+        except ValueError as e:
+            bad(where, f"not JSON: {e}")
+            continue
+        if not isinstance(m, dict) or sorted(m) != ["assertions", "id"] or not isinstance(m["assertions"], list) \
+                or not m["assertions"] or not all(isinstance(a, dict) for a in m["assertions"]):
+            bad(where, "a migration has an id and assertions, at least one, as Kanidm refuses an empty one")
+            continue
+        for n, a in enumerate([m] + m["assertions"]):
+            i = a.get("id")
+            if not isinstance(i, str) or not uuid.fullmatch(i) or i < dynamic:
+                bad(where, f"IDs are UUIDs in lowercase from {dynamic} on, not {i}")
+            else:
+                claim(ids, i, f"{own}#{n}", where, "ID")
+        states = {a.get("state") for a in m["assertions"]}
+        if "absent" in states:
+            if source != "kanidm-migrations" or states != {"absent"}:
+                bad(where, "only the platform files remove entries, in files of removals alone")
+            for a in m["assertions"]:
+                if sorted(a) != ["id", "state"]:
+                    bad(where, "a removal names an ID alone")
+                absent.setdefault(a.get("id"), where)
+            continue
+        if states != {"present"}:
+            bad(where, f"an assertion is present or absent, not {sorted(map(str, states))}")
+            continue
+        for a in m["assertions"]:
+            name, classes = a.get("name"), a.get("class")
+            classes = sorted(classes) if isinstance(classes, list) else classes
+            present.add(a.get("id"))
+            if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)+", name) \
+                    and not (name == "members" and source == "kanidm-migrations"):
+                bad(where, f"every name but members holds a -, so no person login can take it: {name}")
+            else:
+                claim(names, name, own + "#" + str(a.get("id")), where, "name")
+            if "member" in a:
+                bad(where, f"groups get their members from admins, not from files: {name}")
+            if classes == ["group"]:
+                extra = set(a) - {"state", "id", "class", "name", "description"}
+                groups.add(name)
+            elif classes == ["account_policy", "group"] and source == "kanidm-migrations":
+                extra = set(a) - {"state", "id", "class", "name", "description"} - policykeys
+                if a.get("entry_managed_by") != managers.get(name):
+                    bad(where, f"idm_admins manages platform-admins, and tenant-admins their own, as a list in Kanidm"
+                        f" 1.11: {name}")
+                groups.add(name)
+            elif classes in (sorted(basic), sorted(public)) and source != "kanidm-migrations":
+                extra = set(a) - clientkeys
+                # Kanidm holds every account to one, and fails the whole file without it.
+                if not isinstance(a.get("displayname"), str) or not a["displayname"].strip():
+                    bad(where, f"a client has a display name: {name}")
+                if classes == sorted(public) and "oauth2_consent_prompt_enable" in a:
+                    extra.add("oauth2_consent_prompt_enable")
+                clients.append((where, a))
+            else:
+                bad(where, f"the platform declares groups, and an app groups and an OAuth2 client, never people,"
+                    f" accounts of another kind or classes Kanidm sets itself: {name} {classes}")
+                continue
+            if extra:
+                bad(where, f"{name} sets {sorted(extra)}, which no migration of its kind sets here")
+        if source == "kanidm-migrations" and key == "10-groups.json":
+            declared = {a.get("name"): a for a in m["assertions"]}
+            if sorted(declared) != ["members", "platform-admins", "tenant-admins"]:
+                bad(where, "the platform groups are members, platform-admins and tenant-admins")
+            p, t = declared.get("platform-admins", {}), declared.get("tenant-admins", {})
+            def within(a, most):
+                e = a.get("privilege_expiry")
+                return isinstance(e, int) and 0 < e <= most and isinstance(a.get("authsession_expiry"), int)
+            if p.get("credential_type_minimum") != "attested_passkey" or not within(p, 300):
+                bad(where, "platform-admins sign in with passkeys of an approved make and model alone, and are asked"
+                    " again within 5 minutes before an admin action")
+            if t.get("credential_type_minimum") not in ("passkey", "attested_passkey") or not within(t, 600):
+                bad(where, "tenant-admins sign in with passkeys alone, and are asked again within 10 minutes before an"
+                    " admin action")
+    if source == "kanidm-migrations":
+        if "10-groups.json" not in s["files"]:
+            bad(f"{tenant} {source}", "the platform groups are in 10-groups.json")
+        continue
+    where = f"{tenant} {source}"
+    if [a.get("name") for _, a in clients] != [f"{app}-oidc"]:
+        bad(where, f"an app has one OAuth2 client, {app}-oidc")
+    if any(not n.startswith(f"{app}-") or n == f"{app}-oidc" for n in groups - {"members"}):
+        bad(where, f"an app names its groups {app}-<name>")
+    secret = None
+    for here, a in clients:
+        kind = basic if sorted(a["class"]) == sorted(basic) else public
+        origins = a.get("oauth2_rs_origin")
+        if not isinstance(origins, list) or not origins:
+            bad(here, "a client names the addresses it may send members back to")
+            origins = []
+        for value in origins + [a.get("oauth2_rs_origin_landing")]:
+            url(here, value, s["hosts"])
+        for field in "oauth2_rs_scope_map", "oauth2_rs_sup_scope_map", "oauth2_rs_claim_map":
+            entries = a.get(field, [])
+            if not isinstance(entries, list) or field == "oauth2_rs_scope_map" and not entries:
+                bad(here, f"{field} is a list, and a client maps at least one group to its scopes")
+                continue
+            for e in entries:
+                if not isinstance(e, dict) or e.get("group") not in groups:
+                    bad(here, f"a client maps members or its own app groups alone: {e}")
+        for flag, value in s["annotations"].items():
+            if flag not in flags or value != "true":
+                bad(where, f"sso-{app} carries no annotation but {sorted(flags)}, set to true: {flag}")
+            elif flags[flag] != kind:
+                bad(where, f"{flag} is for a {kinds[flag]} client")
+        secret = kind == basic
+    shape = [{k: v for k, v in x.items() if k in ("apiVersion", "kind", "type", "data", "stringData", "immutable")}
+             | {"annotations": (x.get("metadata") or {}).get("annotations") or {}} for x in s["secrets"]]
+    want = [{"apiVersion": "v1", "kind": "Secret"} | placeholder] if secret else []
+    if secret is not None and shape != want:
+        bad(where, f"an app with a confidential client holds Secret sso, which Flux makes once with client-secret"
+            f" pending alone (components/sso-secret), and one with a public client none: {shape}")
+
+for i, where in absent.items():
+    if i in present:
+        bad(where, f"a removed entry never comes back, as Kanidm refuses its ID for good: {i}")
+print("\n".join(problems))
+'
 
 # A whole Kubernetes quantity in thousandths of its unit, so CPU's "m" compares too.
 quantity() {
@@ -118,7 +321,8 @@ for dir in kubernetes/apps/*/; do
   [[ $app =~ $namere ]] || fail "$dir: app names are 2 to 16 lowercase letters and digits, starting with a letter"
   [ -f "$dir/ks.yaml" ] || fail "$dir: an app's template is ks.yaml"
   knob=$(tr a-z A-Z <<<"$app")_
-  export app
+  passthrough=$(grep -qxF "$app" <<<"${passthroughapps// /$'\n'}" && echo true || echo false)
+  export app passthrough
   others=$(grep -vxF "${knob%_}" <<<"$appnames" | paste -sd'|' || true)
   bad=$([ -z "$others" ] || grep -rhoE "[$][{]($others)_[A-Z0-9_]*" "$dir" | cut -c3- | sort -u | paste -sd' ' || true)
   [ -z "$bad" ] || fail "$dir: an app reads only its own keys, not $bad"
@@ -162,6 +366,18 @@ for dir in kubernetes/apps/*/; do
             "after \${TENANT}-postgres-cluster alone, with APP $app"
         continue
       fi
+      # An app's groups and OAuth2 client in its tenant's Kanidm, once that runs.
+      if [ "$part" = "\${TENANT}-$app-sso" ]; then
+        yq ea -e "select(documentIndex == $i)"' | ((.metadata | keys | join(",")) == "name"
+          and (.spec | keys | sort | join(",")) == "dependsOn,path,postBuild"
+          and .spec.path == ("./kubernetes/apps/" + strenv(app) + "/sso")
+          and ([.spec.dependsOn[].name] | join(",")) == "${TENANT}-kanidm"
+          and (.spec.postBuild | keys | join(",")) == "substitute"
+          and (.spec.postBuild.substitute | keys | join(",")) == "APP" and .spec.postBuild.substitute.APP == strenv(app))' \
+          "$file" >/dev/null || fail "$file: an app's sign-in is \${TENANT}-$app-sso from ./kubernetes/apps/$app/sso," \
+            "after \${TENANT}-kanidm alone, with APP $app"
+        continue
+      fi
       # The tenant's PostgreSQL cluster, after the namespace, bucket and object store it uses.
       if [ "$app" = postgres ] && [ "$part" = "\${TENANT}-postgres-cluster" ]; then
         yq ea -e "select(documentIndex == $i)"' | ((.metadata | keys | join(",")) == "name"
@@ -174,11 +390,15 @@ for dir in kubernetes/apps/*/; do
             "./kubernetes/apps/postgres/cluster with one bootstrap, after \${TENANT}-postgres and pg-catalog"
         continue
       fi
+      # A host passed through holds no certificate, so it needs no issuer.
       yq ea -e "select(documentIndex == $i)"' | ((.metadata | keys | join(",")) == "name"
         and (.spec | keys | sort | join(",")) == "dependsOn,path,postBuild"
-        and (.spec.path | test("^[.]/kubernetes/edge/(app|identity|apex)$"))
-        and ([.spec.dependsOn[].name] | sort | join(",")) == (["${TENANT}-" + strenv(app), "gateway", "issuer"]
-          | sort | join(","))
+        and (.spec.path | test("^[.]/kubernetes/edge/(app|identity|apex|passthrough)$"))
+        and (.spec.path != "./kubernetes/edge/passthrough" or strenv(passthrough) == "true")
+        and ((([.spec.dependsOn[].name] | sort | join(",")) == (["${TENANT}-" + strenv(app), "gateway", "issuer"]
+          | sort | join(",")) and .spec.path != "./kubernetes/edge/passthrough")
+          or (([.spec.dependsOn[].name] | sort | join(",")) == (["${TENANT}-" + strenv(app), "gateway"]
+          | sort | join(",")) and .spec.path == "./kubernetes/edge/passthrough"))
         and (.spec.postBuild | keys | join(",")) == "substitute"
         and .spec.postBuild.substitute.APP == strenv(app)
         and (.spec.postBuild.substitute.EDGE | test("^[a-z][a-z0-9]{1,15}$"))
@@ -188,7 +408,8 @@ for dir in kubernetes/apps/*/; do
         and ([.spec.postBuild.substitute | keys | .[]
           | select(test("^(APP|EDGE|HOST|ROUTE_PORT|ROUTE_SERVICE|ROUTE_TARGET_PORT)$") | not)] | length) == 0)' \
         "$file" >/dev/null || fail "$file: a host is \${TENANT}-$app-edge-<EDGE> from ./kubernetes/edge/<zone>," \
-          "after the app, the gateway and the issuer, with APP $app, EDGE, ROUTE_PORT, and HOST unless it is the apex"
+          "after the app, the gateway and the issuer, or passed through, for an app that terminates TLS itself, after" \
+          "the app and the gateway, with APP $app, EDGE, ROUTE_PORT, and HOST unless it is the apex"
     done
     if [ "$file" != "$dir/ks.yaml" ]; then
       key=$(yq '.spec.postBuild.substitute.EDGE' "$file")
@@ -264,6 +485,7 @@ dup=$(for tenant in kubernetes/clusters/*/tenants/*/; do basename "$tenant"; don
 [ -z "$dup" ] || fail "a tenant lives in one cluster, its home: $dup"
 
 : >"$work/tested"
+: >"$work/migrations.jsonl"
 for dir in kubernetes/clusters/*/; do
   dir=${dir%/}
   cluster=$(basename "$dir")
@@ -413,7 +635,7 @@ for dir in kubernetes/clusters/*/; do
         for child in $children; do
           export child
           yq ea -e "select($fluxks and .metadata.name == strenv(child))"' | ((.metadata.name
-            | test("^" + strenv(t) + "-[a-z0-9]+(-edge-[a-z0-9]+|-db|-cluster)?$"))
+            | test("^" + strenv(t) + "-[a-z0-9]+(-edge-[a-z0-9]+|-db|-cluster|-sso)?$"))
             and .metadata.labels."suveraen/tenant" == strenv(t)
             and .spec.commonMetadata.labels."suveraen/tenant" == strenv(t)
             and .spec.postBuild.substitute.TENANT == strenv(t)
@@ -434,6 +656,9 @@ for dir in kubernetes/clusters/*/; do
         [ -n "$t" ] && [ "$name" = "$t-$app" ] || fail "$cluster/$name: apps run only as a tenant's <tenant>-<app>"
         kinds=$appkinds
         [ "$app" != postgres ] || kinds+=$pgkinds
+        passthrough=$(grep -qxF "$app" <<<"${passthroughapps// /$'\n'}" && echo true || echo false)
+        # Its own key and certificate (components/passthrough).
+        [ "$passthrough" = false ] || kinds+=,Certificate.cert-manager.io
         export kinds
         bad=$(yq ea '[select(.kind == "HelmRelease") | select(.metadata.namespace == "flux-system"
           or .spec.serviceAccountName != "flux-deployer" or .spec.install.crds != "Skip" or .spec.upgrade.crds != "Skip"
@@ -608,6 +833,100 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
         [[ $quota =~ ^[0-9]+$ ]] && [ "$need" -le "$quota" ] \
           || fail "$cluster/$name: the quota's count/jobs.batch, $quota, holds every CronJob's running and kept Jobs," \
             "the other Jobs, VolSync's movers and CloudNativePG's: $need"
+        # Every ConfigMap made in the namespace, other Kustomizations' too, and the cluster's CA, kube-root-ca.crt.
+        need=$(($(yq ea '[select(.kind == "ConfigMap" and .metadata.namespace == strenv(name))] | length' \
+          "$rendered"/*.yaml) + 1))
+        quota=$(yq ea '[select(.kind == "ResourceQuota")] | .[0].spec.hard."count/configmaps"' "$file")
+        [[ $quota =~ ^[0-9]+$ ]] && [ "$need" -le "$quota" ] \
+          || fail "$cluster/$name: the quota's count/configmaps, $quota, holds every ConfigMap made in the namespace" \
+            "and the cluster's CA: $need"
+        # An app signs in through its tenant's Kanidm only with its attachment, which it waits for, and reaches Kanidm
+        # by components/sso-client alone.
+        if grep -qxF "$t-$app-sso" <<<"$known"; then
+          want='{"egress":[{"ports":[{"port":8443}],"to":[{"namespaceSelector":{"matchLabels":'
+          want+='{"kubernetes.io/metadata.name":"'$t'-kanidm"}},"podSelector":{"matchLabels":'
+          want+='{"app.kubernetes.io/controller":"kanidm"}}}]}],"podSelector":{},"policyTypes":["Egress"]}'
+          [ "$(yq ea -o=json -I=0 '[select(.kind == "NetworkPolicy" and .metadata.name == "to-kanidm")
+            | .spec | sort_keys(..)] | .[]' "$file")" = "$want" ] \
+            || fail "$cluster/$name: an app that signs in through Kanidm reaches it by components/sso-client"
+          yq ea -e "select($fluxks and .metadata.name == \"$t-$app\") | .spec.dependsOn
+            | any_c(.name == \"$t-$app-sso\")" "$rendered/tenant-$t.yaml" >/dev/null \
+            || fail "$cluster/$name: an app waits for its sign-in, $t-$app-sso"
+        else
+          bad=$(yq ea '[select((.kind == "NetworkPolicy" and .metadata.name == "to-kanidm")
+            or (.kind == "Secret" and .metadata.name == "sso")) | .kind + "/" + .metadata.name] | .[]' "$file")
+          [ -z "$bad" ] || fail "$cluster/$name: only an app that signs in through Kanidm, with $t-$app-sso, reaches" \
+            "it or holds Secret sso: $bad"
+        fi
+        if [ "$passthrough" = true ]; then
+          passhost=$(grep -E "^$t-$app-edge-[a-z0-9]+ ./kubernetes/edge/passthrough$" "$w/paths" \
+            | while read -r edge _; do
+              yq '.spec.postBuild.substitute | .HOST + "." + .TENANT_DOMAIN' "$w/$edge.build.yaml"
+            done)
+          [ "$(wc -w <<<"$passhost")" = 1 ] \
+            || fail "$cluster/$name: an app that terminates TLS itself has one host passed through to it:" $passhost
+          export passhost
+          yq ea -e '[select(.kind == "Certificate")] | (length == 1 and .[0].metadata.name == "tls"
+            and (.[0].spec | keys | sort | join(",")) == "dnsNames,issuerRef,privateKey,secretName,secretTemplate"
+            and .[0].spec.secretName == "tls" and (.[0].spec.secretTemplate | keys | join(",")) == "labels"
+            and (.[0].spec.secretTemplate.labels | to_entries | length) == 1
+            and .[0].spec.secretTemplate.labels."suveraen/tenant" == strenv(t)
+            and (.[0].spec.dnsNames | join(",")) == strenv(passhost)
+            and (.[0].spec.issuerRef | keys | sort | join(",")) == "kind,name"
+            and .[0].spec.issuerRef.kind == "ClusterIssuer" and .[0].spec.issuerRef.name == "public"
+            and .[0].spec.privateKey.algorithm == "ECDSA" and .[0].spec.privateKey.size == 256
+            and .[0].spec.privateKey.rotationPolicy == "Always")' "$file" >/dev/null \
+            || fail "$cluster/$name: an app that terminates TLS itself holds one certificate, tls, for the host" \
+              "passed through to it, $passhost, alone, from the public issuer, with a new ECDSA key each time, into" \
+              "Secret tls labelled with tenant $t (components/passthrough)"
+          yq ea -e '[select(.kind == "Namespace")] | .[0].metadata.labels."suveraen/passthrough" == "true"' "$file" \
+            >/dev/null || fail "$cluster/$name: an app that terminates TLS itself is labelled suveraen/passthrough"
+        fi
+        if [ "$app" = kanidm ]; then
+          # Kanidm asks for a client of the server's own version.
+          image=$(yq ea '[select(.kind == "HelmRelease") | .spec.values.controllers.kanidm.containers.app.image
+            | .repository + ":" + .tag] | join(" ")' "$file")
+          [[ $image =~ ^docker[.]io/kanidm/server:${KANIDM_VERSION//./[.]}@sha256:[0-9a-f]{64}$ ]] \
+            || fail "$cluster/$name: Kanidm runs docker.io/kanidm/server at the version of the Kanidm client the" \
+              "platform builds, $KANIDM_VERSION: $image"
+          # The platform's migrations and those of every app that may sign in to it, as a tenant runs it.
+          want=$(for dir in kubernetes/apps/*/sso/; do
+            [ ! -d "$dir" ] || printf ',{"configMap":{"name":"sso-%s","optional":true}}' "$(basename "${dir%/sso/}")"
+          done)
+          want='["projected",[{"configMap":{"name":"kanidm-migrations"}}'$want']]'
+          yq ea -o=json -I=0 '[select(.kind == "HelmRelease")] | .[0].spec.values.persistence.migrations
+            | [.type, (.sources | sort_keys(..))]' "$file" >"$w/$name.sources"
+          [ "$(cat "$w/$name.sources")" = "$want" ] \
+            || fail "$cluster/$name: Kanidm reads kanidm-migrations and the sso-<app> of every app with a sign-in," \
+              "as it has one, from one projected volume: $(cat "$w/$name.sources")"
+          bad=$(yq ea -o=json -I=0 '[.]' "$file" | python3 -I -c "$kanidmconfig" "$passhost")
+          [ -z "$bad" ] || fail "$cluster/$name: Kanidm serves the host passed through to it, as its domain and" \
+            "origin, reads its migrations where they are mounted, trusts no address a client names, speaks no LDAP," \
+            "replicates nothing, sends nothing out, and logs nothing below info: $bad"
+          python3 -I -c "$migrationsource" "$cluster" "$t" kanidm-migrations kanidm \
+            <(yq ea -o=json -I=0 '[select(.kind == "ConfigMap" and .metadata.name == "kanidm-migrations")] | .[0]' \
+              "$file") <(echo '[]') <(echo '[]') >>"$work/migrations.jsonl"
+        fi
+        ;;
+      ./kubernetes/apps/*/sso)
+        app=$(basename "$(dirname "$path")")
+        [ -n "$t" ] && [ "$name" = "$t-$app-sso" ] || fail "$cluster/$name: an app's sign-in is <tenant>-<app>-sso"
+        objects="ConfigMap/$t-kanidm/sso-$app/$t,NetworkPolicy/$t-kanidm/from-$app/$t"
+        [ "$(yq ea '[select(.kind != null) | .kind + "/" + .metadata.namespace + "/" + .metadata.name + "/"
+          + .metadata.labels."suveraen/tenant"] | sort | join(",")' "$file")" = "$objects" ] \
+          || fail "$cluster/$name: an app's sign-in is ConfigMap sso-$app and NetworkPolicy from-$app in $t-kanidm," \
+            "labelled with tenant $t"
+        want='{"ingress":[{"from":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"'$t-$app'"}}}],'
+        want+='"ports":[{"port":8443}]}],"podSelector":{"matchLabels":{"app.kubernetes.io/controller":"kanidm"}},'
+        want+='"policyTypes":["Ingress"]}'
+        [ "$(yq ea -o=json -I=0 '[select(.kind == "NetworkPolicy") | .spec | sort_keys(..)] | .[]' "$file")" \
+          = "$want" ] || fail "$cluster/$name: an app's sign-in opens Kanidm's port to $t-$app alone"
+        python3 -I -c "$migrationsource" "$cluster" "$t" "sso-$app" "$app" \
+          <(yq ea -o=json -I=0 '[select(.kind == "ConfigMap")] | .[0]' "$file") \
+          <(yq ea -o=json -I=0 "[select(.kind == \"Gateway\") | .spec.listeners[] | select(.allowedRoutes.namespaces
+            .selector.matchLabels.\"kubernetes.io/metadata.name\" == \"$t-$app\") | .hostname]" "$rendered"/*.yaml) \
+          <(yq ea -o=json -I=0 '[select(.kind == "Secret" and .metadata.name == "sso")]' "$rendered/$t-$app.yaml") \
+          >>"$work/migrations.jsonl"
         ;;
       ./kubernetes/apps/postgres/cluster)
         [ -n "$t" ] && [ "$name" = "$t-postgres-cluster" ] \
@@ -698,7 +1017,7 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
         [ -z "$bad" ] || fail "$cluster/$name: an app's role logs in with its Secret and nothing more, owns its" \
           "database of the same name, and is reached from $t-$app alone: $bad"
         ;;
-      ./kubernetes/edge/app | ./kubernetes/edge/identity | ./kubernetes/edge/apex)
+      ./kubernetes/edge/app | ./kubernetes/edge/identity | ./kubernetes/edge/apex | ./kubernetes/edge/passthrough)
         [[ $name =~ ^$t-([a-z0-9]+)-edge-([a-z0-9]+)$ ]] && [ -n "$t" ] \
           || fail "$cluster/$name: a host is <tenant>-<app>-edge-<key>, one of its tenant's"
         app=${BASH_REMATCH[1]}
@@ -708,40 +1027,65 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
         grep -qxF "$t-$app" <<<"$known" || fail "$cluster/$name: a host belongs to an app its tenant runs, $t-$app"
         case ${path##*/} in
           app) host='.HOST + "." + .TENANT_APP_DOMAIN' ;;
-          identity) host='.HOST + "." + .TENANT_DOMAIN' ;;
+          identity | passthrough) host='.HOST + "." + .TENANT_DOMAIN' ;;
           apex) host='.TENANT_DOMAIN' ;;
         esac
         host=$(yq ".spec.postBuild.substitute | $host" "$w/$name.build.yaml")
         export host
-        objects="Certificate/gateway/$base/$t,Gateway/gateway/$base/$t,HTTPRoute/$t-$app/$key/$t"
-        objects+=",NetworkPolicy/$t-$app/from-gateway-$key/$t"
-        [ "$(yq ea '[select(.kind != null) | .kind + "/" + .metadata.namespace + "/" + .metadata.name + "/"
-          + .metadata.labels."suveraen/tenant"] | sort | join(",")' "$file")" = "$objects" ] \
-          || fail "$cluster/$name: a host is Gateway and Certificate $base in gateway, and HTTPRoute $key and" \
-            "NetworkPolicy from-gateway-$key in $t-$app, all labelled with tenant $t"
-        yq ea -e '[select(.kind != null)] | (.[] | select(.kind == "Gateway")) as $g
-          | (.[] | select(.kind == "Certificate")) as $c | $g.spec.listeners as $l
-          | (($g.spec | keys | sort | join(",")) == "gatewayClassName,listeners"
-          and $g.spec.gatewayClassName == "traefik"
-          and ($l | length) == 1 and $l[0].name == "https" and $l[0].protocol == "HTTPS" and $l[0].port == 8443
-          and $l[0].hostname == strenv(host) and $l[0].tls.mode == "Terminate"
-          and ($l[0].tls.certificateRefs | length) == 1 and $l[0].tls.certificateRefs[0].name == (strenv(base) + "-tls")
-          and ($l[0].tls.certificateRefs[0] | keys | join(",")) == "name"
-          and ([$l[0].allowedRoutes.kinds[].kind] | join(",")) == "HTTPRoute"
-          and $l[0].allowedRoutes.namespaces.from == "Selector"
-          and ($l[0].allowedRoutes.namespaces.selector | keys | join(",")) == "matchLabels"
-          and ($l[0].allowedRoutes.namespaces.selector.matchLabels | to_entries | length) == 1
-          and $l[0].allowedRoutes.namespaces.selector.matchLabels."kubernetes.io/metadata.name" == (strenv(t) + "-"
-            + strenv(app))
-          and ($c.spec | keys | sort | join(",")) == "dnsNames,issuerRef,privateKey,secretName,secretTemplate"
-          and $c.spec.secretName == (strenv(base) + "-tls")
-          and ($c.spec.secretTemplate | keys | join(",")) == "labels"
-          and ($c.spec.secretTemplate.labels | to_entries | length) == 1
-          and $c.spec.secretTemplate.labels."suveraen/tenant" == strenv(t)
-          and ($c.spec.dnsNames | join(",")) == strenv(host)
-          and $c.spec.issuerRef.kind == "ClusterIssuer" and $c.spec.issuerRef.name == "public")' "$file" >/dev/null \
-          || fail "$cluster/$name: a host's listener names $host alone and admits routes from $t-$app only, and its" \
-            "certificate names $host alone, from the public issuer, into a Secret labelled with tenant $t"
+        if [ "${path##*/}" = passthrough ]; then
+          grep -qxF "$app" <<<"${passthroughapps// /$'\n'}" \
+            || fail "$cluster/$name: only an app that terminates TLS itself is passed through, not $app"
+          objects="Gateway/gateway/$base/$t,NetworkPolicy/$t-$app/from-gateway-$key/$t,TLSRoute/$t-$app/$key/$t"
+          [ "$(yq ea '[select(.kind != null) | .kind + "/" + .metadata.namespace + "/" + .metadata.name + "/"
+            + .metadata.labels."suveraen/tenant"] | sort | join(",")' "$file")" = "$objects" ] \
+            || fail "$cluster/$name: a host passed through is Gateway $base in gateway, and TLSRoute $key and" \
+              "NetworkPolicy from-gateway-$key in $t-$app, all labelled with tenant $t"
+          yq ea -e '[select(.kind == "Gateway")] | .[0] as $g | $g.spec.listeners as $l
+            | (($g.spec | keys | sort | join(",")) == "gatewayClassName,listeners"
+            and $g.spec.gatewayClassName == "traefik"
+            and ($l | length) == 1 and $l[0].name == "tls" and $l[0].protocol == "TLS" and $l[0].port == 8443
+            and $l[0].hostname == strenv(host) and ($l[0].tls | keys | join(",")) == "mode"
+            and $l[0].tls.mode == "Passthrough"
+            and ([$l[0].allowedRoutes.kinds[].kind] | join(",")) == "TLSRoute"
+            and $l[0].allowedRoutes.namespaces.from == "Selector"
+            and ($l[0].allowedRoutes.namespaces.selector | keys | join(",")) == "matchLabels"
+            and ($l[0].allowedRoutes.namespaces.selector.matchLabels | to_entries | length) == 1
+            and $l[0].allowedRoutes.namespaces.selector.matchLabels."kubernetes.io/metadata.name" == (strenv(t) + "-"
+              + strenv(app)))' "$file" >/dev/null \
+            || fail "$cluster/$name: a host passed through has one listener, for TLS to $host alone, which passes it" \
+              "through, holds no certificate, and admits TLS routes from $t-$app only"
+        else
+          objects="Certificate/gateway/$base/$t,Gateway/gateway/$base/$t,HTTPRoute/$t-$app/$key/$t"
+          objects+=",NetworkPolicy/$t-$app/from-gateway-$key/$t"
+          [ "$(yq ea '[select(.kind != null) | .kind + "/" + .metadata.namespace + "/" + .metadata.name + "/"
+            + .metadata.labels."suveraen/tenant"] | sort | join(",")' "$file")" = "$objects" ] \
+            || fail "$cluster/$name: a host is Gateway and Certificate $base in gateway, and HTTPRoute $key and" \
+              "NetworkPolicy from-gateway-$key in $t-$app, all labelled with tenant $t"
+          yq ea -e '[select(.kind != null)] | (.[] | select(.kind == "Gateway")) as $g
+            | (.[] | select(.kind == "Certificate")) as $c | $g.spec.listeners as $l
+            | (($g.spec | keys | sort | join(",")) == "gatewayClassName,listeners"
+            and $g.spec.gatewayClassName == "traefik"
+            and ($l | length) == 1 and $l[0].name == "https" and $l[0].protocol == "HTTPS" and $l[0].port == 8443
+            and $l[0].hostname == strenv(host) and $l[0].tls.mode == "Terminate"
+            and ($l[0].tls.certificateRefs | length) == 1
+            and $l[0].tls.certificateRefs[0].name == (strenv(base) + "-tls")
+            and ($l[0].tls.certificateRefs[0] | keys | join(",")) == "name"
+            and ([$l[0].allowedRoutes.kinds[].kind] | join(",")) == "HTTPRoute"
+            and $l[0].allowedRoutes.namespaces.from == "Selector"
+            and ($l[0].allowedRoutes.namespaces.selector | keys | join(",")) == "matchLabels"
+            and ($l[0].allowedRoutes.namespaces.selector.matchLabels | to_entries | length) == 1
+            and $l[0].allowedRoutes.namespaces.selector.matchLabels."kubernetes.io/metadata.name" == (strenv(t) + "-"
+              + strenv(app))
+            and ($c.spec | keys | sort | join(",")) == "dnsNames,issuerRef,privateKey,secretName,secretTemplate"
+            and $c.spec.secretName == (strenv(base) + "-tls")
+            and ($c.spec.secretTemplate | keys | join(",")) == "labels"
+            and ($c.spec.secretTemplate.labels | to_entries | length) == 1
+            and $c.spec.secretTemplate.labels."suveraen/tenant" == strenv(t)
+            and ($c.spec.dnsNames | join(",")) == strenv(host)
+            and $c.spec.issuerRef.kind == "ClusterIssuer" and $c.spec.issuerRef.name == "public")' "$file" >/dev/null \
+            || fail "$cluster/$name: a host's listener names $host alone and admits routes from $t-$app only, and its" \
+              "certificate names $host alone, from the public issuer, into a Secret labelled with tenant $t"
+        fi
         ;;
       *) fail "$cluster/$name: Kustomizations apply kubernetes/platform, a tenant, an app or a host, not $path" ;;
     esac
@@ -807,12 +1151,14 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       | .[]' "$file" | awk -v ks="$name" \
         '$2 != "-" && ($1 != "cloudnative-pg" || ks != "cloudnative-pg" || $2 != "true") { print $1 }')
     [ -z "$bad" ] || fail "$cluster/$name: only cloudnative-pg signs certificates for its own names: $bad"
-    # No app terminates TLS itself yet, and the gateway would log the clients of a route that passes TLS through by
-    # their own addresses (platform/gateway).
-    bad=$(yq ea '[select(.kind == "Namespace" and .metadata.labels."suveraen/passthrough" != null) | .metadata.name]
-      | .[]' "$file")
-    [ -z "$bad" ] || fail "$cluster/$name: no namespace holds a public certificate of its own yet" \
-      "(suveraen/passthrough): $bad"
+    # Only an app that terminates TLS itself holds a public certificate of its own, as the gateway logs the clients of
+    # a route that passes TLS through by their own addresses (platform/gateway).
+    bad=$(yq ea '[select(.kind == "Namespace" and .metadata.labels."suveraen/passthrough" != null) | .metadata.name
+      + " " + .metadata.labels."suveraen/passthrough"] | .[]' "$file" | while read -r ns value; do
+        [[ $ns == "$name" && $value == true && " $passthroughapps " == *" ${ns#"$t"-} "* ]] || echo "$ns"
+      done)
+    [ -z "$bad" ] || fail "$cluster/$name: only an app that terminates TLS itself holds a public certificate of its" \
+      "own (suveraen/passthrough): $bad"
     # Images in what is rendered here, the PostgreSQL images clusters take from catalogs, Ceph's, and the tags charts
     # are given.
     bad=$({
@@ -846,24 +1192,28 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     || fail "$cluster: Kustomizations depend on each other in a loop: $(grep -v 'input contains a loop' "$w/loop" \
       | sed 's/^tsort: //' | paste -sd' ')"
 
+  # Each listener: its Gateway, tenant, host, the namespace it takes routes from, and its name, tls for one that passes
+  # TLS through.
   yq ea '[select(.kind == "Gateway") | .metadata.name + " " + .metadata.labels."suveraen/tenant" + " "
     + .spec.listeners[0].hostname + " "
-    + .spec.listeners[0].allowedRoutes.namespaces.selector.matchLabels."kubernetes.io/metadata.name"] | .[]' \
-    "$rendered"/*.yaml >"$w/listeners"
+    + .spec.listeners[0].allowedRoutes.namespaces.selector.matchLabels."kubernetes.io/metadata.name" + " "
+    + .spec.listeners[0].name] | .[]' "$rendered"/*.yaml >"$w/listeners"
   dup=$(cut -d' ' -f3 "$w/listeners" | sort | uniq -d)
   [ -z "$dup" ] || fail "$cluster: two listeners claim the same host: $dup"
-  bad=$(yq ea '[select(.kind == "HTTPRoute" and ((.spec.parentRefs // []) | length) == 0) | .metadata.name] | .[]' \
-    "$rendered"/*.yaml)
+  bad=$(yq ea '[select((.kind == "HTTPRoute" or .kind == "TLSRoute") and ((.spec.parentRefs // []) | length) == 0)
+    | .metadata.name] | .[]' "$rendered"/*.yaml)
   [ -z "$bad" ] || fail "$cluster: routes attach to a host's listener: $bad"
-  yq ea '[select(.kind == "HTTPRoute") | .metadata.namespace + " " + .metadata.name + " "
-    + ((.spec.hostnames // []) | join(",")) as $route | .spec.parentRefs[]
+  yq ea '[select(.kind == "HTTPRoute" or .kind == "TLSRoute") | .metadata.namespace + " " + .metadata.name + " "
+    + ((.spec.hostnames // []) | join(",")) + " " + .kind as $route | .spec.parentRefs[]
     | $route + " " + (.namespace // "") + "/" + (.sectionName // "") + "/" + .name] | .[]' \
     "$rendered"/*.yaml >"$w/routes"
-  while read -r ns route hosts parent; do
-    [[ $parent == gateway/https/* ]] || fail "$cluster: route $ns/$route attaches to $parent, not a host's listener"
-    grep -qxF "${parent#gateway/https/} ${ns:0:5} $hosts $ns" "$w/listeners" \
-      || fail "$cluster: route $ns/$route asks ${parent#gateway/https/} for $hosts, which isn't its listener's host" \
-        "for routes from $ns"
+  while read -r ns route hosts kind parent; do
+    section=https
+    [ "$kind" = HTTPRoute ] || section=tls
+    [[ $parent == gateway/$section/* ]] || fail "$cluster: route $ns/$route attaches to $parent, not a host's listener"
+    grep -qxF "${parent#gateway/"$section"/} ${ns:0:5} $hosts $ns $section" "$w/listeners" \
+      || fail "$cluster: route $ns/$route asks ${parent#gateway/"$section"/} for $hosts, which isn't its listener's" \
+        "host for routes from $ns"
   done <"$w/routes"
   # Apps see a pseudonym in place of each client's address (platform/gateway). Traefik gets each client's own address
   # on the node it reached, takes routes from the Gateway API alone and trusts no address a client names; on every
@@ -934,7 +1284,7 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       | .key' "$w/hostnames.yaml")
     [ -z "$bad" ] || fail "$cluster: the hostname map gives each name to a tenant or one of its namespaces: $bad"
     domains=$(yq '.data // {} | keys | .[]' "$w/hostnames.yaml")
-    while read -r _ owner host admitted; do
+    while read -r _ owner host admitted _; do
       best=
       for k in $domains; do
         if [[ $host == "$k" || $host == *".$k" ]] && [ ${#k} -gt ${#best} ]; then best=$k; fi
@@ -944,6 +1294,38 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       [ "$value" = "$owner" ] || [ "$value" = "$admitted" ] \
         || fail "$cluster: $admitted serves $host, but the hostname map gives it to ${value:-nobody}"
     done <"$w/listeners"
+    # A host passed through to an app is that namespace's by an entry of its own, which no other of its tenant's
+    # namespaces can take.
+    while read -r _ _ host admitted section; do
+      [ "$section" != tls ] || [ "$(yq ".data.\"$host\" // \"\"" "$w/hostnames.yaml")" = "$admitted" ] \
+        || fail "$cluster: the hostname map gives $host, passed through to $admitted, to that namespace by an entry" \
+          "of its own"
+    done <"$w/listeners"
+  fi
+  # A cluster directory adds only what Flux runs with, and the names the cluster's DNS answers for its tenants' Kanidm.
+  bad=$(yq ea '[select(.kind != null and .metadata.namespace != "flux-system") | .kind + "/"
+    + (.metadata.namespace // "") + "/" + .metadata.name] | .[]' "$rendered/cluster.yaml" \
+    | grep -vxF ConfigMap/kube-system/coredns-custom || true)
+  [ -z "$bad" ] || fail "$cluster: a cluster directory adds objects to flux-system alone, and the cluster DNS's names" \
+    "for its tenants' Kanidm (coredns-custom in kube-system): $bad"
+  # Apps reach their tenant's Kanidm at its public name, which the cluster's DNS answers with Kanidm's Service. k3s
+  # reads the *.override keys of coredns-custom into CoreDNS.
+  yq ea '[select(.kind == "ConfigMap" and .metadata.namespace == "kube-system" and .metadata.name == "coredns-custom")]
+    | .[0] // {}' "$rendered/cluster.yaml" >"$w/coredns.yaml"
+  want=$(while read -r _ _ host admitted section; do
+    [ "$section" = tls ] && [[ $admitted == *-kanidm ]] || continue
+    echo "rewrite name exact $host kanidm.$admitted.svc.cluster.local"
+  done <"$w/listeners" | sort)
+  if [ "$(yq 'length' "$w/coredns.yaml")" = 0 ]; then
+    [ -z "$want" ] || fail "$cluster: apps reach their tenant's Kanidm at its public name, which the cluster's DNS" \
+      "answers from ConfigMap coredns-custom in kube-system"
+  elif [ "$(yq 'has("sops")' "$w/coredns.yaml")" = false ]; then
+    [ "$testing" = true ] || fail "$cluster: the cluster's DNS names its tenants' identity hosts, so coredns-custom" \
+      "is encrypted"
+    have=$(yq '.data // {} | keys | join(",")' "$w/coredns.yaml")
+    [ "$have" = identity.override ] && [ "$(yq '.data."identity.override"' "$w/coredns.yaml" | sed '/^$/d' | sort)" \
+      = "$want" ] || fail "$cluster: the cluster's DNS answers each tenant's identity host with its Kanidm's Service," \
+        "one line each in coredns-custom's identity.override, and nothing else:" $want
   fi
   # Ceph keeps three copies of everything, two needed to write, spread over the cluster's one failure domain: the OSD
   # while it is one server, the host from three. No erasure coding.
@@ -1138,6 +1520,8 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     | (.[0].stringData // .[0].data // {}) | keys | .[]' "$rendered/cluster.yaml" >>"$w/keys"
 done
 
+bad=$(python3 -I -c "$migrations" <"$work/migrations.jsonl")
+[ -z "$bad" ] || fail "Kanidm's migrations: $bad"
 # Every cluster sets the same settings and secrets, so none is forgotten in one of them.
 [ "$(for keys in "$work"/*/keys; do sort "$keys" | sha256sum; done | sort -u | wc -l)" = 1 ] \
   || fail "the clusters don't set the same settings and secrets"

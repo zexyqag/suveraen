@@ -4,6 +4,7 @@
   pkgs,
   kubernetes,
   ranges,
+  kanidm,
 }:
 pkgs.runCommand "render-cases"
   {
@@ -15,6 +16,6 @@ pkgs.runCommand "render-cases"
   }
   ''
     set -o pipefail
-    export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges}
+    export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges} KANIDM_VERSION=${kanidm.version}
     bash ${./render-cases.sh} ${./render.sh} ${kubernetes} | tee $out
   ''

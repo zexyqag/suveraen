@@ -1,0 +1,46 @@
+---
+# The platform's groups in every tenant's Kanidm. Kanidm applies its files in the order of their names, once for each
+# change to one, so these come before the apps' (components/sso), which may name members, the group for apps every
+# member may use. platform-admins sign in only with a passkey of an approved make and model, tenant-admins with any
+# passkey, and both are asked for it again a few minutes into an admin's session. Kanidm checks the kind of
+# credential only as one is enrolled, never as one signs in, so a person joins such a group only before they have
+# any. idm_admins, which holds idm_admin, manages platform-admins, and tenant-admins their own. IDs are fixed for good:
+# Kanidm finds an entry by its ID, and never takes one back once a removal named it. Kanidm's builtin groups are out
+# of a migration's reach, so their members are set by hand.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kanidm-migrations
+data:
+  10-groups.json: |
+    {
+      "id": "6e7b8e96-f50a-4540-87a0-ddceb7a9d63f",
+      "assertions": [
+        {
+          "state": "present",
+          "id": "b9573391-723b-42d6-aaa9-2b674ebb1078",
+          "class": ["group"],
+          "name": "members"
+        },
+        {
+          "state": "present",
+          "id": "dcffad28-d6d0-4257-af76-c9f7052c6eec",
+          "class": ["group", "account_policy"],
+          "name": "platform-admins",
+          "credential_type_minimum": "attested_passkey",
+          "authsession_expiry": 3600,
+          "privilege_expiry": 300,
+          "entry_managed_by": ["idm_admins"]
+        },
+        {
+          "state": "present",
+          "id": "7c563c30-e4c6-4ccb-afb4-f97936d8946e",
+          "class": ["group", "account_policy"],
+          "name": "tenant-admins",
+          "credential_type_minimum": "passkey",
+          "authsession_expiry": 3600,
+          "privilege_expiry": 600,
+          "entry_managed_by": ["tenant-admins"]
+        }
+      ]
+    }

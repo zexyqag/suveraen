@@ -43,6 +43,9 @@
       machine = host: (config host).system.build;
       build = host: (machine host).toplevel;
 
+      # The Kanidm client the platform builds, whose version every tenant's Kanidm runs (checks/render.sh).
+      kanidm = pkgs.kanidm_1_11;
+
       # What render checks each cluster's settings against: the ranges the servers give k3s.
       ranges =
         let
@@ -91,11 +94,11 @@
         ns = build ./checks/ns.nix;
         approve = import ./checks/approve.nix { inherit pkgs approve; };
         render = import ./checks/render.nix {
-          inherit pkgs ranges;
+          inherit pkgs ranges kanidm;
           kubernetes = ./kubernetes;
         };
         render-cases = import ./checks/render-cases.nix {
-          inherit pkgs ranges;
+          inherit pkgs ranges kanidm;
           kubernetes = ./kubernetes;
         };
         host-checks = import ./checks/host-checks.nix { inherit pkgs; };

@@ -3,11 +3,11 @@
 # tenants that between them run every app and every host an app offers.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: flux-system
 resources:
   - ./settings.yaml
   - ./secrets.yaml
   - ./hostnames.yaml
+  - ./coredns.yaml
   - ../../platform
   - ../../platform/issuer/public/ks.yaml
   - ../../platform/issuer/standby/ks.yaml
@@ -15,3 +15,12 @@ resources:
   - ./tenants/bravo
 components:
   - ../../components/cluster
+# Into flux-system, but for what names its own namespace: the cluster DNS's names (coredns.yaml).
+transformers:
+  - |-
+    apiVersion: builtin
+    kind: NamespaceTransformer
+    metadata:
+      name: flux-system
+      namespace: flux-system
+    unsetOnly: true

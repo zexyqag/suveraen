@@ -11,11 +11,14 @@ spec:
     - ../../../components/app
     - ../../../components/db-client
     - ../../../components/volsync
+    - ../../../components/sso-client
+    - ../../../components/sso-secret
   dependsOn:
     - name: policies
     - name: volsync
     - name: ceph
     - name: ${TENANT}-hello-db
+    - name: ${TENANT}-hello-sso
   postBuild:
     substitute:
       APP: hello
@@ -30,7 +33,7 @@ spec:
       QUOTA_VOLUMES: "8"
       QUOTA_PODS: "7"
       QUOTA_SERVICES: "2"
-      QUOTA_SECRETS: "10"
+      QUOTA_SECRETS: "12"
       QUOTA_CONFIGMAPS: "4"
       QUOTA_JOBS: "7"
       DATA_SIZE: ${HELLO_DATA_SIZE:=1Gi}
@@ -73,6 +76,19 @@ spec:
   path: ./kubernetes/apps/hello/db
   dependsOn:
     - name: ${TENANT}-postgres-cluster
+  postBuild:
+    substitute:
+      APP: hello
+---
+# Its group and OAuth2 client in the tenant's Kanidm (apps/kanidm, components/sso).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-hello-sso
+spec:
+  path: ./kubernetes/apps/hello/sso
+  dependsOn:
+    - name: ${TENANT}-kanidm
   postBuild:
     substitute:
       APP: hello

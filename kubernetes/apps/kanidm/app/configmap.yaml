@@ -1,0 +1,25 @@
+---
+# Left out on purpose: LDAP, replication, any trust in addresses a client names (http_client_address_info), as a
+# client of a listener that passes TLS through could name any it likes, and a log level, as the default, info, is
+# Kanidm's least.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kanidm
+data:
+  server.toml: |
+    version = "2"
+    domain = "${HOST}.${TENANT_DOMAIN}"
+    origin = "https://${HOST}.${TENANT_DOMAIN}"
+    bindaddress = "[::]:8443"
+    db_path = "/data/kanidm.db"
+    tls_chain = "/tls/tls.crt"
+    tls_key = "/tls/tls.key"
+    migration_path = "/migrations"
+    adminbindpath = "/run/kanidmd/sock"
+    thread_count = 2
+
+    [online_backup]
+    path = "/data"
+    schedule = "${BACKUP_SCHEDULE}"
+    versions = 7

@@ -1,0 +1,7 @@
+---
+# Lets an app's pods reach its tenant's Kanidm, at its public name, which the cluster's DNS answers with Kanidm's
+# Service; its attachment (components/sso) opens the other end.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ./networkpolicy.yaml

@@ -1,0 +1,11 @@
+---
+# One host of a tenant's identities, whose app terminates TLS itself (components/passthrough): the gateway passes each
+# connection through by the name the client asks for, without the limits and pseudonyms it applies to requests, as
+# it reads none. In the gateway namespace: a listener for that host alone, which takes TLS routes only from the app's
+# namespace. In the app's namespace: the route, and the opening for the routed port.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./gateway.yaml
+  - ./tlsroute.yaml
+  - ../base/networkpolicy.yaml

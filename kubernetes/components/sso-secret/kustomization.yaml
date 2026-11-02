@@ -1,0 +1,8 @@
+---
+# For an app whose OAuth2 client is confidential: Secret sso, whose client-secret the app reads. The secret lives in
+# Kanidm and is copied in from there, never through the repository: Flux makes the Secret once with a placeholder
+# and leaves it alone after. Reloader restarts the app when its value changes.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ./secret.yaml

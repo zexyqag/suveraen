@@ -1,0 +1,13 @@
+---
+# The cluster's DNS answers a tenant's identity host with its Kanidm's Service, so its apps reach Kanidm under the
+# name it serves, without going out through the gateway. k3s reads every *.override key here into CoreDNS. Encrypted
+# on every cluster but a test one, like the hostname map.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  identity.override: |
+    rewrite name exact idm.one.test kanidm.alpha-kanidm.svc.cluster.local
+    rewrite name exact idm.org.test kanidm.bravo-kanidm.svc.cluster.local

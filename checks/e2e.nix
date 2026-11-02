@@ -100,7 +100,7 @@ in
 pkgs.testers.runNixOSTest {
   name = "suveraen-e2e";
   # Below the CI job's limit, so the waits in the script run out first and print what went wrong.
-  globalTimeout = 6600;
+  globalTimeout = 7200;
 
   nodes.forge =
     { nodes, ... }:
@@ -234,6 +234,7 @@ pkgs.testers.runNixOSTest {
                 @ NS ns.${theirs}.
                 ns A ${address}
                 _acme-challenge.hello CNAME _acme-challenge.k7wq2xv9p4m3.${acmeZone}.
+                _acme-challenge.idm CNAME _acme-challenge.vv1yn42a950j.${acmeZone}.
               '';
             };
         };
@@ -368,7 +369,10 @@ pkgs.testers.runNixOSTest {
           # The test cluster's hosts on the zones we serve.
           zones = {
             "example.test".certificates = [ "hello" ];
-            "one.test".certificates = [ "@" ];
+            "one.test".certificates = [
+              "@"
+              "idm"
+            ];
           };
           acme.zone = acmeZone;
           caa = {

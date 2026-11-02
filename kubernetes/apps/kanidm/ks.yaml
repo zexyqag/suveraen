@@ -1,0 +1,71 @@
+---
+# A tenant's identities: its own Kanidm at idm.<TENANT_DOMAIN>, which terminates its users' TLS itself, so the gateway
+# never sees their passwords, passkeys or sessions (components/passthrough, edge/passthrough). Its groups and OAuth2
+# clients are Kanidm's own migration files, the platform's here and each app's from its attachment (components/sso).
+# No admin account holds a standing credential: one is recovered by exec in the pod when needed, and disabled again.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-kanidm
+spec:
+  path: ./kubernetes/apps/kanidm/app
+  targetNamespace: ${TENANT}-kanidm
+  components:
+    - ../../../components/app
+    - ../../../components/volsync
+    - ../../../components/passthrough
+  dependsOn:
+    - name: policies
+    - name: volsync
+    - name: ceph
+    - name: issuer
+  postBuild:
+    substitute:
+      APP: kanidm
+      HOST: idm
+      QUOTA_CPU: ${KANIDM_QUOTA_CPU:=200m}
+      # Kanidm's MEMORY, and up to three movers and a check at 256Mi each.
+      QUOTA_MEMORY: ${KANIDM_QUOTA_MEMORY:=1536Mi}
+      QUOTA_EPHEMERAL_STORAGE: ${KANIDM_QUOTA_EPHEMERAL_STORAGE:=1280Mi}
+      # The volume and the three movers' copies of it, each mover with a 256Mi cache.
+      QUOTA_STORAGE: ${KANIDM_QUOTA_STORAGE:=5Gi}
+      QUOTA_VOLUMES: "8"
+      QUOTA_PODS: "6"
+      QUOTA_SERVICES: "1"
+      QUOTA_SECRETS: "12"
+      # Its own two, the cluster's CA, and an sso-<app> for each of the tenant's apps that signs in here.
+      QUOTA_CONFIGMAPS: "12"
+      QUOTA_JOBS: "7"
+      MEMORY: ${KANIDM_MEMORY:=512Mi}
+      # Kanidm's own copy of its database, as JSON next to it on the volume, which goes off-site with the volume.
+      BACKUP_SCHEDULE: ${KANIDM_BACKUP_SCHEDULE:=23 2 * * *}
+      DATA_SIZE: ${KANIDM_DATA_SIZE:=1Gi}
+      DATA_UID: "389"
+      DATA_SCHEDULE_1: ${KANIDM_DATA_SCHEDULE_1:=19 * * * *}
+      DATA_SCHEDULE_2: ${KANIDM_DATA_SCHEDULE_2:=49 * * * *}
+      DATA_MAX_AGE: ${KANIDM_DATA_MAX_AGE:=3h}
+      DATA_CHECK_SCHEDULE_1: ${KANIDM_DATA_CHECK_SCHEDULE_1:=34 2 * * *}
+      DATA_CHECK_SCHEDULE_2: ${KANIDM_DATA_CHECK_SCHEDULE_2:=34 14 * * *}
+      DATA_CHECK_CYCLE: ${KANIDM_DATA_CHECK_CYCLE:=7d}
+      # A new value restores the latest copy again, from offsite-1 or offsite-2.
+      DATA_RESTORE: ${KANIDM_DATA_RESTORE:=once}
+      DATA_RESTORE_FROM: ${KANIDM_DATA_RESTORE_FROM:=offsite-1}
+---
+# Passed through to Kanidm by name, so the gateway limits its clients only by their new connections (nixos/cluster.nix
+# suveraen.cluster.edge), and Kanidm sees the gateway's address for each of them.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-kanidm-edge-idm
+spec:
+  path: ./kubernetes/edge/passthrough
+  dependsOn:
+    - name: ${TENANT}-kanidm
+    - name: gateway
+  postBuild:
+    substitute:
+      APP: kanidm
+      EDGE: idm
+      HOST: idm
+      ROUTE_PORT: "443"
+      ROUTE_TARGET_PORT: "8443"

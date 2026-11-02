@@ -1,0 +1,19 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: tls
+spec:
+  secretName: tls
+  secretTemplate:
+    labels:
+      suveraen/tenant: ${TENANT}
+  dnsNames:
+    - ${HOST}.${TENANT_DOMAIN}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  issuerRef:
+    kind: ClusterIssuer
+    name: public

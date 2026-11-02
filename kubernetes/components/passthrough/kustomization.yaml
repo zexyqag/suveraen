@@ -1,0 +1,18 @@
+---
+# For an app that terminates its users' TLS itself, behind a listener that passes it through (edge/passthrough): its
+# own key and certificate for its one host, HOST in its tenant's domain, from the platform's public CA, in Secret tls
+# of its namespace. platform/policies admits a public certificate outside the gateway only in a namespace so labelled.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ./certificate.yaml
+patches:
+  - target:
+      kind: Namespace
+    patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: _
+        labels:
+          suveraen/passthrough: "true"

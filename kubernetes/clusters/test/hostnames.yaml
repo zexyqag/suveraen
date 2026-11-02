@@ -8,4 +8,6 @@ metadata:
 data:
   example.test: alpha
   one.test: alpha-hello
+  idm.one.test: alpha-kanidm
   org.test: bravo
+  idm.org.test: bravo-kanidm

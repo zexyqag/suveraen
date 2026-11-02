@@ -1,0 +1,24 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ${TENANT}-${APP}-${EDGE}
+  namespace: gateway
+spec:
+  gatewayClassName: traefik
+  listeners:
+    # On the entry point of the hosts the gateway terminates, which tells them apart by the name the client asks for.
+    - name: tls
+      protocol: TLS
+      port: 8443
+      hostname: ${HOST}.${TENANT_DOMAIN}
+      tls:
+        mode: Passthrough
+      allowedRoutes:
+        kinds:
+          - kind: TLSRoute
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${TENANT}-${APP}

@@ -46,14 +46,17 @@ encsecret() { # tenant or cluster directory
   yq -i ".stringData[] = \"$encrypted\"" "$1/secrets.sops.yaml"
   append "$1/secrets.sops.yaml" "$sops"
 }
-encmap() { # cluster directory
-  yq -i ".data[] = \"$encrypted\"" "$1/hostnames.yaml"
-  append "$1/hostnames.yaml" "$sops"
+encmap() { # cluster directory: its hostname map and its DNS's names for identity hosts
+  for map in "$1/hostnames.yaml" "$1/coredns.yaml"; do
+    yq -i ".data[] = \"$encrypted\"" "$map"
+    append "$map" "$sops"
+  done
 }
 # A second cluster, not a test one, whose only tenant is shaped like alpha; its CAs are trusted publicly.
 prod() { # tenant ID
   mkdir -p clusters/prod/tenants
-  cp clusters/test/settings.yaml clusters/test/secrets.yaml clusters/test/hostnames.yaml clusters/prod/
+  cp clusters/test/settings.yaml clusters/test/secrets.yaml clusters/test/hostnames.yaml clusters/test/coredns.yaml \
+    clusters/prod/
   yq -i '.data.TEST_CLUSTER = "false" | .data.ACME_CA_BUNDLE = "" | .data.BACKUP_1_ENDPOINT = "https://s3.one.test"
     | .data.BACKUP_2_ENDPOINT = "https://s3.two.test"' clusters/prod/settings.yaml
   sed "s|./tenants/alpha|./tenants/$1|; /tenants\/bravo/d" clusters/test/kustomization.yaml \
@@ -61,10 +64,13 @@ prod() { # tenant ID
   cp -r $T/alpha "clusters/prod/tenants/$1"
   sed -i "s/alpha/$1/g; s|clusters/test|clusters/prod|" "clusters/prod/tenants/$1"/*.yaml
 }
-other() { # a second app like hello, which bravo also runs
+other() { # a second app like hello, which bravo also runs, with IDs of its own in Kanidm
   cp -r apps/hello apps/other
   rm apps/other/edge-apex.yaml
-  sed -i 's/hello/other/g; s/HELLO/OTHER/g' apps/other/ks.yaml apps/other/app/*.yaml apps/other/db/*.yaml
+  sed -i 's/hello/other/g; s/HELLO/OTHER/g' apps/other/ks.yaml apps/other/*/*.yaml
+  sed -i 's/"id": "[0-9a-f]/"id": "f/' apps/other/sso/configmap.yaml
+  yq -i '.spec.values.persistence.migrations.sources += [{"configMap": {"name": "sso-other", "optional": true}}]' \
+    apps/kanidm/app/helmrelease.yaml
   sed -i 's|  - ../../../../../apps/hello/ks.yaml|&\n  - ../../../../../apps/other/ks.yaml|' \
     $T/bravo/apps/kustomization.yaml
   append $T/bravo/secrets.yaml '  OTHER_DB_PASSWORD: x\n  OTHER_RESTIC_PASSWORD: x\n'
@@ -137,7 +143,8 @@ refuses unlabelled-child "isn't one of tenant alpha's apps, labelled with it" \
 refuses two-home-clusters "a tenant lives in one cluster, its home: alpha" \
   "prod alpha"
 refuses one-test-tenant "a test cluster runs at least two tenants" \
-  "rm -r $T/bravo; sed -i '/tenants\/bravo/d' clusters/test/kustomization.yaml"
+  "rm -r $T/bravo; sed -i '/tenants\/bravo/d' clusters/test/kustomization.yaml
+   sed -i '/bravo-kanidm/d' clusters/test/coredns.yaml"
 refuses no-test-marker "cluster-settings says whether its tenants are stand-ins" \
   "yq -i 'del(.data.TEST_CLUSTER)' clusters/test/settings.yaml"
 refuses marked-real "test: the hostname map links domains to tenants, so it is encrypted" \
@@ -210,17 +217,17 @@ refuses same-host "two listeners claim the same host" \
   "sed -i 's/TENANT_APP_DOMAIN: org.test/TENANT_APP_DOMAIN: example.test/' $T/bravo/secrets.yaml
    append clusters/test/hostnames.yaml '  hello.example.test: bravo\n'"
 refuses map-owner "bravo-hello serves hello.org.test, but the hostname map gives it to alpha" \
-  "sed -i 's/org.test: bravo/org.test: alpha/' clusters/test/hostnames.yaml"
+  "sed -i 's/^  org.test: bravo$/  org.test: alpha/' clusters/test/hostnames.yaml"
 refuses map-missing-domain "bravo-hello serves hello.org.test, but the hostname map gives it to nobody" \
-  "sed -i '/org.test: bravo/d' clusters/test/hostnames.yaml"
+  "sed -i '/^  org.test: bravo$/d' clusters/test/hostnames.yaml"
 refuses map-carve-out "bravo-hello serves hello.org.test, but the hostname map gives it to alpha" \
   "append clusters/test/hostnames.yaml '  hello.org.test: alpha\n'"
 refuses map-suffix "bravo-hello serves hello.org.test, but the hostname map gives it to nobody" \
-  "sed -i 's/org.test: bravo/rg.test: bravo/' clusters/test/hostnames.yaml"
+  "sed -i 's/^  org.test: bravo$/  rg.test: bravo/' clusters/test/hostnames.yaml"
 refuses map-other-namespace "alpha-hello serves one.test, but the hostname map gives it to alpha-other" \
   "sed -i 's/one.test: alpha-hello/one.test: alpha-other/' clusters/test/hostnames.yaml"
 refuses map-bad-value "the hostname map gives each name to a tenant or one of its namespaces: org.test" \
-  "sed -i 's/org.test: bravo/org.test: Bravo/' clusters/test/hostnames.yaml"
+  "sed -i 's/^  org.test: bravo$/  org.test: Bravo/' clusters/test/hostnames.yaml"
 refuses map-absent "the cluster has no hostname map" "sed -i '/hostnames.yaml/d' clusters/test/kustomization.yaml"
 refuses listener-from-all "a host's listener names hello.example.test alone" \
   "sed -i 's/          from: Selector/          from: All/' edge/base/gateway.yaml"
@@ -299,8 +306,138 @@ refuses gateway-pseudonym-in-pods "GATEWAY_PSEUDONYM_V4 overlaps POD_CIDR_V4" \
   "yq -i '.data.GATEWAY_PSEUDONYM_V4 = \"10.0.0.0/8\"' clusters/test/settings.yaml"
 refuses gateway-pseudonym-64 "and its period whole hours: GATEWAY_PSEUDONYM_V6" \
   "yq -i '.data.GATEWAY_PSEUDONYM_V6 = \"3fff::/64\"' clusters/test/settings.yaml"
-refuses passthrough-label "no namespace holds a public certificate of its own yet (suveraen/passthrough): " \
+refuses passthrough-label "only an app that terminates TLS itself holds a public certificate of its own" \
   "yq -i '.metadata.labels.\"suveraen/passthrough\" = \"true\"' components/app/namespace.yaml"
+
+# Hosts passed through to an app that terminates TLS itself.
+E=edge/passthrough
+alone="a host passed through has one listener, for TLS to idm.one.test alone"
+refuses passthrough-https "$alone" "sed -i 's/      protocol: TLS/      protocol: HTTPS/' $E/gateway.yaml"
+refuses passthrough-terminate "$alone" \
+  "yq -i '.spec.listeners[0].tls = {\"mode\": \"Terminate\", \"certificateRefs\": [{\"name\": \"tls\"}]}' $E/gateway.yaml"
+refuses passthrough-httproute "$alone" "sed -i 's/          - kind: TLSRoute/          - kind: HTTPRoute/' $E/gateway.yaml"
+refuses passthrough-certificate "a host passed through is Gateway alpha-kanidm-idm in gateway, and TLSRoute idm" \
+  "cp edge/base/certificate.yaml $E/; append $E/kustomization.yaml '  - ./certificate.yaml\n'"
+refuses passthrough-for-hello "kubernetes/apps/hello/ks.yaml: a host is \${TENANT}-hello-edge-<EDGE>" \
+  "yq -i '(select(documentIndex == 1) | .spec.path) = \"./kubernetes/edge/passthrough\"
+   | (select(documentIndex == 1) | .spec.dependsOn) |= map(select(.name != \"issuer\"))' apps/hello/ks.yaml"
+refuses tlsroute-other-listener "route alpha-kanidm/idm asks bravo-kanidm-idm for idm.one.test" \
+  "sed -i 's/    - name: \${TENANT}-\${APP}-\${EDGE}/    - name: bravo-kanidm-idm/' $E/tlsroute.yaml"
+refuses tlsroute-other-host ",evil.one.test, which isn't its listener's host" \
+  "sed -i 's/    - \${HOST}.\${TENANT_DOMAIN}\$/&\n    - evil.one.test/' $E/tlsroute.yaml"
+refuses tlsroute-terminating-listener "route alpha-kanidm/idm attaches to gateway/https/alpha-kanidm-idm" \
+  "sed -i 's/      sectionName: tls/      sectionName: https/' $E/tlsroute.yaml"
+own="an app that terminates TLS itself holds one certificate, tls, for the host passed through to it"
+refuses passthrough-other-host "$own, login.one.test" \
+  "yq -i '(select(documentIndex == 1) | .spec.postBuild.substitute.HOST) = \"login\"' apps/kanidm/ks.yaml"
+refuses passthrough-no-certificate "$own" "sed -i '/certificate.yaml/d' components/passthrough/kustomization.yaml"
+refuses passthrough-label-value "an app that terminates TLS itself is labelled suveraen/passthrough" \
+  "sed -i 's|suveraen/passthrough: \"true\"|suveraen/passthrough: \"yes\"|' components/passthrough/kustomization.yaml"
+refuses certificate-in-app "in its own namespace: Certificate.cert-manager.io/x" \
+  "append apps/hello/app/configmap.yaml '---\napiVersion: cert-manager.io/v1\nkind: Certificate\nmetadata:\n  name: x
+spec:\n  secretName: x\n  dnsNames: [hello.example.test]\n  issuerRef: {kind: ClusterIssuer, name: public}\n'"
+
+# Tenants' Kanidm, and the apps that sign in through it.
+S=apps/hello/sso/configmap.yaml
+M=apps/kanidm/app/migrations.yaml
+I=apps/kanidm/app/helmrelease.yaml
+refuses kanidm-image-version "Kanidm runs docker.io/kanidm/server at the version of the Kanidm client the platform" \
+  "sed -i 's|tag: 1.11.2@|tag: 1.11.1@|' $I"
+config="Kanidm serves the host passed through to it, as its domain and origin"
+refuses kanidm-address-info "$config" \
+  "sed -i 's|    thread_count = 2|&\n    http_client_address_info.x-forward-for = [\"10.42.0.0/16\"]|' apps/kanidm/app/configmap.yaml"
+refuses kanidm-domain "$config" \
+  "sed -i 's|    domain = \"\${HOST}.\${TENANT_DOMAIN}\"|    domain = \"\${TENANT_DOMAIN}\"|' apps/kanidm/app/configmap.yaml"
+refuses kanidm-migrations-elsewhere "$config" \
+  "yq -i '.spec.values.persistence.migrations.globalMounts[0].path = \"/etc/migrations\"' $I"
+refuses kanidm-configmaps-quota "the quota's count/configmaps, 3, holds every ConfigMap made in the namespace" \
+  "sed -i 's/QUOTA_CONFIGMAPS: \"12\"/QUOTA_CONFIGMAPS: \"3\"/' apps/kanidm/ks.yaml"
+refuses sso-other-dependency "an app's sign-in is \${TENANT}-hello-sso from ./kubernetes/apps/hello/sso" \
+  "yq -i '(select(documentIndex == 3) | .spec.dependsOn) += [{\"name\": \"\${TENANT}-postgres\"}]' apps/hello/ks.yaml"
+refuses sso-elsewhere "an app's sign-in is ConfigMap sso-hello and NetworkPolicy from-hello in alpha-kanidm" \
+  "sed -i 's/  namespace: \${TENANT}-kanidm/  namespace: \${TENANT}-hello/' $S"
+refuses sso-opens-other-port "an app's sign-in opens Kanidm's port to alpha-hello alone" \
+  "sed -i 's/port: 8443/port: 22/' components/sso/networkpolicy.yaml"
+refuses sso-not-in-sources "Kanidm reads kanidm-migrations and the sso-<app> of every app with a sign-in" \
+  "other; yq -i 'del(.spec.values.persistence.migrations.sources[2])' $I"
+refuses sso-without-client "an app that signs in through Kanidm reaches it by components/sso-client" \
+  "sed -i '/components\/sso-client/d' apps/hello/ks.yaml"
+refuses sso-not-awaited "an app waits for its sign-in, alpha-hello-sso" \
+  "yq -i '(select(documentIndex == 0) | .spec.dependsOn) |= map(select(.name != \"\${TENANT}-hello-sso\"))' \
+   apps/hello/ks.yaml"
+refuses sso-client-without-sign-in "only an app that signs in through Kanidm, with alpha-postgres-sso, reaches it" \
+  "sed -i 's|^    - ../../../components/app\$|&\n    - ../../../components/sso-client|' apps/postgres/ks.yaml"
+placeholder="an app with a confidential client holds Secret sso, which Flux makes once with client-secret pending alone"
+refuses sso-secret-value "$placeholder" "sed -i 's/client-secret: pending/client-secret: x/' components/sso-secret/secret.yaml"
+refuses sso-secret-applied "$placeholder" "yq -i 'del(.metadata.annotations)' components/sso-secret/secret.yaml"
+refuses sso-public-with-secret "$placeholder" "sed -i 's/oauth2_resource_server_basic/oauth2_resource_server_public/' $S"
+refuses sso-confidential-without-secret "$placeholder" "sed -i '/components\/sso-secret/d' apps/hello/ks.yaml"
+refuses sso-flag-unknown "sso-hello carries no annotation but" \
+  "yq -i '.metadata.annotations.\"suveraen/consent\" = \"true\"' $S"
+refuses sso-flag-public "suveraen/localhost-redirects is for a public client" \
+  "yq -i '.metadata.annotations.\"suveraen/localhost-redirects\" = \"true\"' $S"
+refuses migration-file-name "sso-hello/60-hello.json: an app adds one file, 50-hello.json" \
+  "sed -i 's/  50-hello.json: |/  60-hello.json: |/' $S"
+refuses migration-not-json "sso-hello/50-hello.json: not JSON" "sed -i 's/\"assertions\": \[/\"assertions\": [,/' $S"
+refuses migration-person "never people, accounts of another kind or classes Kanidm sets itself: eve-x" \
+  "sed -i 's|      \"assertions\": \[|&\n        { \"state\": \"present\", \"id\": \"e0000000-0000-4000-8000-000000000001\", \
+\"class\": [\"account\", \"person\"], \"name\": \"eve-x\", \"displayname\": \"Eve\" },|' $S"
+refuses migration-object-class "classes Kanidm sets itself: hello-users" \
+  "sed -i 's|\"class\": \[\"group\"\],|\"class\": [\"group\", \"object\"],|' $S"
+refuses migration-builtin "IDs are UUIDs in lowercase from 00000000-0000-0000-0001-000000000000 on, not 00000000-" \
+  "sed -i 's/b66c8c43-0175-4dd8-b8fe-ebf2a5cc90c4/00000000-0000-0000-0000-000000000035/' $S"
+refuses migration-same-id "ID b9573391-723b-42d6-aaa9-2b674ebb1078 is also kanidm-migrations/10-groups.json" \
+  "sed -i 's/b66c8c43-0175-4dd8-b8fe-ebf2a5cc90c4/b9573391-723b-42d6-aaa9-2b674ebb1078/' $S"
+refuses migration-name-without-dash "every name but members holds a -, so no person login can take it: hellousers" \
+  "sed -i 's/\"hello-users\"/\"hellousers\"/g' $S"
+refuses migration-other-app-group "an app names its groups hello-<name>" "sed -i 's/\"hello-users\"/\"other-users\"/g' $S"
+refuses migration-member "groups get their members from admins, not from files: hello-users" \
+  "sed -i 's|          \"name\": \"hello-users\"|&,\n          \"member\": [\"admin\"]|' $S"
+refuses migration-client-name "an app has one OAuth2 client, hello-oidc" "sed -i 's/\"hello-oidc\"/\"hello-web\"/' $S"
+refuses migration-client-displayname "a client has a display name: hello-oidc" \
+  "sed -i '/\"displayname\": \"hello\",/d' $S"
+refuses migration-legacy-crypto "hello-oidc sets ['oauth2_jwt_legacy_crypto_enable']" \
+  "sed -i 's|          \"displayname\": \"hello\",|&\n          \"oauth2_jwt_legacy_crypto_enable\": true,|' $S"
+refuses migration-foreign-redirect "a client sends members only to https on its own app hosts, not https://evil." \
+  "sed -i 's|https://hello[.]|https://evil.|' $S"
+refuses migration-other-scope-group "a client maps members or its own app groups alone" \
+  "sed -i 's/{ \"group\": \"hello-users\", \"scopes\"/{ \"group\": \"tenant-admins\", \"scopes\"/' $S"
+refuses migration-app-removes "only the platform files remove entries" \
+  "sed -i '0,/\"state\": \"present\"/s//\"state\": \"absent\"/' $S"
+removed() { # a file of removals in the platform's migrations, from JSON on stdin
+  cat >removed.json
+  yq -i '.data."90-removed.json" = load_str("removed.json")' apps/kanidm/app/migrations.yaml
+  rm removed.json
+}
+export -f removed
+refuses migration-removed-returns "a removed entry never comes back, as Kanidm refuses its ID for good: bb28c86c-" \
+  "echo '{\"id\": \"e0000000-0000-4000-8000-000000000090\",
+   \"assertions\": [{\"state\": \"absent\", \"id\": \"bb28c86c-bcef-4823-ab4c-6471f17617be\"}]}' | removed"
+refuses migration-empty "a migration has an id and assertions, at least one" \
+  "echo '{\"id\": \"e0000000-0000-4000-8000-000000000090\", \"assertions\": []}' | removed"
+refuses migration-admins-by-name "as a list in Kanidm 1.11: tenant-admins" \
+  "sed -i 's/\"entry_managed_by\": \[\"tenant-admins\"\]/\"entry_managed_by\": \"tenant-admins\"/' $M"
+refuses migration-platform-admins-own "idm_admins manages platform-admins, and tenant-admins their own" \
+  "sed -i 's/\"entry_managed_by\": \[\"idm_admins\"\]/\"entry_managed_by\": [\"platform-admins\"]/' $M"
+refuses migration-policy-typo "platform-admins sets ['auth_session_expiry']" \
+  "sed -i '0,/\"authsession_expiry\"/s//\"auth_session_expiry\"/' $M"
+refuses migration-admins-any-passkey "platform-admins sign in with passkeys of an approved make and model alone" \
+  "sed -i 's/\"credential_type_minimum\": \"attested_passkey\"/\"credential_type_minimum\": \"passkey\"/' $M"
+dns="the cluster's DNS answers each tenant's identity host with its Kanidm's Service, one line each"
+refuses coredns-line-missing "$dns" "sed -i '/bravo-kanidm/d' clusters/test/coredns.yaml"
+refuses coredns-line-extra "$dns" \
+  "append clusters/test/coredns.yaml '    rewrite name exact hello.org.test kanidm.bravo-kanidm.svc.cluster.local\n'"
+refuses coredns-other-tenant "$dns" \
+  "sed -i 's/idm.one.test kanidm.alpha-kanidm/idm.one.test kanidm.bravo-kanidm/' clusters/test/coredns.yaml"
+refuses coredns-absent "which the cluster's DNS answers from ConfigMap coredns-custom in kube-system" \
+  "sed -i '/coredns.yaml/d' clusters/test/kustomization.yaml"
+refuses cluster-dir-elsewhere "a cluster directory adds objects to flux-system alone" \
+  "append clusters/test/coredns.yaml '---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n  namespace: kube-system\n'"
+refuses map-idm-by-tenant "the hostname map gives idm.org.test, passed through to bravo-kanidm, to that namespace by" \
+  "sed -i '/idm.org.test: bravo-kanidm/d' clusters/test/hostnames.yaml"
+refuses real-cluster-plain-coredns "prod: the cluster's DNS names its tenants' identity hosts, so coredns-custom is" \
+  "prod delta; encsecret clusters/prod/tenants/delta; encsecret clusters/prod
+   yq -i '.data[] = \"$encrypted\"' clusters/prod/hostnames.yaml; append clusters/prod/hostnames.yaml \"$sops\""
 
 # Quotas.
 refuses quota-below-memory-default "the LimitRange's default.memory, 128Mi, is above the quota's limits.memory, 64Mi" \
@@ -341,7 +478,7 @@ refuses np-ingress-empty-from "a network policy rule without peers reaches every
   "np '  ingress:\n    - from: []\n'"
 refuses np-empty-peer "a network policy rule without peers reaches everything: x" \
   "np '  egress:\n    - to:\n        - {}\n'"
-refuses np-edge-ports-only "a network policy rule without peers reaches everything: from-gateway-hello" \
+refuses np-edge-ports-only "a network policy rule without peers reaches everything: from-gateway-" \
   "yq -i 'del(.spec.ingress[0].from)' edge/base/networkpolicy.yaml"
 
 # Sources.
@@ -621,6 +758,12 @@ renders encrypted "encsecret $T/bravo; encmap clusters/test"
 renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
   sed -i 's/PODINFO_UI_MESSAGE: .*/PODINFO_UI_MESSAGE: \${HELLO_API_KEY:=none}/' apps/hello/app/configmap.yaml"
 renders two-apps "other"
+renders sso-public "sed -i 's/oauth2_resource_server_basic/oauth2_resource_server_public/' $S
+  yq -i '.metadata.annotations.\"suveraen/localhost-redirects\" = \"true\"' $S
+  sed -i '/components\/sso-secret/d' apps/hello/ks.yaml"
+renders sso-without-pkce "yq -i '.metadata.annotations.\"suveraen/disable-pkce\" = \"true\"' $S"
+renders migration-removed "echo '{\"id\": \"e0000000-0000-4000-8000-000000000090\",
+  \"assertions\": [{\"state\": \"absent\", \"id\": \"e0000000-0000-4000-8000-000000000091\"}]}' | removed"
 renders real-cluster "$real"
 renders recovery "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery"
 renders recovery-offsite "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery; knob POSTGRES_RESTORE_FROM offsite-2"
@@ -635,9 +778,9 @@ renders real-cluster-failover \
 renders test-cluster-renamed \
   "mv clusters/test clusters/ci; sed -i 's|clusters/test|clusters/ci|' clusters/ci/tenants/*/tenant.yaml"
 renders identity-host \
-  "sed 's/apex/idm/g; s|edge/idm|edge/identity|; s/      EDGE: idm/      EDGE: idm\n      HOST: idm/' \
-  apps/hello/edge-apex.yaml >apps/hello/edge-idm.yaml
-  sed -i 's|  - ../../../../../apps/hello/edge-apex.yaml|&\n  - ../../../../../apps/hello/edge-idm.yaml|' \
+  "sed 's/apex/www/g; s|edge/www|edge/identity|; s/      EDGE: www/      EDGE: www\n      HOST: www/' \
+  apps/hello/edge-apex.yaml >apps/hello/edge-www.yaml
+  sed -i 's|  - ../../../../../apps/hello/edge-apex.yaml|&\n  - ../../../../../apps/hello/edge-www.yaml|' \
   $T/alpha/apps/kustomization.yaml"
 renders two-hosts-in-template "yq ea 'select(documentIndex == 1)' apps/hello/ks.yaml \
   | sed 's/edge-hello/edge-www/; s/EDGE: hello/EDGE: www/; s/HOST: hello/HOST: www/' >www.yaml

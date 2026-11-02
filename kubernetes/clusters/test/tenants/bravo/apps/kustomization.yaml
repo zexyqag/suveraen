@@ -4,6 +4,7 @@ kind: Kustomization
 namespace: flux-system
 resources:
   - ../../../../../apps/postgres/ks.yaml
+  - ../../../../../apps/kanidm/ks.yaml
   - ../../../../../apps/hello/ks.yaml
 components:
   - ../../../../../components/tenant
