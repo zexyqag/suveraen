@@ -185,16 +185,30 @@ disable() {
   fi
 }
 
-# The tenants whose idm_admin this run recovered and hasn't disabled again, with their origins.
+# The tenants whose idm_admin this run recovered and hasn't disabled again, with their origins, and the homes it
+# signed in with.
 declare -A recovered=()
+homes=()
 finish() {
   local t
   for t in "${!recovered[@]}"; do
     disable "$t" "${recovered[$t]}" || true
   done
-  rm -rf "$run"/home.*
+  rm -rf "${homes[@]}"
 }
-trap finish EXIT
+
+# Takes the lock, at once with now or else within 5 minutes, and only then clears the homes a run that was killed
+# left and cleans up after this one as it ends: a run that never held it leaves the one that does alone.
+lock() {
+  if [ "${1:-}" = now ]; then
+    flock -n 9 || return 1
+  elif ! flock -w 300 9; then
+    echo "suveraen-idm: another run holds the lock." >&2
+    exit 1
+  fi
+  rm -rf "$run"/home.*
+  trap finish EXIT
+}
 
 # Recovers idm_admin with a new password, which stays in this process, and signs the client in with it, with its
 # session in a home of its own on tmpfs.
@@ -209,6 +223,7 @@ sign_in() {
     return 1
   fi
   HOME=$(mktemp -d "$run/home.XXXXXX") || return 1
+  homes+=("$HOME")
   export HOME KANIDM_URL=$2 KANIDM_NAME=idm_admin
   pin "$2"
   if ! KANIDM_PASSWORD=$password cli login >/dev/null; then
@@ -446,13 +461,6 @@ valid_tenant() {
   [[ $1 =~ ^[a-z][a-z0-9]{4}$ ]] || usage
 }
 
-wait_lock() {
-  if ! flock -w 300 9; then
-    echo "suveraen-idm: another run holds the lock." >&2
-    exit 1
-  fi
-}
-
 [ $# != 0 ] || usage
 command=$1
 shift
@@ -460,7 +468,7 @@ case $command in
   check)
     [ $# = 0 ] || usage
     # A run that holds the lock may be halfway through a change.
-    if ! flock -n 9; then
+    if ! lock now; then
       echo '{"busy": true}'
       exit 0
     fi
@@ -470,10 +478,10 @@ case $command in
     [ $# -le 1 ] || usage
     if [ $# = 1 ]; then
       valid_tenant "$1"
-      wait_lock
+      lock
       list=$1
     else
-      wait_lock
+      lock
       list=$(tenants)
     fi
     for t in $list; do
@@ -484,12 +492,12 @@ case $command in
     [ $# = 2 ] || usage
     if [ "$1" = --all ]; then
       valid_tenant "$2"
-      wait_lock
+      lock
       tenant "$2" rotate-all || true
     else
       valid_tenant "$1"
       [[ $2 =~ ^[a-z][a-z0-9]*-oidc$ ]] || usage
-      wait_lock
+      lock
       tenant "$1" rotate "$2" || true
     fi
     ;;
@@ -508,7 +516,7 @@ case $command in
       echo "suveraen-idm: an attestation CA list is a JSON file, for platform admins." >&2
       exit 2
     fi
-    wait_lock
+    lock
     if ! origin=$(origin "$t"); then
       fail "$t: ConfigMap kanidm in $t-kanidm names no single origin."
       exit 1

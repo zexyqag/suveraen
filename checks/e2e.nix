@@ -1480,6 +1480,19 @@ pkgs.testers.runNixOSTest {
               assert sso_secret(first) == new and probe_token(first, crafted) == "401"
               server.fail("test -e /tmp/crafted")
 
+          with subtest("A suveraen-idm run that never holds the lock leaves the session of the one that does, and the next to hold it clears what a killed run left"):
+              # A home as a run that holds the lock signs in with, or as one that was killed leaves.
+              server.succeed("mkdir /run/suveraen-idm/home.held")
+              out = server.succeed(
+                  "flock /run/suveraen-idm/lock sh -c 'suveraen-idm check;"
+                  " suveraen-idm bogus 2>/dev/null; echo usage $?;"
+                  " timeout 5 suveraen-idm sync 2>/dev/null; echo waited $?;"
+                  " test -d /run/suveraen-idm/home.held && echo held'"
+              )
+              assert out.splitlines() == ['{"busy": true}', "usage 2", "waited 124", "held"], out
+              server.succeed("suveraen-idm check")
+              server.fail("test -e /run/suveraen-idm/home.held")
+
           def psql(namespace, pod, query, **conn):
               # Connects as the app does, with the Secret its namespace holds unless told otherwise.
               target = " ".join(f"{k}={v}" for k, v in conn.items())
