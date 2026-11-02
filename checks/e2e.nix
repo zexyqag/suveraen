@@ -2449,8 +2449,12 @@ pkgs.testers.runNixOSTest {
               )
               assert 2 * smart <= int(stop) == groups[0]["shutdownGracePeriodSeconds"], (smart, stop, groups)
               epoch = ceph("osd dump")["epoch"]
-              # Written just before the poweroff, and read back after it.
               ns, token = f"{first}-hello", str(time.time_ns())
+              # The restore may leave hello between two pods, which its controllers end only once the copy's leases
+              # have run out, or with a pod whose container the kubelet is still starting again.
+              server.succeed(f"kubectl -n {ns} rollout status deployment hello --timeout=600s")
+              server.wait_until_succeeds(f"kubectl -n {ns} exec deploy/hello -- true", timeout=600)
+              # Written just before the poweroff, and read back after it.
               server.succeed(f"kubectl -n {ns} exec deploy/hello -- sh -c 'echo {token} > /data/unsynced'")
               mapped = server.succeed("ls /sys/bus/rbd/devices").split()
               assert mapped, "no volume is mapped"
