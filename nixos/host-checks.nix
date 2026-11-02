@@ -1,7 +1,8 @@
 # Every server checks, from the status the controllers record and with an account that may read little else, how old
 # each tenant's WAL archiving, base backups, off-site copies, checks and volume copies are against what their templates
-# allow (suveraen/max-age), how old its own backup files are, and Ceph's health. It alerts once when that changes,
-# again while it lasts, and when it can't read the cluster.
+# allow (suveraen/max-age), how old its own backup files are, and Ceph's health; and as root, with no Kanidm credential,
+# each tenant's Kanidm (suveraen-idm check, idm.nix). It alerts once when that changes, again while it lasts, and when
+# it can't read the cluster or check every tenant's Kanidm.
 {
   config,
   lib,
@@ -64,6 +65,28 @@ let
     '';
   };
 
+  # Run by root after prepare: suveraen-idm reads the apps' copies of their secrets to probe Kanidm with, which the
+  # account below may not, and keeps them to itself. A check that fails says why, and alerts once it keeps failing.
+  idm = pkgs.writeShellApplication {
+    name = "host-checks-idm";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.jq
+    ];
+    text = ''
+      run=$RUNTIME_DIRECTORY
+      if [ -e "$run/unreadable" ]; then exit 0; fi
+      status=0
+      timeout 120 ${lib.getExe config.suveraen.idm.command} check >"$run/idm.json" 2>"$run/idm.err" || status=$?
+      if [ "$status" != 0 ]; then
+        why=$(tail -n 1 "$run/idm.err")
+        if [ "$status" = 124 ]; then why="no answer within 120 seconds"; fi
+        echo "suveraen-idm check: ''${why:-exit status $status}"
+        jq -n --arg why "''${why:-exit status $status}" '{failed: $why}' >"$run/idm.json"
+      fi
+    '';
+  };
+
   read = pkgs.writeShellApplication {
     name = "host-checks-read";
     runtimeInputs = [
@@ -109,13 +132,15 @@ let
       cronjobs "$run/clusters.json" offsite offsite-check-1 offsite-check-2
       cronjobs "$run/replicationsources.json" offsite-check-1 offsite-check-2
 
+      [ -s "$run/idm.json" ] || echo null >"$run/idm.json"
+
       args=()
-      for part in nodes clusters objectstores pvcs replicationsources cephcluster cronjobs; do
+      for part in nodes clusters objectstores pvcs replicationsources cephcluster cronjobs idm; do
         args+=(--slurpfile "$part" "$run/$part.json")
       done
       jq -n "''${args[@]}" '{nodes: $nodes[0], clusters: $clusters[0], objectstores: $objectstores[0], pvcs: $pvcs[0],
-        replicationsources: $replicationsources[0], cephcluster: $cephcluster[0], cronjobs: ($cronjobs | add // {})}' \
-        >"$run/cluster.json"
+        replicationsources: $replicationsources[0], cephcluster: $cephcluster[0], cronjobs: ($cronjobs | add // {}),
+        idm: $idm[0]}' >"$run/cluster.json"
     '';
   };
 
@@ -144,16 +169,27 @@ let
               end
             else
               {"backups late": "backups on time again", "Ceph status not updated": "Ceph status updated again",
-               "cluster status unreadable": "cluster status readable again"}[$t]
+               "cluster status unreadable": "cluster status readable again",
+               "Kanidm admin accounts enabled": "Kanidm admin accounts disabled again",
+               "Kanidm migrations failed": "Kanidm migrations applied again",
+               "Kanidm clients out of sync": "Kanidm clients in sync again",
+               "Kanidm unchecked": "Kanidm checked again"}[$t]
             end)
       | unique
       | join("; ");
 
     rows as $rows
-    | ($rows | map(select(length == 2)) | first | .[1]) as $scope
+    | ($rows | map(select(length == 2 and .[0] == "cluster")) | first | .[1]) as $scope
+    | any($rows[]; . == ["kanidm", "checked"]) as $kanidm
     | [$rows[] | select(length == 6) | finding] as $found
     | [$alerted | rows[] | finding] as $before
-    | [$found[] | select(.status == "late")] as $current
+    | [$found[] | select(.status == "unknown") | .key] as $unknown
+    # What the checks couldn't tell stands as it was found last: a finding without an answer, a tenant's Kanidm or its
+    # parts, or all the Kanidm findings while suveraen-idm check gives nothing.
+    | [$before[] | select(.key as $k | any($unknown[]; $k == . or ($k | startswith(. + " ") or startswith(. + "/")))
+        or ($scope == "evaluated" and ($kanidm | not) and (.title | startswith("Kanidm ")) and .key != "Kanidm check"))]
+      as $kept
+    | ([$found[] | select(.status == "late")] + $kept) as $current
     | [$found[] | select(.status == "ok") | .key] as $ok
     | [$found[].key] as $keys
     | [$before[].key] as $was
@@ -188,6 +224,7 @@ let
       pkgs.jq
       pkgs.coreutils
       pkgs.findutils
+      pkgs.gnugrep
     ];
     text = ''
       state=$STATE_DIRECTORY
@@ -212,11 +249,15 @@ let
         jq -n --rawfile reason "$run/unreadable" '{unreadable: ($reason | rtrimstr("\n"))}' >"$cluster"
       fi
 
+      [ -e "$state/kanidm-checked" ] || echo "$now" >"$state/kanidm-checked"
       findings=$(jq -n --argjson now "$now" --slurpfile spec ${spec} --argjson files "$files" \
-        --slurpfile seen "$state/first-seen.json" --argjson read "$(<"$state/last-read")" --slurpfile cluster "$cluster" \
-        '{$now, spec: $spec[0], $files, state: {lastRead: $read, firstSeen: $seen[0]}, cluster: $cluster[0]}' \
+        --slurpfile seen "$state/first-seen.json" --argjson read "$(<"$state/last-read")" \
+        --argjson kanidm "$(<"$state/kanidm-checked")" --slurpfile cluster "$cluster" \
+        '{$now, spec: $spec[0], $files, state: {lastRead: $read, firstSeen: $seen[0], kanidmChecked: $kanidm},
+          cluster: $cluster[0]}' \
         | jq -r -f ${./host-checks.jq})
-      jq -R -r 'split("\t") | if length == 2 then "cluster scope: \(.[1])" else "\(.[2]) \(.[1]): \(.[5])" end' \
+      if grep -qx $'kanidm\tchecked' <<<"$findings"; then echo "$now" >"$state/kanidm-checked"; fi
+      jq -R -r 'split("\t") | if length == 2 then "\(.[0]) scope: \(.[1])" else "\(.[2]) \(.[1]): \(.[5])" end' \
         <<<"$findings"
 
       touch "$state/late.tsv"
@@ -382,9 +423,12 @@ in
           "AF_INET6"
           "AF_UNIX"
         ];
-        # Room for suveraen-alert to try both channels.
-        TimeoutStartSec = 2 * config.suveraen.alerts.retrySeconds + 300;
-        ExecStartPre = "+${lib.getExe prepare}";
+        # Room for suveraen-idm check, and for suveraen-alert to try both channels.
+        TimeoutStartSec = 2 * config.suveraen.alerts.retrySeconds + 420;
+        ExecStartPre = [
+          "+${lib.getExe prepare}"
+          "+${lib.getExe idm}"
+        ];
         ExecStart = lib.getExe read;
         ExecStartPost = "+${lib.getExe report}";
       };

@@ -1,0 +1,6 @@
+7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     migration_apply [ 11.4ms | 4.72% / 100.00% ]
+7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/10-groups.json
+7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/50-hello.json
+7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┝━ handle_scim_migration_apply [ 3.98ms | 34.76% ]
+7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┕━ handle_scim_migration_apply [ 6.93ms | 60.52% ]
+7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO        ┕━ ｉ [info]: regenerating oauth2 basic secret | event_tag_id: 10

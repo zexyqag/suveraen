@@ -14,6 +14,7 @@
     ./source.nix
     ./upgrade.nix
     ./host-checks.nix
+    ./idm.nix
     ./offsite.nix
   ];
 }

@@ -1,6 +1,6 @@
 # What host-checks.nix finds in what it read, judged at .now: a line saying whether this server checked the cluster
-# (evaluated, skipped or unreadable), then one per finding with its scope, key, ok or late, priority, the title it
-# alerts under and what was found, separated by tabs.
+# (evaluated, skipped or unreadable), one when every tenant's Kanidm was checked, then one per finding with its scope,
+# key, ok, late or unknown, priority, the title it alerts under and what was found, separated by tabs.
 
 def time: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
 def stamp: if . == null then null else time end;
@@ -125,6 +125,64 @@ def ceph($c; $cluster):
               "\(.value.message // .value.severity); ceph health detail says more")
         end);
 
+# What the checks could not tell this time, which stands as it was found last (host-checks.nix).
+def unknown($key; $title; $detail): ["cluster", $key, "unknown", 4, $title, ($detail | gsub("[\t\n\r]+"; " "))];
+
+# Each tenant's Kanidm as suveraen-idm check found it (idm.nix): its admin accounts, the last run of its migrations,
+# and its clients.
+def kanidm($idm):
+  $idm.tenants[]?
+  | .tenant as $tenant
+  | "\($tenant)-kanidm" as $ns
+  | if .unchecked != null then unknown($ns; "Kanidm unchecked"; .unchecked)
+    else
+      ([.accounts | to_entries[] | select(.value == "unknown") | .key]) as $unanswered
+      | ([.accounts | to_entries[] | select(.value == "enabled") | .key]) as $enabled
+      | (if $unanswered != [] then
+           unknown("\($ns) admin accounts"; "Kanidm admin accounts enabled"; "no answer for \($unanswered | join(", "))")
+         else
+           finding("cluster"; "\($ns) admin accounts"; $enabled != []; 4; "Kanidm admin accounts enabled";
+             if $enabled == [] then "disabled"
+             else "\($enabled | join(", ")) enabled, which suveraen-idm sync \($tenant) disables"
+             end)
+         end),
+        # A long-running Kanidm's log no longer reaches back to its start, where it ran them.
+        (if .migrations == null then unknown("\($ns) migrations"; "Kanidm migrations failed"; "no run of them in its log")
+         else
+           .migrations
+           | finding("cluster"; "\($ns) migrations"; .failed != [] or .denied > 0; 4; "Kanidm migrations failed";
+               ([.failed[], (select(.denied > 0) | "\(.denied) changes skipped to entries it may not see")] | join("; "))
+               as $what
+               | if $what == "" then "the last run applied every file" else "in the last run: \($what)" end)
+         end),
+        (.clients[]
+          | if .secret | IN("unknown", "missing") then
+              unknown("\($ns)/\(.client)"; "Kanidm clients out of sync";
+                if .secret == "missing" then "the app has no Secret sso" else "no answer to the probe" end)
+            elif .secret == "unusable" then
+              finding("cluster"; "\($ns)/\(.client)"; true; 4; "Kanidm clients out of sync";
+                "sso-\(.app) names no client suveraen-idm can use")
+            else
+              [if .secret == "wrong" then "the secret in the app's Secret sso is wrong for Kanidm"
+               elif .secret == "placeholder" then "the app's Secret sso still holds the placeholder"
+               elif .secret == "invalid" then "the app's Secret sso holds no secret Kanidm makes"
+               else empty end,
+               (select(.flags | not) | "its flags are not applied")] as $wrong
+              | finding("cluster"; "\($ns)/\(.client)"; $wrong != []; 4; "Kanidm clients out of sync";
+                  if $wrong == [] then "in sync" else "\($wrong | join(", ")); run suveraen-idm sync \($tenant)" end)
+            end)
+    end;
+
+# Why suveraen-idm check left part of the tenants' Kanidm unchecked, all but migrations no longer in a log, or null.
+def unchecked($idm; $rows):
+  [$rows[] | select(.[2] == "unknown" and (.[1] | endswith(" migrations") | not)) | .[1]] as $parts
+  | if ($idm | type) != "object" then "no answer from suveraen-idm check"
+    elif $idm.busy then "another suveraen-idm run held its lock"
+    elif $idm.failed != null then "suveraen-idm check: \($idm.failed)"
+    elif $parts != [] then "nothing told of \($parts | join(", "))"
+    else null
+    end;
+
 .now as $now
 | .spec as $spec
 | .files as $files
@@ -141,7 +199,11 @@ def ceph($c; $cluster):
    else "skipped"
    end) as $scope
 | {now: $now, grace: $spec.missingGrace, stale: $spec.cephStaleAfter, cronjobs: ($k.cronjobs // {})} as $c
+| [kanidm($k.idm)] as $kanidm
+| unchecked($k.idm; $kanidm) as $why
+# Whether every tenant's Kanidm was checked, which the report keeps the time of.
 | ["cluster", $scope],
+  (select($unreadable == null and $why == null) | ["kanidm", "checked"]),
   ([
     ($spec.files | to_entries[]
       | .key as $name
@@ -161,6 +223,14 @@ def ceph($c; $cluster):
        | finding("host"; "cluster status"; $now - $read > $spec.unreadableAfter; 4; "cluster status unreadable";
            "last read \($read | since($now)), limit \($spec.unreadableAfter | span): \($unreadable)")
      end),
-    (select($scope == "evaluated") | postgres($c; $k), volumes($c; $k), (select($k.cephcluster != null) | ceph($c; $k.cephcluster)))
+    (select($scope == "evaluated")
+      | postgres($c; $k), volumes($c; $k), (select($k.cephcluster != null) | ceph($c; $k.cephcluster)), $kanidm[],
+        (($state.kanidmChecked // $now) as $checked
+         | finding("cluster"; "Kanidm check"; $why != null and $now - $checked > $spec.unreadableAfter; 4;
+             "Kanidm unchecked";
+             if $why == null then "every tenant's Kanidm checked"
+             else "every tenant's Kanidm last checked \($checked | since($now)), limit \($spec.unreadableAfter | span):"
+               + " \($why)"
+             end)))
   ] | unique_by(.[0:2])[])
 | map(tostring) | join("\t")

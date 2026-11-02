@@ -34,6 +34,17 @@
 # Apps see a pseudonym per host in place of each client's address, never an address a client names in a header. The
 # gateway gets each client's own address, limits each by it, and changes its key when it restarts; neither it nor a
 # tenant's pod logs a client's address.
+# Each tenant's Kanidm serves its own host through the gateway, which passes it through to Kanidm's own certificate,
+# to clients that Kanidm sees as the gateway whatever they claim, and to that tenant's apps alone under the same name;
+# it holds the platform's groups and each app's client as their files declare. suveraen-idm, which reaches each Kanidm
+# at the server's own gateway and never looks its name up, makes its first platform admin, who may enrol nothing but a
+# passkey of an approved make, and a tenant admin, who manages the tenant's people and groups but can't touch a
+# platform admin or an admin group, and sets Kanidm's own groups; refuses to make an admin of a person who exists
+# already; copies each confidential client's secret from Kanidm into its app, so the release that adds an app is the
+# only one, recovering idm_admin only when something is wrong; gives a client a new secret; passes on nothing an app's
+# namespace writes but a secret as Kanidm makes them; and leaves idm_admin, admin and anonymous disabled. Kanidm's
+# volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all replaces;
+# the server's checks alert once when an app holds a wrong one, and when that clears.
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
 # tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
 # records it, its own off-site copies included, none of them late; one more pool still fits, and when it passes its
@@ -100,7 +111,7 @@ in
 pkgs.testers.runNixOSTest {
   name = "suveraen-e2e";
   # Below the CI job's limit, so the waits in the script run out first and print what went wrong.
-  globalTimeout = 7200;
+  globalTimeout = 7800;
 
   nodes.forge =
     { nodes, ... }:
@@ -315,6 +326,15 @@ pkgs.testers.runNixOSTest {
       # There's no release to upgrade to here.
       system.autoUpgrade.enable = lib.mkForce false;
 
+      # No name of the tenants' identity hosts resolves here, so suveraen-idm proves it reaches each at the server's
+      # own gateway, under certificates from the test CA, whose root the test puts where suveraen-idm looks for it.
+      suveraen.idm.caFile = "/var/lib/test-ca.pem";
+      # For the test's own looks into Kanidm, and at the certificates the hosts serve.
+      environment.systemPackages = [
+        config.suveraen.idm.kanidm
+        pkgs.openssl
+      ];
+
       # Every run of every container of Rook's OSD prepare pods, kept for diagnose(): the Job deletes its pod once it
       # gives up, and ceph-volume says why it failed only there.
       systemd.services.osd-prepare-logs = {
@@ -430,6 +450,7 @@ pkgs.testers.runNixOSTest {
     in
     ''
       import base64
+      import hashlib
       import ipaddress
       import json
       import os
@@ -561,6 +582,12 @@ pkgs.testers.runNixOSTest {
               " journalctl -b -1 -u k3s -o short-monotonic --no-pager"
               " | grep -iE 'shutdown manager|UnmountDevice|Failed while waiting' | tail -n 60",
               "journalctl -u host-checks -o cat --no-pager | tail -n 80",
+              # Each tenant's Kanidm: how it applied its migrations, and what it answered last.
+              "kubectl get pods -A -l app.kubernetes.io/controller=kanidm"
+              " -o jsonpath='{range .items[*]}{.metadata.namespace}{\" \"}{.metadata.name}{\"\\n\"}{end}'"
+              " | while read -r ns pod; do kubectl -n $ns logs $pod -c app --prefix | grep -E 'migration|ERROR'"
+              " | tail -n 40; kubectl -n $ns logs $pod -c app --prefix --tail=40; done",
+              "suveraen-idm check",
               phone,
           ]:
               print(f"$ {cmd}\n{shown(cmd)}")
@@ -956,15 +983,27 @@ pkgs.testers.runNixOSTest {
               forge.succeed("curl -fsS --cacert ${caCert} https://acme.test:15000/roots/0 > /tmp/ca.crt")
               hosts = sorted({h for r in items("httproute") for h in r["spec"]["hostnames"]})
               assert hosts, "no routes"
-              for host in hosts:
+              passthrough = {h: r["metadata"]["namespace"] for r in items("tlsroute") for h in r["spec"]["hostnames"]}
+              assert passthrough, "no routes passed through"
+              for host in hosts + sorted(passthrough):
                   # -f: a refused connection, a bad certificate or an error status all fail.
+                  path = "status" if host in passthrough else ""
                   forge.wait_until_succeeds(
-                      f"curl -fsS -o /dev/null --cacert /tmp/ca.crt --resolve {host}:443:${server} https://{host}/", timeout=120
+                      f"curl -fsS -o /dev/null --cacert /tmp/ca.crt --resolve {host}:443:${server} https://{host}/{path}",
+                      timeout=300,
                   )
                   redirect = forge.succeed(
                       f"curl -sS -o /dev/null -w '%{{http_code}} %{{redirect_url}}' --resolve {host}:80:${server} http://{host}/"
                   ).split()
                   assert redirect == ["301", f"https://{host}/"], redirect
+              # A host passed through is served with the app's own certificate, which the gateway never holds.
+              def fingerprint(pem):
+                  return server.succeed(f"{pem} | openssl x509 -noout -fingerprint -sha256").strip()
+
+              for host, namespace in passthrough.items():
+                  served = fingerprint(f"openssl s_client -connect ${server}:443 -servername {host} </dev/null 2>/dev/null")
+                  held = fingerprint(f"kubectl -n {namespace} get secret tls -o jsonpath='{{.data.tls\\.crt}}' | base64 -d")
+                  assert served == held, (host, served, held)
 
           def get(cmd):
               return parsed(f"{cmd} -o json")
@@ -1180,11 +1219,265 @@ pkgs.testers.runNixOSTest {
               denied_by(copy("httproute", theirs, lambda r: r["spec"].update(hostnames=[host])), policy("hostnames"))
               denied_by(copy("gateway", gateway, lambda g: g["spec"]["listeners"][0].update(hostname=host)), policy("hostnames"))
               denied_by(copy("certificate", gateway, lambda c: c["spec"].update(dnsNames=[host])), policy("hostnames"))
+              # Nor a host passed through to another tenant's app.
+              [passing] = get(f"kubectl -n {second}-kanidm get tlsroute")["items"]
+              [ours] = [h for h, namespace in passthrough.items() if namespace == f"{first}-kanidm"]
+              denied_by(copy("tlsroute", passing, lambda r: r["spec"].update(hostnames=[ours])), policy("hostnames"))
               denied_by(
                   copy("gateway", gateway, lambda g: g["metadata"].update(namespace=f"{second}-hello")), policy("edge-objects")
               )
               denied_by(create(probe(home, priorityClassName="platform"), "--dry-run=server"), policy("tenant-priority"))
               denied_by(create(probe(home, {"limits": {"memory": "64Gi"}}), "--dry-run=server"), "exceeded quota")
+
+          # Each tenant's Kanidm at its public name, which the server reaches through the gateway as anyone does.
+          idm = {t: h for h, namespace in passthrough.items() for t in tenants if namespace == f"{t}-kanidm"}
+          assert sorted(idm) == tenants, idm
+          kanidm_ca = "${nodes.server.suveraen.idm.caFile}"
+          # The test's own requests reach Kanidm as suveraen-idm does, at the server's gateway, as no name of it
+          # resolves there: curl by its address, and the client in a mount namespace whose hosts file names it.
+          reach = {t: f"--cacert {kanidm_ca} --resolve {h}:443:${server}" for t, h in idm.items()}
+          server.succeed(
+              f"echo '${server} {' '.join(idm.values())}' > /run/e2e-hosts && echo 'hosts: files' > /run/e2e-nsswitch"
+          )
+          pinned = (
+              "unshare --mount sh -c 'mount --bind /run/e2e-hosts /etc/hosts && mount --bind /run/e2e-nsswitch"
+              " /etc/nsswitch.conf && { [ ! -d /run/nscd ] || mount -t tmpfs none /run/nscd; } && exec \"$@\"' sh"
+          )
+
+          def discovery(t):
+              return f"https://{idm[t]}/oauth2/openid/hello-oidc/.well-known/openid-configuration"
+
+          # How Kanidm answers the first step of a sign-in as an account.
+          def signing_in(t, name):
+              body = shlex.quote(json.dumps({"step": {"init": name}}))
+              out = server.succeed(
+                  f"curl -fsS {reach[t]} -H 'Content-Type: application/json' -d {body} https://{idm[t]}/v1/auth"
+              )
+              return json.loads(out)["state"]
+
+          # What Kanidm's address of a client from outside is: the gateway's, whatever the client says.
+          def seen_by_kanidm():
+              out = forge.succeed(
+                  f"curl -fsS --cacert /tmp/ca.crt --resolve {idm[first]}:443:${server} -H 'X-Forwarded-For: 192.0.2.1'"
+                  f" -H 'Forwarded: for=192.0.2.1' https://{idm[first]}/v1/debug/ipinfo"
+              )
+              seen = ipaddress.ip_address(json.loads(out))
+              if isinstance(seen, ipaddress.IPv6Address) and seen.ipv4_mapped:
+                  seen = seen.ipv4_mapped
+              assert any(seen in ipaddress.ip_network(setting(f"POD_CIDR_V{v}")) for v in [4, 6]), seen
+              assert str(seen) not in ["192.0.2.1", "${nodes.forge.networking.primaryIPAddress}"], seen
+
+          with subtest("Each tenant's Kanidm serves its own host to its own apps under the public name, and nothing else reaches it"):
+              server.succeed(f"curl -fsS --cacert ${caCert} https://acme.test:15000/roots/0 > {kanidm_ca}")
+              for t in tenants:
+                  server.wait_until_succeeds(f"curl -fsS -o /dev/null {reach[t]} {discovery(t)}", timeout=300)
+
+              # From a tenant's hello, with the test CA, which the cluster's DNS sends to that tenant's Kanidm Service.
+              def from_hello(t, url):
+                  return server.execute(
+                      f"kubectl -n {t}-hello exec -i deploy/hello -- sh -c"
+                      f" 'cat > /tmp/ca.crt && curl -fsS -m 10 --cacert /tmp/ca.crt {url}' < {kanidm_ca} 2>&1"
+                  )
+
+              for t in tenants:
+                  status, out = from_hello(t, discovery(t))
+                  assert status == 0, (t, status, out)
+                  assert json.loads(out)["issuer"] == f"https://{idm[t]}/oauth2/openid/hello-oidc", (t, out)
+              status, out = from_hello(second, discovery(first))
+              assert status in [7, 28], (status, out)
+              for t in tenants:
+                  blocked(f"kubectl -n probe exec probe -- curl -fsS -m 5 -k https://{idm[t]}/status")
+              seen_by_kanidm()
+
+          # As an operator by hand: an account recovered by exec, and the client signed in with its new password.
+          def signed_in(t, name):
+              out = json.loads(server.succeed(
+                  f"kubectl -n {t}-kanidm exec kanidm-0 -c app -- /sbin/kanidmd scripting recover-account {name}"
+              ))
+              assert out["status"] == "ok", out
+              server.succeed(
+                  f"KANIDM_PASSWORD={out['output']} {pinned} kanidm login -H https://{idm[t]} -C {kanidm_ca} -D {name}"
+              )
+
+          def as_idm_admin(t):
+              server.succeed("rm -rf /root/.cache/kanidm_tokens")
+              signed_in(t, "idm_admin")
+
+          def cli(t, args, name="idm_admin"):
+              return f"{pinned} kanidm -H https://{idm[t]} -C {kanidm_ca} -D {name} {args}"
+
+          def kanidm(t, args):
+              return parsed(cli(t, f"-o json {args}"))
+
+          def disable_idm_admin(t):
+              server.succeed(f"kubectl -n {t}-kanidm exec kanidm-0 -c app -- /sbin/kanidmd disable-account idm_admin")
+              assert signing_in(t, "idm_admin") == {"denied": "account expired"}
+
+          with subtest("suveraen-idm makes a platform admin and a tenant admin, who can't touch the platform's, sets Kanidm's own groups, and leaves no admin account usable"):
+              # Without the makes and models platform-admins trusts, no one could enrol: a CA of the test's own.
+              der = base64.b64decode(server.succeed(
+                  "openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=e2e-attestation"
+                  " -days 2 -keyout /dev/null -outform DER 2>/dev/null | base64 -w0"
+              ))
+
+              def b64url(data):
+                  return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+              cas = {"cas": {b64url(hashlib.sha256(der).digest()): {"ca": b64url(der), "aaguids": {}, "blanket_allow": True}}}
+              server.succeed(f"echo {shlex.quote(json.dumps(cas))} > /tmp/cas.json")
+              out = server.fail(f"suveraen-idm admin {first} platform e2eops 'E2E operator' 2>&1")
+              assert "platform-admins has no attestation CA list" in out, out
+              out = server.succeed(f"suveraen-idm admin {first} platform e2eops 'E2E operator' /tmp/cas.json")
+              [token] = re.findall(rf"This link: https://{re.escape(idm[first])}/ui/reset\?token=(\S+)", out)
+              # The link lets them enrol a passkey of an approved make and model, and nothing else.
+              exchanged = json.loads(server.succeed(
+                  f"curl -fsS {reach[first]} -H 'Content-Type: application/json' -d '\"{token}\"'"
+                  f" https://{idm[first]}/v1/credential/_exchange_intent"
+              ))[1]
+              assert [exchanged[k] for k in ["primary_state", "passkeys_state", "attested_passkeys_state"]] == [
+                  "PolicyDeny", "PolicyDeny", "Modifiable"
+              ], exchanged
+              out = server.succeed(f"suveraen-idm admin {first} tenant e2eorg 'E2E organisation admin'")
+              assert f"This link: https://{idm[first]}/ui/reset?token=" in out, out
+              for name in ["idm_admin", "admin", "anonymous"]:
+                  assert signing_in(first, name) == {"denied": "account expired"}, name
+              as_idm_admin(first)
+              domain = idm[first]
+
+              def group(name):
+                  return kanidm(first, f"group get {name}")["attrs"]
+
+              admins, org = group("platform-admins"), group("tenant-admins")
+              assert (admins["credential_type_minimum"], admins["authsession_expiry"], admins["privilege_expiry"]) == (
+                  ["attested_passkey"], ["3600"], ["300"]
+              ), admins
+              assert (org["credential_type_minimum"], org["authsession_expiry"], org["privilege_expiry"]) == (
+                  ["passkey"], ["3600"], ["600"]
+              ), org
+              assert "webauthn_attestation_ca_list" in admins, admins
+              assert admins["member"] == [f"e2eops@{domain}"] and org["member"] == [f"e2eorg@{domain}"], (admins, org)
+              assert not group("members").get("member")
+              for name in ["idm_people_self_name_write", "idm_people_self_mail_write"]:
+                  assert not group(name).get("member"), (name, group(name))
+              assert sorted(group("idm_admins")["member"]) == [f"idm_admin@{domain}", f"platform-admins@{domain}"]
+              for name in ["idm_people_on_boarding", "idm_service_desk", "idm_group_admins"]:
+                  assert f"tenant-admins@{domain}" in group(name)["member"], (name, group(name))
+              assert group("idm_people_admins")["member"] == [f"idm_admins@{domain}"]
+              client = kanidm(first, "system oauth2 get hello-oidc")["attrs"]
+              assert client["oauth2_rs_scope_map"] == [f'hello-users@{domain}: {{"openid", "profile"}}'], client
+              disable_idm_admin(first)
+              # A person who exists already joins no admin group, as no one can say what credentials they hold.
+              out = server.fail(f"suveraen-idm admin {first} platform e2eorg 'E2E organisation admin' /tmp/cas.json 2>&1")
+              assert "e2eorg is a person outside platform-admins already" in out, out
+
+              # A tenant admin, here with a password Kanidm doesn't yet refuse as they sign in, manages the tenant's
+              # people and groups, but no platform admin, nor any admin group of Kanidm's or the platform's.
+              signed_in(first, "e2eorg")
+
+              def as_org(args):
+                  return cli(first, args, name="e2eorg")
+
+              server.succeed(as_org("person create e2emember 'E2E member'") + f" && {as_org('group add-members members e2emember')}")
+              assert "This link:" in server.succeed(as_org("person credential create-reset-token e2emember"))
+              # The client exits 0 for a reset or removal Kanidm refused, and says so.
+              assert "This link:" not in server.succeed(as_org("person credential create-reset-token e2eops") + " 2>&1")
+              assert "failure" in server.succeed(as_org("person delete e2eops") + " 2>&1")
+              server.fail(as_org("person validity expire-at e2eops now"))
+              for name in ["platform-admins", "idm_admins", "idm_people_admins"]:
+                  server.fail(as_org(f"group add-members {name} e2eorg"))
+              server.fail(as_org("system oauth2 show-basic-secret hello-oidc") + " | grep -Ex '[a-hjkp-z0-9]{48}'")
+              as_idm_admin(first)
+              ops = kanidm(first, "person get e2eops")["attrs"]
+              assert "account_expire" not in ops and f"platform-admins@{domain}" in ops["directmemberof"], ops
+              disable_idm_admin(first)
+              # No one can have a reset sent by mail, and the pages and the address check still work without anonymous.
+              server.succeed(
+                  f"curl -fsS {reach[first]} https://{idm[first]}/ui/recover | grep -F 'Account recovery has been disabled'"
+              )
+              server.succeed(f"curl -fsS -o /dev/null {reach[first]} https://{idm[first]}/ui/login")
+              seen_by_kanidm()
+
+          def sso_secret(t):
+              return server.succeed(
+                  f"kubectl -n {t}-hello get secret sso -o jsonpath='{{.data.client-secret}}' | base64 -d"
+              )
+
+          def set_sso_secret(t, value):
+              data = {"data": {"client-secret": base64.b64encode(value.encode()).decode()}}
+              server.succeed(f"kubectl -n {t}-hello patch secret sso --type merge -p {shlex.quote(json.dumps(data))}")
+
+          # Kanidm's answer to a token request as hello-oidc with that secret and a junk code: 400 for the right
+          # secret, 401 for a wrong one.
+          def probe_token(t, secret):
+              app_domain = read(f"${cluster}/tenants/{t}/secrets.yaml", "TENANT_APP_DOMAIN")
+              return server.succeed(
+                  f"printf %s {shlex.quote(secret)} | curl -sS -o /dev/null -w '%{{http_code}}' {reach[t]}"
+                  " -d grant_type=authorization_code -d code=junk"
+                  f" --data-urlencode redirect_uri=https://hello.{app_domain}/oauth2/callback"
+                  " -d code_verifier=e2eprobee2eprobee2eprobee2eprobee2eprobee2eprobe --data-urlencode client_id=hello-oidc"
+                  f" --data-urlencode client_secret@- https://{idm[t]}/oauth2/token"
+              ).strip()
+
+          # What suveraen-idm check finds of hello-oidc in each tenant.
+          def hello_client():
+              return {
+                  t["tenant"]: [c for c in t["clients"] if c["client"] == "hello-oidc"]
+                  for t in parsed("suveraen-idm check")["tenants"]
+              }
+
+          def recoveries(t):
+              log = f"kubectl -n {t}-kanidm logs kanidm-0 -c app"
+              return int(shown(f"{log} | grep -c handle_admin_recover_account").strip())
+
+          # hello reads the secret from its Secret as it starts, and Reloader restarts it when that changes.
+          def hello_holds(t, secret):
+              server.wait_until_succeeds(
+                  f"kubectl -n {t}-hello rollout status deployment hello --timeout=0 && test"
+                  f" \"$(kubectl -n {t}-hello exec deploy/hello -- printenv OIDC_CLIENT_SECRET)\" = {shlex.quote(secret)}",
+                  timeout=300,
+              )
+
+          with subtest("suveraen-idm sync copies each confidential client's secret from Kanidm into its app, so one release does, and recovers idm_admin only when something is wrong"):
+              # Flux made each app's Secret with the placeholder, which Kanidm takes for a wrong secret.
+              for t in tenants:
+                  assert sso_secret(t) == "pending" and probe_token(t, "pending") == "401", t
+              found = hello_client()
+              assert {t: [c["secret"] for c in found[t]] for t in tenants} == {t: ["placeholder"] for t in tenants}, found
+              out = server.succeed("suveraen-idm sync 2>&1")
+              for t in tenants:
+                  assert f"{t}: hello-oidc: its secret in {t}-hello/sso" in out, out
+                  secret = sso_secret(t)
+                  assert re.fullmatch(r"[a-hjkp-z0-9]{48}", secret), t
+                  assert probe_token(t, secret) == "400", t
+                  assert probe_token(t, "a" * 48) == "401", t
+                  hello_holds(t, secret)
+                  for name in ["idm_admin", "admin", "anonymous"]:
+                      assert signing_in(t, name) == {"denied": "account expired"}, (t, name)
+              found = hello_client()
+              assert {t: [(c["secret"], c["flags"]) for c in found[t]] for t in tenants} == {
+                  t: [("right", True)] for t in tenants
+              }, found
+              # With nothing wrong, nothing is recovered.
+              before = {t: recoveries(t) for t in tenants}
+              out = server.succeed("suveraen-idm sync 2>&1")
+              assert "recovering" not in out and all(f"{t}: hello-oidc: in line" in out for t in tenants), out
+              assert {t: recoveries(t) for t in tenants} == before, before
+
+          with subtest("suveraen-idm rotate gives a client a new secret, and no value an app's namespace writes reaches curl but a secret"):
+              old = sso_secret(first)
+              out = server.succeed(f"suveraen-idm rotate {first} hello-oidc 2>&1")
+              assert f"{first}: hello-oidc: a new secret in {first}-hello/sso" in out, out
+              new = sso_secret(first)
+              assert new != old and probe_token(first, old) == "401" and probe_token(first, new) == "400"
+              hello_holds(first, new)
+              # A value that, written into a curl config, would read a file and write it elsewhere.
+              crafted = 'x"\nurl = "file:///etc/machine-id"\noutput = "/tmp/crafted"\nx = "'
+              set_sso_secret(first, crafted)
+              assert [c["secret"] for c in hello_client()[first]] == ["invalid"]
+              out = server.succeed(f"suveraen-idm sync {first} 2>&1")
+              assert f"{first}: hello-oidc: holds no secret Kanidm makes" in out, out
+              assert sso_secret(first) == new and probe_token(first, crafted) == "401"
+              server.fail("test -e /tmp/crafted")
 
           def psql(namespace, pod, query, **conn):
               # Connects as the app does, with the Secret its namespace holds unless told otherwise.
@@ -1542,94 +1835,149 @@ pkgs.testers.runNixOSTest {
                   timeout=600,
               )
 
-          with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied"):
-              ns = f"{first}-hello"
+          with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied, Kanidm's with its people and keys"):
+              ns, idm_ns = f"{first}-hello", f"{first}-kanidm"
               # VolSync copies a snapshot of the volume, which holds only what has reached its disk.
               server.succeed(
                   f"kubectl -n {ns} exec deploy/hello -- sh -c 'echo kept > /data/marker && echo gone > /data/removed && sync'"
               )
+              # A person and Kanidm's signing keys, which its volume holds.
+              as_idm_admin(first)
+              server.succeed(cli(first, "person create probe Probe"))
+              person = kanidm(first, "person get probe")["attrs"]["uuid"]
+              disable_idm_admin(first)
 
-              def sync(kind, name, value):
-                  # A copy already running would take the new trigger as its own, though its snapshot may predate the files.
-                  server.wait_until_succeeds(
-                      f"t=$(kubectl -n {ns} get {kind} {name} -o jsonpath='{{.status.lastSyncStartTime}}') && test -z \"$t\"",
-                      timeout=600,
+              def signing_keys():
+                  jwks = server.succeed(
+                      f"curl -fsS {reach[first]} https://{idm[first]}/oauth2/openid/hello-oidc/public_key.jwk"
                   )
-                  merge(ns, f"{kind} {name}", {"spec": {"trigger": {"manual": value}}})
-                  server.wait_until_succeeds(
-                      f"kubectl -n {ns} get {kind} {name} -o jsonpath='{{.status.lastManualSync}}' | grep -x {value}",
-                      timeout=600,
-                  )
+                  return sorted(k["kid"] for k in json.loads(jwks)["keys"])
 
+              keys_before = signing_keys()
+
+              # Copies both volumes to both providers at once.
+              def copy_volumes(value):
+                  copies = [(namespace, f"data-{n}") for namespace in [ns, idm_ns] for n in providers]
+                  for namespace, name in copies:
+                      # A copy already running would take the new trigger as its own, though its snapshot may predate
+                      # the files.
+                      started = f"kubectl -n {namespace} get replicationsource {name} -o jsonpath='{{.status.lastSyncStartTime}}'"
+                      server.wait_until_succeeds(f"t=$({started}) && test -z \"$t\"", timeout=600)
+                      merge(namespace, f"replicationsource {name}", {"spec": {"trigger": {"manual": value}}})
+                  for namespace, name in copies:
+                      server.wait_until_succeeds(
+                          f"kubectl -n {namespace} get replicationsource {name} -o jsonpath='{{.status.lastManualSync}}'"
+                          f" | grep -x {value}",
+                          timeout=600,
+                      )
+
+              # Restores both volumes in one release.
               def restore(value, provider):
-                  knobs = f"      HELLO_DATA_RESTORE: {value}\\n      HELLO_DATA_RESTORE_FROM: offsite-{provider}\\n"
+                  knobs = "".join(
+                      f"      {app}_DATA_RESTORE: {value}\\n      {app}_DATA_RESTORE_FROM: offsite-{provider}\\n"
+                      for app in ["HELLO", "KANIDM"]
+                  )
                   release(
                       f"restore-volume-{value}",
-                      f"${asCgit} sed -i '/HELLO_DATA_RESTORE/d' tenants/{first}/tenant.yaml"
+                      f"${asCgit} sed -i '/_DATA_RESTORE/d' tenants/{first}/tenant.yaml"
                       f" && printf '{knobs}' | ${asCgit} tee -a tenants/{first}/tenant.yaml >/dev/null",
                   )
-                  server.wait_until_succeeds(
-                      f"kubectl -n {ns} get replicationdestination data -o jsonpath='{{.status.lastManualSync}}' | grep -x {value}",
-                      timeout=600,
-                  )
-                  server.wait_until_succeeds(
-                      f"kubectl -n flux-system wait kustomization {ns} --for=condition=Ready --timeout=0", timeout=600
-                  )
+                  for namespace in [ns, idm_ns]:
+                      server.wait_until_succeeds(
+                          f"kubectl -n {namespace} get replicationdestination data -o jsonpath='{{.status.lastManualSync}}'"
+                          f" | grep -x {value}",
+                          timeout=600,
+                      )
+                      server.wait_until_succeeds(
+                          f"kubectl -n flux-system wait kustomization {namespace} --for=condition=Ready --timeout=0",
+                          timeout=600,
+                      )
 
+              # Reads a volume as the latest restore left it, in a pod of the app's user.
+              def read_restored(namespace, uid, command):
+                  image = server.succeed(
+                      f"kubectl -n {namespace} get replicationdestination data -o jsonpath='{{.status.latestImage.name}}'"
+                  ).strip()
+                  apply({
+                      "apiVersion": "v1",
+                      "kind": "PersistentVolumeClaim",
+                      "metadata": {"name": "restored", "namespace": namespace},
+                      "spec": {
+                          "storageClassName": "ceph-block",
+                          "accessModes": ["ReadWriteOnce"],
+                          "resources": {"requests": {"storage": "1Gi"}},
+                          "dataSource": {"apiGroup": "snapshot.storage.k8s.io", "kind": "VolumeSnapshot", "name": image},
+                      },
+                  })
+                  pod = restricted(
+                      namespace, "reader", command,
+                      mounts=[{"name": "data", "mountPath": "/data"}],
+                      volumes=[{"name": "data", "persistentVolumeClaim": {"claimName": "restored"}}],
+                  )
+                  pod["spec"]["securityContext"] |= {"runAsUser": uid, "runAsGroup": uid, "fsGroup": uid}
+                  apply(pod)
+                  out = finished(namespace, "reader")
+                  server.succeed(f"kubectl -n {namespace} delete pod reader && kubectl -n {namespace} delete pvc restored")
+                  return out
+
+              copy_volumes("first")
               for n in providers:
-                  sync("replicationsource", f"data-{n}", "first")
-                  copies = f"/var/lib/s3-{n}/data/{bucket_at(n, first)}/volsync/hello"
-                  acme.succeed(f"test -f {copies}/config && test -n \"$(find {copies}/data -type f)\" && ! grep -rq kept {copies}")
+                  for app, secret in [("hello", "kept"), ("kanidm", "e2eops")]:
+                      copies = f"/var/lib/s3-{n}/data/{bucket_at(n, first)}/volsync/{app}"
+                      acme.succeed(
+                          f"test -f {copies}/config && test -n \"$(find {copies}/data -type f)\""
+                          f" && ! grep -rq {secret} {copies}"
+                      )
                   # The app's key reaches its own prefix alone, and can't take the repository's config or keys away.
                   ours, bucket = keys_of(first, n, "HELLO"), bucket_at(n, first)
                   refused_at(n, ours, f"s3api list-objects-v2 --bucket {bucket} --prefix postgres/")
+                  refused_at(n, ours, f"s3api list-objects-v2 --bucket {bucket} --prefix volsync/kanidm/")
                   refused_at(n, ours, f"s3api delete-object --bucket {bucket} --key volsync/hello/config")
-                  key = acme.succeed(f"cd {copies}/.. && find hello/keys -type f | head -1").strip()
-                  refused_at(n, ours, f"s3api delete-object --bucket {bucket} --key volsync/{key}")
+                  key = acme.succeed(f"cd /var/lib/s3-{n}/data/{bucket} && find volsync/hello/keys -type f | head -1").strip()
+                  refused_at(n, ours, f"s3api delete-object --bucket {bucket} --key {key}")
 
-              # Provider 1's copy, restored, holds both files.
+              # Provider 1's copies, restored, hold both files, and Kanidm's database with its own copy beside it.
               restore("one", 1)
-              image = server.succeed(
-                  f"kubectl -n {ns} get replicationdestination data -o jsonpath='{{.status.latestImage.name}}'"
-              ).strip()
-              apply({
-                  "apiVersion": "v1",
-                  "kind": "PersistentVolumeClaim",
-                  "metadata": {"name": "restored", "namespace": ns},
-                  "spec": {
-                      "storageClassName": "ceph-block",
-                      "accessModes": ["ReadWriteOnce"],
-                      "resources": {"requests": {"storage": "1Gi"}},
-                      "dataSource": {"apiGroup": "snapshot.storage.k8s.io", "kind": "VolumeSnapshot", "name": image},
-                  },
-              })
-              apply(restricted(
-                  ns, "reader", "cat /data/marker /data/removed",
-                  mounts=[{"name": "data", "mountPath": "/data"}],
-                  volumes=[{"name": "data", "persistentVolumeClaim": {"claimName": "restored"}}],
-              ))
-              assert finished(ns, "reader").split() == ["kept", "gone"]
-              server.succeed(f"kubectl -n {ns} delete pod reader && kubectl -n {ns} delete pvc restored")
+              assert read_restored(ns, 65534, "cat /data/marker /data/removed").split() == ["kept", "gone"]
+              listed = read_restored(idm_ns, 389, "ls /data").split()
+              assert "kanidm.db" in listed and any(re.fullmatch(r"backup-.*\.json\.gz", f) for f in listed), listed
 
               # A file deleted before the next copies is gone again from provider 2's copy, restored over the first.
               server.succeed(f"kubectl -n {ns} exec deploy/hello -- sh -c 'rm /data/removed && sync'")
-              for n in providers:
-                  sync("replicationsource", f"data-{n}", "second")
+              copy_volumes("second")
+              # Kanidm's secret for hello changes after the copies, so the restore brings back one the app no longer
+              # holds.
+              server.succeed(f"suveraen-idm rotate {first} hello-oidc")
               restore("two", 2)
               # Once nothing mounts the lost volume, which its deletion waits for, Flux makes it anew from the restore.
-              server.succeed(
-                  f"kubectl -n {ns} scale deployment hello --replicas=0 && kubectl -n {ns} delete pvc data --timeout=300s"
-                  f" && kubectl -n flux-system annotate kustomization {ns} --overwrite reconcile.fluxcd.io/requestedAt=$(date +%s)"
-              )
-              server.wait_until_succeeds(
-                  f"kubectl -n {ns} get pvc data -o jsonpath='{{.status.phase}}' | grep -x Bound", timeout=600
-              )
-              server.succeed(
-                  f"kubectl -n {ns} scale deployment hello --replicas=1"
-                  f" && kubectl -n {ns} rollout status deployment hello --timeout=300s"
-              )
+              for namespace, kind, name in [(ns, "deployment", "hello"), (idm_ns, "statefulset", "kanidm")]:
+                  server.succeed(
+                      f"kubectl -n {namespace} scale {kind} {name} --replicas=0"
+                      f" && kubectl -n {namespace} delete pvc data --timeout=300s"
+                      f" && kubectl -n flux-system annotate kustomization {namespace} --overwrite"
+                      " reconcile.fluxcd.io/requestedAt=$(date +%s)"
+                  )
+                  server.wait_until_succeeds(
+                      f"kubectl -n {namespace} get pvc data -o jsonpath='{{.status.phase}}' | grep -x Bound", timeout=600
+                  )
+                  server.succeed(
+                      f"kubectl -n {namespace} scale {kind} {name} --replicas=1"
+                      f" && kubectl -n {namespace} rollout status {kind} {name} --timeout=300s"
+                  )
               assert server.succeed(f"kubectl -n {ns} exec deploy/hello -- cat /data/marker").strip() == "kept"
               server.fail(f"kubectl -n {ns} exec deploy/hello -- test -e /data/removed")
+              server.wait_until_succeeds(f"curl -fsS -o /dev/null {reach[first]} {discovery(first)}", timeout=300)
+              assert signing_keys() == keys_before
+              as_idm_admin(first)
+              assert kanidm(first, "person get probe")["attrs"]["uuid"] == person
+              disable_idm_admin(first)
+              # The restored Kanidm holds the secret from before the rotation, which a sync would hand the app again;
+              # rotate --all gives every confidential client a new one.
+              assert [c["secret"] for c in hello_client()[first]] == ["wrong"]
+              out = server.succeed(f"suveraen-idm rotate --all {first} 2>&1")
+              assert f"{first}: hello-oidc: a new secret in {first}-hello/sso" in out, out
+              assert [c["secret"] for c in hello_client()[first]] == ["right"]
+              hello_holds(first, sso_secret(first))
 
           with subtest("Nothing is left of the volumes copies and restores worked on, and tenants' volumes are backed up"):
               server.wait_until_succeeds(
@@ -1700,14 +2048,15 @@ pkgs.testers.runNixOSTest {
               for line in shown(journal).splitlines():
                   if line.startswith("cluster scope: "):
                       scope = line.removeprefix("cluster scope: ")
-                  elif m := re.fullmatch(r"(ok|late) (.+?): (.*)", line):
+                  elif m := re.fullmatch(r"(ok|late|unknown) (.+?): (.*)", line):
                       findings[m.group(2)] = (m.group(1), m.group(3))
               return scope, findings
 
           # What the server's checks have alerted so far, as the phone got it.
           def checks_said():
+              ours = ("backups ", "Ceph ", "cluster status ", "Kanidm ", "still: ")
               return [(a["title"], a.get("priority", 3)) for a in alerts() if a.get("title", "").removeprefix(
-                  "${nodes.server.networking.hostName}: ").startswith(("backups ", "Ceph ", "cluster status ", "still: "))]
+                  "${nodes.server.networking.hostName}: ").startswith(ours)]
 
           # A new etcd snapshot, as if k3s had made it a while ago: the copy leaves out one younger than a minute, which
           # may still be being written.
@@ -1772,7 +2121,13 @@ pkgs.testers.runNixOSTest {
                            for c in items("clusters.postgresql.cnpg.io")}
               assert len(archiving) == len(tenants), archiving
               offsite = {f"etcd-offsite-{n}" for n in providers}
-              assert findings.keys() == before.keys() | archiving | offsite | {"Ceph status", "cluster status", "etcd-snapshots"}, findings
+              # And each tenant's Kanidm, which the checks find in order.
+              identities = {"Kanidm check"} | {
+                  f"{t}-kanidm{part}" for t in tenants for part in [" admin accounts", " migrations", "/hello-oidc"]
+              }
+              assert findings.keys() == (
+                  before.keys() | archiving | offsite | identities | {"Ceph status", "cluster status", "etcd-snapshots"}
+              ), findings
               assert all(state == "ok" for state, _ in findings.values()), findings
               for key in before:
                   detail, times = findings[key][1], [before[key], after[key]]
@@ -1833,6 +2188,17 @@ pkgs.testers.runNixOSTest {
               host_checks()
               assert checks_said()[said + 1:] == [("${nodes.server.networking.hostName}: Ceph healthy again", 3)]
 
+          with subtest("An app whose copy of its client's secret is wrong reaches the phone once, and so does its sync"):
+              said = len(checks_said())
+              set_sso_secret(first, "a" * 48)
+              _, findings = host_checks()
+              assert findings[f"{first}-kanidm/hello-oidc"][0] == "late", findings
+              assert checks_said()[said:] == [("${nodes.server.networking.hostName}: Kanidm clients out of sync", 4)]
+              server.succeed(f"suveraen-idm sync {first}")
+              _, findings = host_checks()
+              assert findings[f"{first}-kanidm/hello-oidc"][0] == "ok", findings
+              assert checks_said()[said + 1:] == [("${nodes.server.networking.hostName}: Kanidm clients in sync again", 3)]
+
           with subtest("The standby CA issues too, with our external account there"):
               standby = {
                   "apiVersion": "cert-manager.io/v1",
@@ -1855,8 +2221,12 @@ pkgs.testers.runNixOSTest {
           with subtest("A host's key is labelled with its tenant, and goes with its certificate"):
               certs = get(f"kubectl -n gateway get certificate -l suveraen/tenant={first}")["items"]
               assert sorted(n for c in certs for n in c["spec"]["dnsNames"]) == sorted(set(hosts_of(first))), certs
-              for cert in certs:
-                  meta = get(f"kubectl -n gateway get secret {cert['spec']['secretName']}")["metadata"]
+              # A host passed through has its key with the app alone.
+              [own] = get(f"kubectl -n {first}-kanidm get certificate")["items"]
+              assert own["spec"]["dnsNames"] == [idm[first]], own
+              for cert in certs + [own]:
+                  where = cert["metadata"]["namespace"]
+                  meta = get(f"kubectl -n {where} get secret {cert['spec']['secretName']}")["metadata"]
                   assert meta["labels"].get("suveraen/tenant") == first, meta
                   assert [(o["kind"], o["name"]) for o in meta.get("ownerReferences", [])] == [
                       ("Certificate", cert["metadata"]["name"])
@@ -1884,8 +2254,11 @@ pkgs.testers.runNixOSTest {
 
               gone(f"kustomization,secret -n flux-system -l suveraen/tenant={second}")
               gone(f"gateway,certificate,secret -n gateway -l suveraen/tenant={second}")
-              gone(f"helmrelease,httproute,networkpolicy -A -l suveraen/tenant={second}")
-              # Its PostgreSQL and bucket are never pruned: they go with the namespace alone.
+              gone(f"helmrelease,httproute,tlsroute,networkpolicy -A -l suveraen/tenant={second}")
+              # Its app's file goes from its Kanidm, whose database stays on its volume; its PostgreSQL and bucket are
+              # never pruned: they go with the namespace alone.
+              server.wait_until_fails(f"kubectl -n {second}-kanidm get configmap sso-hello", timeout=600)
+              server.succeed(f"kubectl -n {second}-kanidm get pvc data")
               server.succeed(f"kubectl -n {second}-postgres get cluster postgres && kubectl -n {second}-postgres get objectbucketclaim bucket")
               for namespace in namespaces:
                   if namespace != f"namespace/{second}-postgres":
@@ -1895,6 +2268,8 @@ pkgs.testers.runNixOSTest {
                   forge.succeed(f"{fetch(host)} -o /dev/null")
               for host in theirs:
                   forge.wait_until_fails(f"{fetch(host)} -o /dev/null", timeout=120)
+              forge.wait_until_fails(f"{fetch(idm[second])}status -o /dev/null", timeout=120)
+              forge.succeed(f"{fetch(idm[first])}status -o /dev/null")
               asked = int(server.succeed("date +%s"))
               start = time.monotonic()
               server.succeed(f"kubectl delete namespace -l suveraen/tenant={second} --timeout=300s")

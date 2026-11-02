@@ -6,7 +6,7 @@
 # credential only as one is enrolled, never as one signs in, so a person joins such a group only before they have
 # any. idm_admins, which holds idm_admin, manages platform-admins, and tenant-admins their own. IDs are fixed for good:
 # Kanidm finds an entry by its ID, and never takes one back once a removal named it. Kanidm's builtin groups are out
-# of a migration's reach, so their members are set by hand.
+# of a migration's reach, so suveraen-idm admin sets their members (nixos/idm.nix).
 apiVersion: v1
 kind: ConfigMap
 metadata:

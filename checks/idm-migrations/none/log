@@ -1,0 +1,3 @@
+e737b114-2bb0-45ab-a583-d409ff115c68 INFO     request [ 338µs | 48.06% / 100.00% ] method: POST | uri: /oauth2/token | version: HTTP/1.1 | connection_address: "127.0.0.1:49734" | client_address: "127.0.0.1" | status_code: 400 | latency: 0 | kopid: "e737b114-2bb0-45ab-a583-d409ff115c68"
+e737b114-2bb0-45ab-a583-d409ff115c68 INFO     ┕━ handle_oauth2_token_exchange [ 176µs | 51.94% ]
+e737b114-2bb0-45ab-a583-d409ff115c68 ERROR       ┕━ 🚨 [error]: Failed to deserialise a valid JWE

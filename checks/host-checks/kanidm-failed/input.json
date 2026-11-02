@@ -1,0 +1,8 @@
+{
+  "state": {
+    "kanidmChecked": 1792666800
+  },
+  "cluster": {
+    "idm": {"failed": "it gave no answer within 120 seconds"}
+  }
+}

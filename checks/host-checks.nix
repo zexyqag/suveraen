@@ -1,5 +1,6 @@
-# Runs the servers' checks of backups and Ceph (nixos/host-checks.jq) on what a cluster might hold, each case on top of
-# base.json, and compares what they find with what they should.
+# Runs the servers' checks (nixos/host-checks.jq) on what a cluster might hold, each case on top of base.json, and
+# suveraen-idm's filter for Kanidm's log (nixos/idm-migrations.jq) on logs Kanidm wrote, and compares what they find
+# with what they should.
 { pkgs }:
 pkgs.runCommand "host-checks" { nativeBuildInputs = [ pkgs.jq ]; } ''
   failed=0
@@ -10,6 +11,15 @@ pkgs.runCommand "host-checks" { nativeBuildInputs = [ pkgs.jq ]; } ''
       echo "ok $name"
     else
       echo "WRONG $name"
+      failed=1
+    fi
+  done
+  for case in ${./idm-migrations}/*/; do
+    name=$(basename "$case")
+    if jq -Rsc -f ${../nixos/idm-migrations.jq} "$case/log" | diff -u <(jq -c . "$case/expected.json") -; then
+      echo "ok log $name"
+    else
+      echo "WRONG log $name"
       failed=1
     fi
   done

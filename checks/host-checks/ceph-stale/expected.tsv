@@ -1,3 +1,5 @@
 cluster	evaluated
+kanidm	checked
 cluster	Ceph status	late	4	Ceph status not updated	HEALTH_OK, checked 2026-10-22T10:00:00Z (2h 0m ago), limit 30m
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
 host	cluster status	ok	4	cluster status unreadable	read

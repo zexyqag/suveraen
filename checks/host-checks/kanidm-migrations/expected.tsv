@@ -1,0 +1,7 @@
+cluster	evaluated
+kanidm	checked
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
+cluster	alpha-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
+cluster	alpha-kanidm migrations	unknown	4	Kanidm migrations failed	no run of them in its log
+cluster	alpha-kanidm/hello-oidc	ok	4	Kanidm clients out of sync	in sync
+host	cluster status	ok	4	cluster status unreadable	read

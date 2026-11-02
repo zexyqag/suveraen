@@ -1,0 +1,44 @@
+{
+  "state": {
+    "kanidmChecked": 1792667700
+  },
+  "cluster": {
+    "idm": {
+      "tenants": [
+        {
+          "tenant": "alpha",
+          "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
+          "migrations": {"failed": [], "denied": 0},
+          "clients": [
+            {"client": "hello-oidc", "app": "hello", "kind": "basic", "secret": "right", "flags": true},
+            {"client": "notes-oidc", "app": "notes", "kind": "basic", "secret": "placeholder", "flags": false},
+            {"client": "photos-oidc", "app": "photos", "kind": "public", "secret": "-", "flags": false},
+            {"client": "chat-oidc", "app": "chat", "kind": "public", "secret": "-", "flags": true},
+            {"client": "files-oidc", "app": "files", "kind": "basic", "secret": "unknown", "flags": true},
+            {"client": "wiki-oidc", "app": "wiki", "kind": "basic", "secret": "missing", "flags": true}
+          ]
+        },
+        {
+          "tenant": "bravo",
+          "accounts": {"idm_admin": "unusable", "admin": "unusable", "anonymous": "enabled"},
+          "migrations": {"failed": ["50-hello.json: AccessDenied"], "denied": 2},
+          "clients": [
+            {"client": "hello-oidc", "app": "hello", "kind": "basic", "secret": "wrong", "flags": true},
+            {"client": "mail-oidc", "app": "mail", "kind": "", "secret": "unusable", "flags": false},
+            {"client": "vault-oidc", "app": "vault", "kind": "basic", "secret": "invalid", "flags": true}
+          ]
+        },
+        {
+          "tenant": "corgi",
+          "accounts": {"idm_admin": "unknown", "admin": "expired", "anonymous": "expired"},
+          "migrations": null,
+          "clients": []
+        },
+        {
+          "tenant": "delta",
+          "unchecked": "ConfigMap kanidm in delta-kanidm names no single origin"
+        }
+      ]
+    }
+  }
+}

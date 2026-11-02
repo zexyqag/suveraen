@@ -1,0 +1,10 @@
+d96880fa-a5ed-47b2-8004-6ddc27053065 INFO     migration_apply [ 4.99ms | 9.37% / 100.00% ]
+d96880fa-a5ed-47b2-8004-6ddc27053065 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/10-sync.json
+d96880fa-a5ed-47b2-8004-6ddc27053065 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/20-builtins.json
+d96880fa-a5ed-47b2-8004-6ddc27053065 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/50-hello.json
+d96880fa-a5ed-47b2-8004-6ddc27053065 INFO     ┝━ handle_scim_migration_apply [ 1.65ms | 33.01% ]
+d96880fa-a5ed-47b2-8004-6ddc27053065 INFO     │  ┕━ ｉ [info]: Assertion already applied, skipping. | id: a0000000-0000-4000-8000-000000000010
+d96880fa-a5ed-47b2-8004-6ddc27053065 INFO     ┝━ handle_scim_migration_apply [ 1.91ms | 38.20% ]
+d96880fa-a5ed-47b2-8004-6ddc27053065 INFO     │  ┕━ ｉ [info]: denied ❌ - no entries were released | event_tag_id: 11
+d96880fa-a5ed-47b2-8004-6ddc27053065 INFO     ┕━ handle_scim_migration_apply [ 970µs | 19.43% ]
+d96880fa-a5ed-47b2-8004-6ddc27053065 INFO        ┕━ ｉ [info]: Assertion already applied, skipping. | id: a0000000-0000-4000-8000-000000000050

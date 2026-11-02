@@ -1,0 +1,15 @@
+873472c5-d900-41f0-b1b2-d373abdeb035 INFO     migration_apply [ 5.32ms | 12.55% / 100.00% ]
+873472c5-d900-41f0-b1b2-d373abdeb035 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/10-groups.json
+873472c5-d900-41f0-b1b2-d373abdeb035 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/11-obj.json
+873472c5-d900-41f0-b1b2-d373abdeb035 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/12-objmo.json
+873472c5-d900-41f0-b1b2-d373abdeb035 INFO     ┝━ handle_scim_migration_apply [ 3.63ms | 68.31% ]
+873472c5-d900-41f0-b1b2-d373abdeb035 INFO     ┝━ handle_scim_migration_apply [ 586µs | 11.03% ]
+873472c5-d900-41f0-b1b2-d373abdeb035 ERROR    │  ┝━ 🚨 [error]: requested_pres_classes is not a subset of allowed | event_tag_id: 12
+873472c5-d900-41f0-b1b2-d373abdeb035 ERROR    │  ┝━ 🚨 [error]: requested_classes: {"group", "object"} !⊆ allowed: {"account_policy", "group", "posixgroup"} | event_tag_id: 12
+873472c5-d900-41f0-b1b2-d373abdeb035 INFO     │  ┕━ ｉ [info]: denied ❌ - create may not proceed | event_tag_id: 11
+873472c5-d900-41f0-b1b2-d373abdeb035 ERROR    ┝━ 🚨 [error]: Failed to apply migration | err: AccessDenied | path: /migrations/11-obj.json
+873472c5-d900-41f0-b1b2-d373abdeb035 INFO     ┝━ handle_scim_migration_apply [ 431µs | 8.11% ]
+873472c5-d900-41f0-b1b2-d373abdeb035 ERROR    │  ┝━ 🚨 [error]: requested_pres_classes is not a subset of allowed | event_tag_id: 12
+873472c5-d900-41f0-b1b2-d373abdeb035 ERROR    │  ┝━ 🚨 [error]: requested_classes: {"group", "memberof", "object"} !⊆ allowed: {"account_policy", "group", "posixgroup"} | event_tag_id: 12
+873472c5-d900-41f0-b1b2-d373abdeb035 INFO     │  ┕━ ｉ [info]: denied ❌ - create may not proceed | event_tag_id: 11
+873472c5-d900-41f0-b1b2-d373abdeb035 ERROR    ┕━ 🚨 [error]: Failed to apply migration | err: AccessDenied | path: /migrations/12-objmo.json

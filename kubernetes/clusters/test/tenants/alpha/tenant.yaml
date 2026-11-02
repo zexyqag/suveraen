@@ -12,3 +12,6 @@ spec:
       TENANT: alpha
       # Both tenants' buckets fit in the test cluster's object store quota.
       POSTGRES_BUCKET_SIZE: 1G
+      # Kanidm's own copy of its database every minute, so its volume's copies hold one by the time the test makes them.
+      # Flux puts the value into YAML unquoted, where a leading * would read as an alias.
+      KANIDM_BACKUP_SCHEDULE: 0-59 * * * *

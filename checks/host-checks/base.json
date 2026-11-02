@@ -46,6 +46,9 @@
       "items": []
     },
     "cephcluster": null,
-    "cronjobs": {}
+    "cronjobs": {},
+    "idm": {
+      "tenants": []
+    }
   }
 }

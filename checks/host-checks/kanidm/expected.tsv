@@ -1,0 +1,19 @@
+cluster	evaluated
+cluster	Kanidm check	late	4	Kanidm unchecked	every tenant's Kanidm last checked 2026-10-22T11:15:00Z (45m ago), limit 30m: nothing told of alpha-kanidm/files-oidc, alpha-kanidm/wiki-oidc, corgi-kanidm admin accounts, delta-kanidm
+cluster	alpha-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
+cluster	alpha-kanidm migrations	ok	4	Kanidm migrations failed	the last run applied every file
+cluster	alpha-kanidm/chat-oidc	ok	4	Kanidm clients out of sync	in sync
+cluster	alpha-kanidm/files-oidc	unknown	4	Kanidm clients out of sync	no answer to the probe
+cluster	alpha-kanidm/hello-oidc	ok	4	Kanidm clients out of sync	in sync
+cluster	alpha-kanidm/notes-oidc	late	4	Kanidm clients out of sync	the app's Secret sso still holds the placeholder, its flags are not applied; run suveraen-idm sync alpha
+cluster	alpha-kanidm/photos-oidc	late	4	Kanidm clients out of sync	its flags are not applied; run suveraen-idm sync alpha
+cluster	alpha-kanidm/wiki-oidc	unknown	4	Kanidm clients out of sync	the app has no Secret sso
+cluster	bravo-kanidm admin accounts	late	4	Kanidm admin accounts enabled	anonymous enabled, which suveraen-idm sync bravo disables
+cluster	bravo-kanidm migrations	late	4	Kanidm migrations failed	in the last run: 50-hello.json: AccessDenied; 2 changes skipped to entries it may not see
+cluster	bravo-kanidm/hello-oidc	late	4	Kanidm clients out of sync	the secret in the app's Secret sso is wrong for Kanidm; run suveraen-idm sync bravo
+cluster	bravo-kanidm/mail-oidc	late	4	Kanidm clients out of sync	sso-mail names no client suveraen-idm can use
+cluster	bravo-kanidm/vault-oidc	late	4	Kanidm clients out of sync	the app's Secret sso holds no secret Kanidm makes; run suveraen-idm sync bravo
+cluster	corgi-kanidm admin accounts	unknown	4	Kanidm admin accounts enabled	no answer for idm_admin
+cluster	corgi-kanidm migrations	unknown	4	Kanidm migrations failed	no run of them in its log
+cluster	delta-kanidm	unknown	4	Kanidm unchecked	ConfigMap kanidm in delta-kanidm names no single origin
+host	cluster status	ok	4	cluster status unreadable	read

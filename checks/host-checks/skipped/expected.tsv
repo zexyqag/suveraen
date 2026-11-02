@@ -1,2 +1,3 @@
 cluster	skipped
+kanidm	checked
 host	cluster status	ok	4	cluster status unreadable	read

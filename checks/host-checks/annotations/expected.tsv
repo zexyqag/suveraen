@@ -1,4 +1,6 @@
 cluster	evaluated
+kanidm	checked
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
 cluster	odd-hello/data-1	late	4	backups late	no valid suveraen/max-age ("") since 2026-10-01T00:00:00Z (21d 12h ago), grace 1h
 cluster	odd-hello/data-2	late	4	backups late	no valid suveraen/max-age ("3H") since 2026-10-01T00:00:00Z (21d 12h ago), grace 1h
 cluster	odd-hello/offsite-check-1	ok	4	backups late	last 2026-10-22T01:41:00Z (10h 19m ago), limit 3d

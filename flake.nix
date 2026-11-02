@@ -43,13 +43,15 @@
       machine = host: (config host).system.build;
       build = host: (machine host).toplevel;
 
-      # The Kanidm client the platform builds, whose version every tenant's Kanidm runs (checks/render.sh).
-      kanidm = pkgs.kanidm_1_11;
+      server = config ./checks/server.nix;
+
+      # The Kanidm client the servers run, whose version every tenant's Kanidm runs (checks/render.sh).
+      inherit (server.suveraen.idm) kanidm;
 
       # What render checks each cluster's settings against: the ranges the servers give k3s.
       ranges =
         let
-          cluster = (config ./checks/server.nix).suveraen.cluster;
+          inherit (server.suveraen) cluster;
           named =
             kind: cidrs:
             map (cidr: "${kind}_CIDR_V${if pkgs.lib.hasInfix ":" cidr then "6" else "4"}=${cidr}") cidrs;

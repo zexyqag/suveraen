@@ -18,7 +18,7 @@ jobs:
   e2e:
     needs: check
     runs-on: ubuntu-latest
-    timeout-minutes: 130
+    timeout-minutes: 140
     concurrency:
       group: e2e-${{ github.ref }}
       cancel-in-progress: true

@@ -1,4 +1,6 @@
 cluster	evaluated
+kanidm	checked
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
 host	cluster status	ok	4	cluster status unreadable	read
 host	etcd-snapshots	late	4	backups late	last 2026-10-21T22:00:00Z (14h 0m ago), limit 13h
 host	fresh	ok	4	backups late	missing since 2026-10-22T12:00:00Z (0m ago), limit 1h

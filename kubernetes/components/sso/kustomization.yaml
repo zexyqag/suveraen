@@ -3,9 +3,9 @@
 # ConfigMap sso-<app> in the tenant's Kanidm namespace holds the app's migration, 50-<app>.json: its groups and its one
 # OAuth2 client, <app>-oidc, with redirects to the app's own hosts. Kanidm applies the file as it starts, and
 # Reloader restarts it when one appears or changes. The flags no migration can set go on the ConfigMap as
-# annotations set to "true": suveraen/disable-pkce for a confidential client, suveraen/localhost-redirects for a
-# public one. The attachment also opens Kanidm's port to the app's namespace, whose components/sso-client opens the
-# other end.
+# annotations set to "true", which suveraen-idm sync applies (nixos/idm.nix): suveraen/disable-pkce for a confidential
+# client, suveraen/localhost-redirects for a public one. The attachment also opens Kanidm's port to the app's
+# namespace, whose components/sso-client opens the other end.
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
 resources:
