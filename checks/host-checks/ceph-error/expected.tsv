@@ -1,4 +1,5 @@
 cluster	evaluated
+kanidm	answered
 kanidm	checked
 cluster	Ceph PG_DAMAGED	late	5	Ceph HEALTH_ERR	Possible data damage: 1 pg inconsistent; ceph health detail says more
 cluster	Ceph POOL_NEAR_FULL	late	5	Ceph HEALTH_ERR	1 pool(s) nearfull; ceph health detail says more

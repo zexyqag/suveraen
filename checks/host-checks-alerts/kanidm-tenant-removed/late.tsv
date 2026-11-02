@@ -1,0 +1,1 @@
+cluster	bravo-kanidm/hello-oidc	late	4	Kanidm clients out of sync	the secret in the app's Secret sso is wrong for Kanidm; run suveraen-idm sync bravo

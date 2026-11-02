@@ -1,0 +1,3 @@
+cluster	alpha-kanidm admin accounts	late	4	Kanidm admin accounts enabled	anonymous enabled, which suveraen-idm sync alpha disables
+cluster	alpha-kanidm/hello-oidc	late	4	Kanidm clients out of sync	its flags are not applied; run suveraen-idm sync alpha
+cluster	alpha-kanidm/data-1	late	4	backups late	last 2026-10-20T12:00:00Z (2d 0h ago), limit 26h

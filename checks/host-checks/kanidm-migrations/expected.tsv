@@ -1,4 +1,5 @@
 cluster	evaluated
+kanidm	answered
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm last checked 2026-10-22T12:00:00Z (0m ago), limit 30m: nothing told of eagle-kanidm admin accounts
 cluster	alpha-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	alpha-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started

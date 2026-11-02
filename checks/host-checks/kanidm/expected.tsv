@@ -1,4 +1,5 @@
 cluster	evaluated
+kanidm	answered
 cluster	Kanidm check	late	4	Kanidm unchecked	every tenant's Kanidm last checked 2026-10-22T11:15:00Z (45m ago), limit 30m: nothing told of alpha-kanidm/files-oidc, alpha-kanidm/wiki-oidc, corgi-kanidm admin accounts, delta-kanidm
 cluster	alpha-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	alpha-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started

@@ -1,6 +1,7 @@
-# Runs the servers' checks (nixos/host-checks.jq) on what a cluster might hold, each case on top of base.json, and
-# suveraen-idm's filter for Kanidm's log (nixos/idm-migrations.jq) on logs Kanidm wrote, stamped as the kubelet shows
-# them, with the time its container started, and compares what they find with what they should.
+# Runs the servers' checks (nixos/host-checks.jq) on what a cluster might hold, each case on top of base.json; on some,
+# what they then alert given the findings late before (nixos/host-checks-alert.jq); and suveraen-idm's filter for
+# Kanidm's log (nixos/idm-migrations.jq) on logs Kanidm wrote, stamped as the kubelet shows them, with the time its
+# container started; and compares what they find with what they should.
 { pkgs }:
 pkgs.runCommand "host-checks" { nativeBuildInputs = [ pkgs.jq ]; } ''
   failed=0
@@ -11,6 +12,20 @@ pkgs.runCommand "host-checks" { nativeBuildInputs = [ pkgs.jq ]; } ''
       echo "ok $name"
     else
       echo "WRONG $name"
+      failed=1
+    fi
+  done
+  for case in ${./host-checks-alerts}/*/; do
+    name=$(basename "$case")
+    merged=$(jq -s '.[0] * .[1]' ${./host-checks/base.json} "$case/input.json")
+    now=$(jq .now <<<"$merged")
+    if jq -r -f ${../nixos/host-checks.jq} <<<"$merged" \
+      | jq -R -s -c --rawfile alerted "$case/late.tsv" --argjson now "$now" --argjson remind 86400 \
+        --argjson reminded "$now" -f ${../nixos/host-checks-alert.jq} \
+      | diff -u <(jq -c . "$case/expected.json") -; then
+      echo "ok alert $name"
+    else
+      echo "WRONG alert $name"
       failed=1
     fi
   done

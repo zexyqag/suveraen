@@ -1,7 +1,8 @@
 # What host-checks.nix finds in what it read, judged at .now: a line saying whether this server checked the cluster
-# (evaluated, skipped or unreadable), one when every tenant's Kanidm was checked, then one per finding with its scope,
-# key, ok, late or unknown, priority, the title it alerts under and what was found, separated by tabs, and last, when
-# suveraen-idm check told of the tenants' Kanidm, what the report keeps of how each ran its migrations as it started.
+# (evaluated, skipped or unreadable), one when suveraen-idm check told of the tenants' Kanidm and one when it told of
+# every one in full, then one per finding with its scope, key, ok, late or unknown, priority, the title it alerts
+# under and what was found, separated by tabs, and last, when it told of them, what the report keeps of how each ran
+# its migrations as it started.
 
 def time: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
 def stamp: if . == null then null else time end;
@@ -224,8 +225,10 @@ def unchecked($idm; $rows):
 | ($state.kanidmJudged // {}) as $judged
 | [kanidm($c; $k.idm; $judged)] as $kanidm
 | unchecked($k.idm; $kanidm) as $why
-# Whether every tenant's Kanidm was checked, which the report keeps the time of.
+# Whether suveraen-idm check told of the tenants' Kanidm at all, and whether in full, which the report keeps the time
+# of.
 | ["cluster", $scope],
+  (select($unreadable == null and ($k.idm.tenants? | type) == "array") | ["kanidm", "answered"]),
   (select($unreadable == null and $why == null) | ["kanidm", "checked"]),
   ([
     ($spec.files | to_entries[]

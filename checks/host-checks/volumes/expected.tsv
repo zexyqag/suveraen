@@ -1,4 +1,5 @@
 cluster	evaluated
+kanidm	answered
 kanidm	checked
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
 cluster	gone-hello/data copy to offsite-2	late	4	backups late	no ReplicationSource copies it, required since 2026-10-01T00:00:00Z (21d 12h ago), grace 1h

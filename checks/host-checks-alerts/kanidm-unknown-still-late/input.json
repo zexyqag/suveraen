@@ -1,0 +1,11 @@
+{
+  "state": {"kanidmChecked": 1792670400},
+  "cluster": {
+    "idm": {
+      "tenants": [
+        {"tenant": "alpha", "accounts": {"idm_admin": "unknown", "admin": "unknown", "anonymous": "unknown"}, "migrations": {"failed": [], "denied": 0}, "clients": [{"client": "hello-oidc", "app": "hello", "kind": "basic", "secret": "unknown", "flags": true}]},
+        {"tenant": "bravo", "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"}, "migrations": {"failed": [], "denied": 0}, "clients": [{"client": "hello-oidc", "app": "hello", "kind": "basic", "secret": "wrong", "flags": true}]}
+      ]
+    }
+  }
+}

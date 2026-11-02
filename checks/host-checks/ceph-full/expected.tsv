@@ -1,4 +1,5 @@
 cluster	evaluated
+kanidm	answered
 kanidm	checked
 cluster	Ceph OSD_NEARFULL	late	4	Ceph HEALTH_WARN	1 nearfull osd(s); ceph health detail says more
 cluster	Ceph POOL_FULL	late	5	Ceph HEALTH_WARN	1 pool(s) full; ceph health detail says more
