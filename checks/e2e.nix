@@ -1294,17 +1294,17 @@ pkgs.testers.runNixOSTest {
               seen_by_kanidm()
 
           with subtest("Lines a client has Kanidm log, as it logs what a client sends as it is, never count as a run of its migrations"):
-              forged = ["11111111-2222-3333-4444-555555555555 " + line for line in [
+              client_lines = ["11111111-2222-3333-4444-555555555555 " + line for line in [
                   "INFO     migration_apply [ 1.00ms | 1.00% / 100.00% ]",
                   "ERROR    [error]: Failed to apply migration | err: AccessDenied | path: /migrations/10-groups.json",
                   "INFO     x",
               ]]
-              client_id = quote("\n".join(["e2e"] + forged), safe="")
+              client_id = quote("\n".join(["e2e"] + client_lines), safe="")
               server.succeed(
                   f"curl -sS -o /dev/null {reach[first]} 'https://{idm[first]}/oauth2/authorise?response_type=code"
                   f"&client_id={client_id}&redirect_uri=https%3A%2F%2Fe2e.test%2F&scope=openid'"
               )
-              server.succeed(f"kubectl -n {first}-kanidm logs kanidm-0 -c app | grep -Fx {shlex.quote(forged[1])}")
+              server.succeed(f"kubectl -n {first}-kanidm logs kanidm-0 -c app | grep -Fx {shlex.quote(client_lines[1])}")
               found = {t["tenant"]: t["migrations"] for t in parsed("suveraen-idm check")["tenants"]}
               # Kanidm's own entries came as it first started, a later start upgrades nothing.
               assert {t: (m["upgrade"] or [], m["failed"], m["denied"]) for t, m in found.items()} == {
