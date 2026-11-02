@@ -1,17 +1,23 @@
 cluster	evaluated
 kanidm	answered
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm last checked 2026-10-22T12:00:00Z (0m ago), limit 30m: nothing told of eagle-kanidm admin accounts
+cluster	alpha-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	alpha-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	alpha-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started
 cluster	alpha-kanidm/hello-oidc	ok	4	Kanidm clients out of sync	in sync
+cluster	bravo-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	bravo-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	bravo-kanidm migrations	late	4	Kanidm migrations failed	as it started: 11-obj.json: AccessDenied
+cluster	corgi-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	corgi-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	corgi-kanidm migrations	late	4	Kanidm migrations failed	nothing here read how it ran them as it started at 2026-10-22T10:30:00Z, which counts as failed; restarting it runs them again
+cluster	delta-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	delta-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	delta-kanidm migrations	unknown	4	Kanidm migrations failed	nothing here read yet how it ran them as it started at 2026-10-22T11:30:00Z
+cluster	eagle-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	eagle-kanidm admin accounts	unknown	4	Kanidm admin accounts enabled	no answer for idm_admin, admin, anonymous
 cluster	eagle-kanidm migrations	unknown	4	Kanidm migrations failed	no start of a running container read
+cluster	fable-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	fable-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	fable-kanidm migrations	late	4	Kanidm migrations failed	as it started: 1 changes skipped to entries it may not see
 host	cluster status	ok	4	cluster status unreadable	read

@@ -10,6 +10,7 @@
           "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
           "started": "2026-10-20T08:00:00Z",
           "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 0},
+          "ids": [],
           "clients": [
             {"client": "hello-oidc", "app": "hello", "kind": "basic", "secret": "right", "flags": true},
             {"client": "notes-oidc", "app": "notes", "kind": "basic", "secret": "placeholder", "flags": false},
@@ -24,6 +25,10 @@
           "accounts": {"idm_admin": "unusable", "admin": "unusable", "anonymous": "enabled"},
           "started": "2026-10-21T08:00:00Z",
           "migrations": {"version": "1.11.2", "upgrade": null, "failed": ["50-hello.json: AccessDenied"], "denied": 2},
+          "ids": [
+            "8f2e6a1c-3b4d-4e5f-8a9b-0c1d2e3f4a5b is declared by sso-hello/50-hello.json, sso-vault/50-vault.json",
+            "sso-mail/50-mail.json: \"5A7C1E9B-2D4F-4A6B-8C0E-1F3A5C7E9B2D\" is no UUID in lowercase from 00000000-0000-0000-0001-000000000000 on"
+          ],
           "clients": [
             {"client": "hello-oidc", "app": "hello", "kind": "basic", "secret": "wrong", "flags": true},
             {"client": "mail-oidc", "app": "mail", "kind": "", "secret": "unusable", "flags": false},
@@ -35,6 +40,7 @@
           "accounts": {"idm_admin": "unknown", "admin": "expired", "anonymous": "expired"},
           "started": null,
           "migrations": null,
+          "ids": [],
           "clients": []
         },
         {

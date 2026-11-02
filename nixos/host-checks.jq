@@ -153,7 +153,7 @@ def judged($idm; $before):
   | add // {};
 
 # Each tenant's Kanidm as suveraen-idm check found it (idm.nix): its admin accounts, how it ran its migrations as it
-# started, and its clients.
+# started, the IDs they declare, and its clients.
 def kanidm($c; $idm; $judged):
   $idm.tenants[]?
   | .tenant as $tenant
@@ -191,6 +191,8 @@ def kanidm($c; $idm; $judged):
              unknown("\($ns) migrations"; "Kanidm migrations failed";
                "nothing here read yet how it ran them as it started at \($started)")
            end),
+        finding("cluster"; "\($ns) IDs"; .ids != []; 4; "Kanidm IDs invalid";
+          if .ids == [] then "each a UUID of its own from Kanidm's dynamic range on" else .ids | join("; ") end),
         (.clients[]
           | if .secret | IN("unknown", "missing") then
               unknown("\($ns)/\(.client)"; "Kanidm clients out of sync";

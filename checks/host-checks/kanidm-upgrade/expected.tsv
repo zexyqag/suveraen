@@ -2,20 +2,28 @@ cluster	evaluated
 kanidm	answered
 kanidm	checked
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
+cluster	alpha-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	alpha-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	alpha-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness; as it started: 10-groups.json: SC0002ReferenceSyntaxInvalid
+cluster	bravo-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	bravo-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	bravo-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness
+cluster	corgi-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	corgi-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	corgi-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read
+cluster	delta-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	delta-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	delta-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read
+cluster	eagle-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	eagle-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	eagle-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started
+cluster	fable-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	fable-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	fable-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started
+cluster	gamma-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	gamma-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	gamma-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started
+cluster	hydra-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	hydra-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	hydra-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness; nothing here read how it ran them as it started at 2026-10-22T10:30:00Z, which counts as failed; restarting it runs them again
 host	cluster status	ok	4	cluster status unreadable	read

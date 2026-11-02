@@ -1,0 +1,52 @@
+{
+ "apiVersion": "v1",
+ "kind": "List",
+ "items": [
+  {
+   "metadata": {
+    "name": "kube-root-ca.crt",
+    "namespace": "alpha-kanidm"
+   },
+   "data": {
+    "ca.crt": "-----BEGIN CERTIFICATE-----"
+   }
+  },
+  {
+   "metadata": {
+    "name": "kanidm",
+    "namespace": "alpha-kanidm"
+   },
+   "data": {
+    "server.toml": "version = \"2\"\n"
+   }
+  },
+  {
+   "metadata": {
+    "name": "kanidm-migrations",
+    "namespace": "alpha-kanidm"
+   },
+   "data": {
+    "10-groups.json": "{\n  \"id\": \"6e7b8e96-f50a-4540-87a0-ddceb7a9d63f\",\n  \"assertions\": [\n    {\n      \"state\": \"present\",\n      \"id\": \"b9573391-723b-42d6-aaa9-2b674ebb1078\",\n      \"class\": [\"group\"],\n      \"name\": \"members\",\n      \"entry_managed_by\": [\"tenant-admins\"]\n    },\n    {\n      \"state\": \"present\",\n      \"id\": \"dcffad28-d6d0-4257-af76-c9f7052c6eec\",\n      \"class\": [\"group\", \"account_policy\"],\n      \"name\": \"platform-admins\",\n      \"credential_type_minimum\": \"attested_passkey\",\n      \"authsession_expiry\": 3600,\n      \"privilege_expiry\": 300,\n      \"entry_managed_by\": [\"idm_admins\"]\n    },\n    {\n      \"state\": \"present\",\n      \"id\": \"7c563c30-e4c6-4ccb-afb4-f97936d8946e\",\n      \"class\": [\"group\", \"account_policy\"],\n      \"name\": \"tenant-admins\",\n      \"credential_type_minimum\": \"passkey\",\n      \"authsession_expiry\": 3600,\n      \"privilege_expiry\": 600,\n      \"entry_managed_by\": [\"tenant-admins\"]\n    }\n  ]\n}\n"
+   }
+  },
+  {
+   "metadata": {
+    "name": "sso-hello",
+    "namespace": "alpha-kanidm"
+   },
+   "data": {
+    "50-hello.json": "{\n  \"id\": \"ef74f062-31c2-4dec-b752-03a5b986a88d\",\n  \"assertions\": [\n    {\n      \"state\": \"present\",\n      \"id\": \"db77698c-7809-482b-bb76-4537c5fc2b83\",\n      \"class\": [\"group\"],\n      \"name\": \"hello-users\",\n      \"entry_managed_by\": [\"tenant-admins\"]\n    },\n    {\n      \"state\": \"present\",\n      \"id\": \"b11099d7-e41d-4119-93ff-51833b74f7d5\",\n      \"class\": [\"account\", \"oauth2_resource_server\", \"oauth2_resource_server_basic\"],\n      \"name\": \"hello-oidc\",\n      \"displayname\": \"hello\",\n      \"oauth2_rs_origin\": [\"https://hello.example.test/oauth2/callback\"],\n      \"oauth2_rs_origin_landing\": \"https://hello.example.test/\",\n      \"oauth2_rs_scope_map\": [{ \"group\": \"hello-users\", \"scopes\": [\"openid\", \"profile\"] }]\n    }\n  ]\n}\n",
+    "README": "not JSON"
+   }
+  },
+  {
+   "metadata": {
+    "name": "notes",
+    "namespace": "alpha-kanidm"
+   },
+   "data": {
+    "50-notes.json": "{\"id\": \"00000000-0000-0000-0000-000000000001\", \"assertions\": []}"
+   }
+  }
+ ]
+}

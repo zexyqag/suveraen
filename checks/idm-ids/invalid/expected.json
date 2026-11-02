@@ -1,0 +1,5 @@
+[
+  "sso-hello/50-hello.json: \"00000000-0000-0000-0000-000000000035\" is no UUID in lowercase from 00000000-0000-0000-0001-000000000000 on",
+  "sso-hello/50-hello.json: \"EF74F062-31C2-4DEC-B752-03A5B986A88D\" is no UUID in lowercase from 00000000-0000-0000-0001-000000000000 on",
+  "sso-hello/50-hello.json: null is no UUID in lowercase from 00000000-0000-0000-0001-000000000000 on"
+]

@@ -2,8 +2,8 @@
 # no credential. What needs one recovers idm_admin with a new password that lives in this process alone, and every run
 # disables idm_admin, admin and anonymous as it starts, as it finishes with a tenant, and as it ends. idm.nix sets
 # run, the directory it works in; cacert, the CA Kanidm's certificates come from, or none for the system's; gateway,
-# this server's address, where its gateway passes each identity host through to its Kanidm; and logscan, the filter
-# for Kanidm's log (idm-migrations.jq).
+# this server's address, where its gateway passes each identity host through to its Kanidm; logscan, the filter for
+# Kanidm's log (idm-migrations.jq); and idscan, the one for the IDs its migrations declare (idm-ids.jq).
 
 usage() {
   cat >&2 <<'EOF'
@@ -91,11 +91,17 @@ origin() {
   echo "$url"
 }
 
-# One line for each client in the tenant's attachments, sso-<app> (components/sso), with tabs between its app, name,
-# kind, the redirect the probe names, the flags it asks for, those last applied, and what is wrong with it, "-" for
-# none. They come from the tenant's Kanidm namespace, so none names another tenant's app.
+# The ConfigMaps in a tenant's Kanidm namespace, which hold its migrations: the platform's, kanidm-migrations, and
+# each app's attachment, sso-<app> (components/sso).
+configmaps() {
+  kubectl --request-timeout=30s -n "$1-kanidm" get configmaps -o json
+}
+
+# One line for each client in the tenant's attachments (configmaps on stdin), with tabs between its app, name, kind,
+# the redirect the probe names, the flags it asks for, those last applied, and what is wrong with it, "-" for none.
+# They come from the tenant's Kanidm namespace, so none names another tenant's app.
 clients() {
-  kubectl --request-timeout=30s -n "$1-kanidm" get configmaps -o json | jq -r '.items[]
+  jq -r '.items[]
     | select(.metadata.name | test("^sso-[a-z][a-z0-9]*$"))
     | (.metadata.name | ltrimstr("sso-")) as $app
     | (.metadata.annotations // {}) as $a
@@ -308,7 +314,7 @@ tenant() {
     return 1
   fi
   disable "$t" "$origin" || return 1
-  if ! list=$(clients "$t"); then
+  if ! list=$(configmaps "$t" | clients); then
     fail "$t: its attachments could not be read."
     return 1
   fi
@@ -400,23 +406,25 @@ tenant() {
 
 # What the servers' checks judge (host-checks.nix), with no credential: for each tenant, how Kanidm answers for its
 # admin accounts, when its container started and what went wrong as it ran its migrations then, null once its log no
-# longer reaches back to that, and for each client whether its app's copy of the secret passes the probe and its flags
-# are applied. A tenant whose Kanidm can't be looked at is unchecked, and anything without an answer unknown.
+# longer reaches back to that, what is wrong with the IDs they declare, and for each client whether its app's copy of
+# the secret passes the probe and its flags are applied. A tenant whose Kanidm can't be looked at is unchecked, and
+# anything without an answer unknown.
 unchecked() {
   jq -nc --arg tenant "$1" --arg why "$2" '{$tenant, unchecked: $why}'
 }
 
 check() {
-  local list t origin attached app client kind redirect flags applied error state applied_all accounts started migrations
-  local clients
+  local list t origin maps attached ids app client kind redirect flags applied error state applied_all accounts started
+  local migrations clients
   list=$(tenants) || exit 1
   for t in $list; do
     if ! origin=$(origin "$t"); then
       unchecked "$t" "ConfigMap kanidm in $t-kanidm names no single origin"
       continue
     fi
-    if ! attached=$(clients "$t" 2>/dev/null); then
-      unchecked "$t" "its attachments could not be read"
+    if ! maps=$(configmaps "$t" 2>/dev/null) || ! attached=$(clients <<<"$maps") ||
+      ! ids=$(jq -c -f "$idscan" <<<"$maps"); then
+      unchecked "$t" "its migrations and attachments could not be read"
       continue
     fi
     accounts=$(for name in idm_admin admin anonymous; do
@@ -456,8 +464,8 @@ check() {
         --argjson flags "$applied_all" '{$client, $app, $kind, $secret, $flags}'
     done <<<"$attached" | jq -sc .)
     jq -nc --arg tenant "$t" --argjson accounts "$accounts" --arg started "$started" \
-      --argjson migrations "$migrations" --argjson clients "$clients" \
-      '{$tenant, $accounts, started: ($started | select(. != "") // null), $migrations, $clients}'
+      --argjson migrations "$migrations" --argjson ids "$ids" --argjson clients "$clients" \
+      '{$tenant, $accounts, started: ($started | select(. != "") // null), $migrations, $ids, $clients}'
   done | jq -sc '{tenants: .}'
 }
 

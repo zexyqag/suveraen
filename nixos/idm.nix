@@ -34,6 +34,7 @@ let
       cacert=${lib.escapeShellArg (if cfg.caFile == null then "" else cfg.caFile)}
       gateway=${lib.escapeShellArg (lib.head config.suveraen.cluster.nodeIP)}
       logscan=${./idm-migrations.jq}
+      idscan=${./idm-ids.jq}
     ''
     + builtins.readFile ./idm.sh;
   };

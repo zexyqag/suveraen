@@ -1,6 +1,7 @@
 cluster	evaluated
 kanidm	answered
 cluster	Kanidm check	late	4	Kanidm unchecked	every tenant's Kanidm last checked 2026-10-22T11:15:00Z (45m ago), limit 30m: nothing told of alpha-kanidm/files-oidc, alpha-kanidm/wiki-oidc, corgi-kanidm admin accounts, delta-kanidm
+cluster	alpha-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	alpha-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
 cluster	alpha-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started
 cluster	alpha-kanidm/chat-oidc	ok	4	Kanidm clients out of sync	in sync
@@ -9,11 +10,13 @@ cluster	alpha-kanidm/hello-oidc	ok	4	Kanidm clients out of sync	in sync
 cluster	alpha-kanidm/notes-oidc	late	4	Kanidm clients out of sync	the app's Secret sso still holds the placeholder, its flags are not applied; run suveraen-idm sync alpha
 cluster	alpha-kanidm/photos-oidc	late	4	Kanidm clients out of sync	its flags are not applied; run suveraen-idm sync alpha
 cluster	alpha-kanidm/wiki-oidc	unknown	4	Kanidm clients out of sync	the app has no Secret sso
+cluster	bravo-kanidm IDs	late	4	Kanidm IDs invalid	8f2e6a1c-3b4d-4e5f-8a9b-0c1d2e3f4a5b is declared by sso-hello/50-hello.json, sso-vault/50-vault.json; sso-mail/50-mail.json: "5A7C1E9B-2D4F-4A6B-8C0E-1F3A5C7E9B2D" is no UUID in lowercase from 00000000-0000-0000-0001-000000000000 on
 cluster	bravo-kanidm admin accounts	late	4	Kanidm admin accounts enabled	anonymous enabled, which suveraen-idm sync bravo disables
 cluster	bravo-kanidm migrations	late	4	Kanidm migrations failed	as it started: 50-hello.json: AccessDenied; 2 changes skipped to entries it may not see
 cluster	bravo-kanidm/hello-oidc	late	4	Kanidm clients out of sync	the secret in the app's Secret sso is wrong for Kanidm; run suveraen-idm sync bravo
 cluster	bravo-kanidm/mail-oidc	late	4	Kanidm clients out of sync	sso-mail names no client suveraen-idm can use
 cluster	bravo-kanidm/vault-oidc	late	4	Kanidm clients out of sync	the app's Secret sso holds no secret Kanidm makes; run suveraen-idm sync bravo
+cluster	corgi-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
 cluster	corgi-kanidm admin accounts	unknown	4	Kanidm admin accounts enabled	no answer for idm_admin
 cluster	corgi-kanidm migrations	unknown	4	Kanidm migrations failed	no start of a running container read
 cluster	delta-kanidm	unknown	4	Kanidm unchecked	ConfigMap kanidm in delta-kanidm names no single origin

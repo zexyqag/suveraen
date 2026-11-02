@@ -1,7 +1,8 @@
 # Runs the servers' checks (nixos/host-checks.jq) on what a cluster might hold, each case on top of base.json; on some,
-# what they then alert given the findings late before (nixos/host-checks-alert.jq); and suveraen-idm's filter for
-# Kanidm's log (nixos/idm-migrations.jq) on logs Kanidm wrote, stamped as the kubelet shows them, with the time its
-# container started; and compares what they find with what they should.
+# what they then alert given the findings late before (nixos/host-checks-alert.jq); suveraen-idm's filter for Kanidm's
+# log (nixos/idm-migrations.jq) on logs Kanidm wrote, stamped as the kubelet shows them, with the time its container
+# started; and its filter for the IDs a tenant's migrations declare (nixos/idm-ids.jq) on the ConfigMaps of a tenant's
+# Kanidm namespace; and compares what they find with what they should.
 { pkgs }:
 pkgs.runCommand "host-checks" { nativeBuildInputs = [ pkgs.jq ]; } ''
   failed=0
@@ -36,6 +37,15 @@ pkgs.runCommand "host-checks" { nativeBuildInputs = [ pkgs.jq ]; } ''
       echo "ok log $name"
     else
       echo "WRONG log $name"
+      failed=1
+    fi
+  done
+  for case in ${./idm-ids}/*/; do
+    name=$(basename "$case")
+    if jq -c -f ${../nixos/idm-ids.jq} "$case/input.json" | diff -u <(jq -c . "$case/expected.json") -; then
+      echo "ok IDs $name"
+    else
+      echo "WRONG IDs $name"
       failed=1
     fi
   done

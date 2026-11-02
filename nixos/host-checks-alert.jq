@@ -26,6 +26,7 @@ def cleared($late):
            "cluster status unreadable": "cluster status readable again",
            "Kanidm admin accounts enabled": "Kanidm admin accounts disabled again",
            "Kanidm migrations failed": "Kanidm migrations applied again",
+           "Kanidm IDs invalid": "Kanidm IDs valid again",
            "Kanidm clients out of sync": "Kanidm clients in sync again",
            "Kanidm unchecked": "Kanidm checked again"}[$t]
         end)

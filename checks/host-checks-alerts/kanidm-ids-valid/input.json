@@ -1,0 +1,10 @@
+{
+  "state": {"kanidmChecked": 1792670400},
+  "cluster": {
+    "idm": {
+      "tenants": [
+        {"tenant": "bravo", "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"}, "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 0}, "ids": [], "clients": []}
+      ]
+    }
+  }
+}

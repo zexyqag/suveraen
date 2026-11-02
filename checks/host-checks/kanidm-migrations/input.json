@@ -17,6 +17,7 @@
           "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
           "started": "2026-10-01T08:00:00Z",
           "migrations": null,
+          "ids": [],
           "clients": [
             {"client": "hello-oidc", "app": "hello", "kind": "basic", "secret": "right", "flags": true}
           ]
@@ -26,6 +27,7 @@
           "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
           "started": "2026-10-20T08:00:00Z",
           "migrations": null,
+          "ids": [],
           "clients": []
         },
         {
@@ -33,6 +35,7 @@
           "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
           "started": "2026-10-22T10:30:00Z",
           "migrations": null,
+          "ids": [],
           "clients": []
         },
         {
@@ -40,6 +43,7 @@
           "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
           "started": "2026-10-22T11:30:00Z",
           "migrations": null,
+          "ids": [],
           "clients": []
         },
         {
@@ -47,6 +51,7 @@
           "accounts": {"idm_admin": "unknown", "admin": "unknown", "anonymous": "unknown"},
           "started": null,
           "migrations": null,
+          "ids": [],
           "clients": []
         },
         {
@@ -54,6 +59,7 @@
           "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
           "started": "2026-10-22T11:50:00Z",
           "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 1},
+          "ids": [],
           "clients": []
         }
       ]

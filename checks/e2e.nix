@@ -1510,6 +1510,8 @@ pkgs.testers.runNixOSTest {
                   assert held[t] == [[read(secrets, key)] for key in ["HELLO_USERS_ID", "HELLO_OIDC_ID"]], (t, held[t])
                   assert probe_token(t, sso_secret(t)) == "400", t
               assert not {i for [i] in held[first]} & {i for [i] in held[second]}, held
+              found = {t["tenant"]: t["ids"] for t in parsed("suveraen-idm check")["tenants"]}
+              assert found == {t: [] for t in tenants}, found
 
           with subtest("suveraen-idm rotate gives a client a new secret, and no value an app's namespace writes reaches curl but a secret"):
               old = sso_secret(first)
@@ -2184,7 +2186,8 @@ pkgs.testers.runNixOSTest {
               offsite = {f"etcd-offsite-{n}" for n in providers}
               # And each tenant's Kanidm, which the checks find in order.
               identities = {"Kanidm check"} | {
-                  f"{t}-kanidm{part}" for t in tenants for part in [" admin accounts", " migrations", "/hello-oidc"]
+                  f"{t}-kanidm{part}"
+                  for t in tenants for part in [" admin accounts", " migrations", " IDs", "/hello-oidc"]
               }
               assert findings.keys() == (
                   before.keys() | archiving | offsite | identities | {"Ceph status", "cluster status", "etcd-snapshots"}
