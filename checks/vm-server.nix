@@ -29,6 +29,8 @@ in
   virtualisation.emptyDiskImages = map (serial: {
     size = 10240;
     driveConfig.deviceExtraOpts.serial = serial;
+    # The DB array's first sync copies a whole disk of zeros, which QEMU would otherwise store on the host's disk.
+    driveConfig.driveExtraOpts.detect-zeroes = "on";
   }) (hdds ++ dbDisks);
 
   # What disko makes on a real server's two system disks: a RAID1 array over both, on it a partition per slot at the
