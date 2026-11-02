@@ -9,7 +9,7 @@
           "tenant": "alpha",
           "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
           "started": "2026-10-20T08:00:00Z",
-          "migrations": {"failed": [], "denied": 0},
+          "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 0},
           "clients": [
             {"client": "hello-oidc", "app": "hello", "kind": "basic", "secret": "right", "flags": true},
             {"client": "notes-oidc", "app": "notes", "kind": "basic", "secret": "placeholder", "flags": false},
@@ -23,7 +23,7 @@
           "tenant": "bravo",
           "accounts": {"idm_admin": "unusable", "admin": "unusable", "anonymous": "enabled"},
           "started": "2026-10-21T08:00:00Z",
-          "migrations": {"failed": ["50-hello.json: AccessDenied"], "denied": 2},
+          "migrations": {"version": "1.11.2", "upgrade": null, "failed": ["50-hello.json: AccessDenied"], "denied": 2},
           "clients": [
             {"client": "hello-oidc", "app": "hello", "kind": "basic", "secret": "wrong", "flags": true},
             {"client": "mail-oidc", "app": "mail", "kind": "", "secret": "unusable", "flags": false},

@@ -1,0 +1,1 @@
+{"version": "1.12.0", "upgrade": ["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"], "failed": ["10-groups.json: SC0002ReferenceSyntaxInvalid", "50-hello.json: SC0002ReferenceSyntaxInvalid"], "denied": 0}

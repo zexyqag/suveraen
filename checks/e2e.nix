@@ -1305,7 +1305,10 @@ pkgs.testers.runNixOSTest {
               )
               server.succeed(f"kubectl -n {first}-kanidm logs kanidm-0 -c app | grep -Fx {shlex.quote(forged[1])}")
               found = {t["tenant"]: t["migrations"] for t in parsed("suveraen-idm check")["tenants"]}
-              assert found == {t: {"failed": [], "denied": 0} for t in tenants}, found
+              # Kanidm's own entries came as it first started, a later start upgrades nothing.
+              assert {t: (m["upgrade"] or [], m["failed"], m["denied"]) for t, m in found.items()} == {
+                  t: ([], [], 0) for t in tenants
+              }, found
 
           # As an operator by hand: an account recovered by exec, and the client signed in with its new password.
           def signed_in(t, name):
@@ -2177,7 +2180,10 @@ pkgs.testers.runNixOSTest {
               # reaches back there.
               judged = json.loads(server.succeed("cat /var/lib/private/host-checks/kanidm-judged.json"))
               assert sorted(judged) == tenants, judged
-              assert all(j["migrations"] == {"failed": [], "denied": 0} for j in judged.values()), judged
+              assert all(
+                  j["migrations"]["failed"] == [] and j["migrations"]["denied"] == 0 and j["upgrade"] == []
+                  for j in judged.values()
+              ), judged
               for key in before:
                   detail, times = findings[key][1], [before[key], after[key]]
                   if detail.startswith("never, "):

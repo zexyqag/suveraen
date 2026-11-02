@@ -2,7 +2,7 @@
 # (evaluated, skipped or unreadable), one when suveraen-idm check told of the tenants' Kanidm and one when it told of
 # every one in full, then one per finding with its scope, key, ok, late or unknown, priority, the title it alerts
 # under and what was found, separated by tabs, and last, when it told of them, what the report keeps of how each ran
-# its migrations as it started.
+# its migrations as it started and what its own upgrades left undone.
 
 def time: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
 def stamp: if . == null then null else time end;
@@ -130,11 +130,24 @@ def ceph($c; $cluster):
 # What the checks could not tell this time, which stands as it was found last (host-checks.nix).
 def unknown($key; $title; $detail): ["cluster", $key, "unknown", 4, $title, ($detail | gsub("[\t\n\r]+"; " "))];
 
+def minor: split(".")[0:2];
+
 # How each tenant's Kanidm ran its migrations as its container started, where this run or one before here read it from
-# its log, by tenant: what the report keeps.
+# its log, and what its own upgrades left undone, by tenant: what the report keeps. A start that raised Kanidm's domain
+# level brought all of its own entries up to date anew, so what it left undone replaces what an earlier one did, which
+# any other start leaves standing. Kanidm raises the level with each minor version: a start on a minor version other
+# than the last one read here that raised none follows one that did, which no check here read.
 def judged($idm; $before):
   [$idm.tenants[] | .tenant as $t
-    | if .migrations != null and .started != null then {($t): {started, migrations}}
+    | if .migrations != null and .started != null then
+        .migrations as $m
+        | ($before[$t].migrations.version // null) as $was
+        | {($t): {started, migrations: $m,
+            upgrade: (if $m.upgrade != null then $m.upgrade
+              elif $was != null and ($was | minor) != ($m.version | minor) then
+                ($before[$t].upgrade // []) + ["Kanidm's upgrade from \($was) to \($m.version), which no check here read"]
+              else $before[$t].upgrade // []
+              end)}}
       else $before[$t] // empty | {($t): .}
       end]
   | add // {};
@@ -160,19 +173,20 @@ def kanidm($c; $idm; $judged):
         # A long-running Kanidm's log no longer reaches back to its start, where it ran them, and a client can fill
         # one until the kubelet rotates it: a start whose run no check here read counts as failed once it had time.
         (.started as $started
+         | ($judged[$tenant].upgrade // []) as $undone
          | (.migrations // ($judged[$tenant] | select(.started == $started) | .migrations) // null) as $run
          | if $run != null then
-             $run
-             | finding("cluster"; "\($ns) migrations"; .failed != [] or .denied > 0; 4; "Kanidm migrations failed";
-                 ([.failed[], (select(.denied > 0) | "\(.denied) changes skipped to entries it may not see")]
-                  | join("; ")) as $what
-                 | if $what == "" then "applied every file as it started" else "as it started: \($what)" end)
+             ([$run.failed[], ($run | select(.denied > 0) | "\(.denied) changes skipped to entries it may not see")]
+              | join("; ")) as $what
+             | ($undone + [$what | select(. != "") | "as it started: \(.)"]) as $wrong
+             | finding("cluster"; "\($ns) migrations"; $wrong != []; 4; "Kanidm migrations failed";
+                 if $wrong == [] then "applied every file as it started" else $wrong | join("; ") end)
            elif $started == null then
              unknown("\($ns) migrations"; "Kanidm migrations failed"; "no start of a running container read")
            elif $c.now - ($started | time) > $c.grace then
              finding("cluster"; "\($ns) migrations"; true; 4; "Kanidm migrations failed";
-               "nothing here read how it ran them as it started at \($started), which counts as failed; restarting"
-               + " it runs them again")
+               $undone + ["nothing here read how it ran them as it started at \($started), which counts as failed;"
+                 + " restarting it runs them again"] | join("; "))
            else
              unknown("\($ns) migrations"; "Kanidm migrations failed";
                "nothing here read yet how it ran them as it started at \($started)")
@@ -222,13 +236,14 @@ def unchecked($idm; $rows):
    else "skipped"
    end) as $scope
 | {now: $now, grace: $spec.missingGrace, stale: $spec.cephStaleAfter, cronjobs: ($k.cronjobs // {})} as $c
-| ($state.kanidmJudged // {}) as $judged
+| (($k.idm.tenants? | type) == "array") as $told
+| ($state.kanidmJudged // {} | if $told then judged($k.idm; .) end) as $judged
 | [kanidm($c; $k.idm; $judged)] as $kanidm
 | unchecked($k.idm; $kanidm) as $why
 # Whether suveraen-idm check told of the tenants' Kanidm at all, and whether in full, which the report keeps the time
 # of.
 | ["cluster", $scope],
-  (select($unreadable == null and ($k.idm.tenants? | type) == "array") | ["kanidm", "answered"]),
+  (select($unreadable == null and $told) | ["kanidm", "answered"]),
   (select($unreadable == null and $why == null) | ["kanidm", "checked"]),
   ([
     ($spec.files | to_entries[]
@@ -259,6 +274,6 @@ def unchecked($idm; $rows):
                + " \($why)"
              end)))
   ] | unique_by(.[0:2])[]),
-  (select($unreadable == null and ($k.idm.tenants? | type) == "array")
-    | ["kanidm", "judged", (judged($k.idm; $judged) | tojson)])
+  (select($unreadable == null and $told)
+    | ["kanidm", "judged", ($judged | tojson)])
 | map(tostring) | join("\t")

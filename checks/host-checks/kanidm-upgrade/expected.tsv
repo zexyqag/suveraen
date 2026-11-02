@@ -1,0 +1,22 @@
+cluster	evaluated
+kanidm	answered
+kanidm	checked
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
+cluster	alpha-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
+cluster	alpha-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness; as it started: 10-groups.json: SC0002ReferenceSyntaxInvalid
+cluster	bravo-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
+cluster	bravo-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness
+cluster	corgi-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
+cluster	corgi-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read
+cluster	delta-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
+cluster	delta-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read
+cluster	eagle-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
+cluster	eagle-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started
+cluster	fable-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
+cluster	fable-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started
+cluster	gamma-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
+cluster	gamma-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started
+cluster	hydra-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
+cluster	hydra-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness; nothing here read how it ran them as it started at 2026-10-22T10:30:00Z, which counts as failed; restarting it runs them again
+host	cluster status	ok	4	cluster status unreadable	read
+kanidm	judged	{"alpha":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.0","upgrade":["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"],"failed":["10-groups.json: SC0002ReferenceSyntaxInvalid"],"denied":0},"upgrade":["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"]},"bravo":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.0","upgrade":null,"failed":[],"denied":0},"upgrade":["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"]},"corgi":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.0","upgrade":null,"failed":[],"denied":0},"upgrade":["Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read"]},"delta":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.0","upgrade":null,"failed":[],"denied":0},"upgrade":["Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read"]},"eagle":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.13.0","upgrade":[],"failed":[],"denied":0},"upgrade":[]},"fable":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.1","upgrade":null,"failed":[],"denied":0},"upgrade":[]},"gamma":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.0","upgrade":null,"failed":[],"denied":0},"upgrade":[]},"hydra":{"started":"2026-10-01T08:00:00Z","migrations":{"version":"1.12.0","upgrade":null,"failed":[],"denied":0},"upgrade":["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"]}}

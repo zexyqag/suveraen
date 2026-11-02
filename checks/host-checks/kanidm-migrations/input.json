@@ -1,12 +1,12 @@
 {
   "state": {
     "kanidmJudged": {
-      "alpha": {"started": "2026-10-01T08:00:00Z", "migrations": {"failed": [], "denied": 0}},
-      "bravo": {"started": "2026-10-20T08:00:00Z", "migrations": {"failed": ["11-obj.json: AccessDenied"], "denied": 0}},
-      "corgi": {"started": "2026-10-01T08:00:00Z", "migrations": {"failed": [], "denied": 0}},
-      "eagle": {"started": "2026-10-01T08:00:00Z", "migrations": {"failed": [], "denied": 0}},
-      "fable": {"started": "2026-10-01T08:00:00Z", "migrations": {"failed": [], "denied": 0}},
-      "gamma": {"started": "2026-10-01T08:00:00Z", "migrations": {"failed": [], "denied": 0}}
+      "alpha": {"started": "2026-10-01T08:00:00Z", "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 0}, "upgrade": []},
+      "bravo": {"started": "2026-10-20T08:00:00Z", "migrations": {"version": "1.11.2", "upgrade": null, "failed": ["11-obj.json: AccessDenied"], "denied": 0}, "upgrade": []},
+      "corgi": {"started": "2026-10-01T08:00:00Z", "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 0}, "upgrade": []},
+      "eagle": {"started": "2026-10-01T08:00:00Z", "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 0}, "upgrade": []},
+      "fable": {"started": "2026-10-01T08:00:00Z", "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 0}, "upgrade": []},
+      "gamma": {"started": "2026-10-01T08:00:00Z", "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 0}, "upgrade": []}
     }
   },
   "cluster": {
@@ -53,7 +53,7 @@
           "tenant": "fable",
           "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
           "started": "2026-10-22T11:50:00Z",
-          "migrations": {"failed": [], "denied": 1},
+          "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 1},
           "clients": []
         }
       ]

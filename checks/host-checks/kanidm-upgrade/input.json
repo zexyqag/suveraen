@@ -1,0 +1,27 @@
+{
+  "state": {
+    "kanidmJudged": {
+      "alpha": {"started": "2026-10-01T08:00:00Z", "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 0}, "upgrade": []},
+      "bravo": {"started": "2026-10-22T11:00:00Z", "migrations": {"version": "1.12.0", "upgrade": ["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"], "failed": [], "denied": 0}, "upgrade": ["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"]},
+      "corgi": {"started": "2026-10-01T08:00:00Z", "migrations": {"version": "1.11.2", "upgrade": null, "failed": [], "denied": 0}, "upgrade": []},
+      "delta": {"started": "2026-10-22T11:00:00Z", "migrations": {"version": "1.12.0", "upgrade": null, "failed": [], "denied": 0}, "upgrade": ["Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read"]},
+      "eagle": {"started": "2026-10-01T08:00:00Z", "migrations": {"version": "1.12.0", "upgrade": null, "failed": [], "denied": 0}, "upgrade": ["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"]},
+      "fable": {"started": "2026-10-01T08:00:00Z", "migrations": {"version": "1.12.0", "upgrade": null, "failed": [], "denied": 0}, "upgrade": []},
+      "hydra": {"started": "2026-10-01T08:00:00Z", "migrations": {"version": "1.12.0", "upgrade": null, "failed": [], "denied": 0}, "upgrade": ["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"]}
+    }
+  },
+  "cluster": {
+    "idm": {
+      "tenants": [
+        {"tenant": "alpha", "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"}, "started": "2026-10-22T11:50:00Z", "migrations": {"version": "1.12.0", "upgrade": ["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"], "failed": ["10-groups.json: SC0002ReferenceSyntaxInvalid"], "denied": 0}, "clients": []},
+        {"tenant": "bravo", "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"}, "started": "2026-10-22T11:50:00Z", "migrations": {"version": "1.12.0", "upgrade": null, "failed": [], "denied": 0}, "clients": []},
+        {"tenant": "corgi", "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"}, "started": "2026-10-22T11:50:00Z", "migrations": {"version": "1.12.0", "upgrade": null, "failed": [], "denied": 0}, "clients": []},
+        {"tenant": "delta", "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"}, "started": "2026-10-22T11:50:00Z", "migrations": {"version": "1.12.0", "upgrade": null, "failed": [], "denied": 0}, "clients": []},
+        {"tenant": "eagle", "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"}, "started": "2026-10-22T11:50:00Z", "migrations": {"version": "1.13.0", "upgrade": [], "failed": [], "denied": 0}, "clients": []},
+        {"tenant": "fable", "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"}, "started": "2026-10-22T11:50:00Z", "migrations": {"version": "1.12.1", "upgrade": null, "failed": [], "denied": 0}, "clients": []},
+        {"tenant": "gamma", "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"}, "started": "2026-10-22T11:50:00Z", "migrations": {"version": "1.12.0", "upgrade": null, "failed": [], "denied": 0}, "clients": []},
+        {"tenant": "hydra", "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"}, "started": "2026-10-22T10:30:00Z", "migrations": null, "clients": []}
+      ]
+    }
+  }
+}

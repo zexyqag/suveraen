@@ -1,0 +1,48 @@
+2026-11-02T12:09:01.718346Z Logging filter initialized: "kanidmd_core::https::middleware=info,h2::proto::streams::prioritize=warn,kanidmd_core::https::trace=info,tonic=warn,hyper=warn,h2=warn,info"
+2026-11-02T12:09:01.718392Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Starting Kanidmd | version: 1.12.0
+2026-11-02T12:09:01.718427Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Running in server mode ...
+2026-11-02T12:09:01.718441Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Starting kanidm with configuration: address: [::]:8443, domain: idm.alpha.test, ldap address: disabled, origin: https://idm.alpha.test/ admin bind path: /run/kanidmd/sock, thread count: 2, dbpath: /data/kanidm.db, arcsize: AUTO, max request size: 262144b, http server versions: http/2 + http/1, http client address info: none, ldap client address info: none, with TLS: true, online_backup: disabled, integration mode: false, log_level: inforole: write replica, replication: disabled, otel_grpc_endpoint: None
+2026-11-02T12:09:01.75534Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 INFO     ｉ IMMEDIATE ｉ system_initialisation > migrate_domain_1_11_to_1_12 > reindex > System reindex: started - this may take a long time!
+2026-11-02T12:09:01.830999Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 INFO     system_initialisation [ 104ms | 24.04% / 100.00% ]
+2026-11-02T12:09:01.831111Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 INFO     ┝━ migrate_domain_1_11_to_1_12 [ 78.7ms | 34.25% / 75.96% ]
+2026-11-02T12:09:01.831126Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 INFO     │  ┝━ reindex [ 43.2ms | 41.71% ]
+2026-11-02T12:09:01.831134Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 INFO     │  │  ┝━ ｉ [info]: System reindex: started - this may take a long time!
+2026-11-02T12:09:01.831142Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 INFO     │  │  ┝━ ｉ [info]: Reindexed 0 entries
+2026-11-02T12:09:01.83115Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 INFO     │  │  ┝━ ｉ [info]: Optimising Indexes: started
+2026-11-02T12:09:01.831158Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 INFO     │  │  ┝━ ｉ [info]: Optimising Indexes: complete ✅
+2026-11-02T12:09:01.831175Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 INFO     │  │  ┝━ ｉ [info]: Calculating Index Optimisation Slopes: started
+2026-11-02T12:09:01.831183Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 INFO     │  │  ┝━ ｉ [info]: Calculating Index Optimisation Slopes: complete ✅
+2026-11-02T12:09:01.831201Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 INFO     │  │  ┕━ ｉ [info]: System reindex: complete 🎉
+2026-11-02T12:09:01.83121Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 ERROR    │  ┝━ 🚨 [error]: The following filter conditions failed to assert uniqueness | attr: Name | value: Iname("idm_acp_feature_manage") | conflicting_with: idm_acp_feature_manage@idm.alpha.test
+2026-11-02T12:09:01.83122Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 ERROR    │  ┝━ 🚨 [error]: Create operation failed (pre_transform plugin), AttributeUniqueness([Name]) | event_tag_id: 1
+2026-11-02T12:09:01.831229Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 ERROR    │  ┝━ 🚨 [error]:  | err: AttributeUniqueness([Name]) | msg: "phase 7 - builtin access control profiles"
+2026-11-02T12:09:01.831237Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 WARN     │  ┕━ 🚧 [warn]: delete: no candidates match filter
+2026-11-02T12:09:01.831245Z 65c2ffca-7d91-42f6-ad5c-14c1a56675d4 WARN     ┕━ 🚧 [warn]: Domain level has been raised to 16
+2026-11-02T12:09:01.849603Z 2844bdf1-fd17-49d5-bd49-74138fbcf7ec INFO     migration_apply [ 2.63ms | 67.74% / 100.00% ]
+2026-11-02T12:09:01.849694Z 2844bdf1-fd17-49d5-bd49-74138fbcf7ec INFO     ┝━ ｉ [info]: examining migration | path: /migrations/10-groups.json
+2026-11-02T12:09:01.849705Z 2844bdf1-fd17-49d5-bd49-74138fbcf7ec INFO     ┝━ ｉ [info]: examining migration | path: /migrations/50-hello.json
+2026-11-02T12:09:01.84971Z 2844bdf1-fd17-49d5-bd49-74138fbcf7ec INFO     ┝━ handle_scim_migration_apply [ 784µs | 29.76% ]
+2026-11-02T12:09:01.849716Z 2844bdf1-fd17-49d5-bd49-74138fbcf7ec WARN     │  ┕━ 🚧 [warn]: Invalid SCIM reference set syntax | err: Error("data did not match any variant of untagged enum ScimReferenceAdapter", line: 0, column: 0)
+2026-11-02T12:09:01.849723Z 2844bdf1-fd17-49d5-bd49-74138fbcf7ec ERROR    ┝━ 🚨 [error]: Failed to apply migration | err: SC0002ReferenceSyntaxInvalid | path: /migrations/10-groups.json
+2026-11-02T12:09:01.849729Z 2844bdf1-fd17-49d5-bd49-74138fbcf7ec INFO     ┝━ handle_scim_migration_apply [ 65.8µs | 2.50% ]
+2026-11-02T12:09:01.849749Z 2844bdf1-fd17-49d5-bd49-74138fbcf7ec WARN     │  ┕━ 🚧 [warn]: Invalid SCIM reference set syntax | err: Error("data did not match any variant of untagged enum ScimReferenceAdapter", line: 0, column: 0)
+2026-11-02T12:09:01.84977Z 2844bdf1-fd17-49d5-bd49-74138fbcf7ec ERROR    ┕━ 🚨 [error]: Failed to apply migration | err: SC0002ReferenceSyntaxInvalid | path: /migrations/50-hello.json
+2026-11-02T12:09:01.850651Z 0155cf26-1499-41fb-84a6-de4d3b68cea0 INFO     handle_purgetombstoneevent [ 861µs | 100.00% ]
+2026-11-02T12:09:01.850667Z 0155cf26-1499-41fb-84a6-de4d3b68cea0 INFO     ┕━ ｉ [info]: Tombstone purge operation success | event_tag_id: 3
+2026-11-02T12:09:01.850793Z 6f7d61db-01e4-45b2-980d-d66b43a85555 INFO     handle_purgerecycledevent [ 144µs | 100.00% ]
+2026-11-02T12:09:01.85089Z 09507996-fe27-476c-9da3-98114c60ccd9 INFO     handle_purge_delete_after_event [ 91.6µs | 100.00% ]
+2026-11-02T12:09:01.851683Z 18d4b779-b3cd-4b3b-8564-35989082cc1f INFO     handle_purgetombstoneevent [ 679µs | 100.00% ]
+2026-11-02T12:09:01.851699Z 18d4b779-b3cd-4b3b-8564-35989082cc1f INFO     ┕━ ｉ [info]: Tombstone purge operation success | event_tag_id: 3
+2026-11-02T12:09:01.852569Z d9459581-ece1-4d87-a601-b2a0c16ee32a INFO     handle_purgerecycledevent [ 749µs | 100.00% ]
+2026-11-02T12:09:01.852655Z 11580a96-18cd-4015-8819-1b62feb4c954 INFO     handle_purge_delete_after_event [ 168µs | 100.00% ]
+2026-11-02T12:09:01.859304Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Starting the web server...
+2026-11-02T12:09:01.859375Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Ready to rock! 🪨  UI available at: https://idm.alpha.test/ | event_tag_id: 3
+2026-11-02T12:09:02.299231Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Signal received, shutting down
+2026-11-02T12:09:02.299458Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Delayed Action Actor
+2026-11-02T12:09:02.299474Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Auditd Actor
+2026-11-02T12:09:02.299481Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Migration Reload Monitor
+2026-11-02T12:09:02.299487Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped TlsAcceptor Reload Monitor
+2026-11-02T12:09:02.299492Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Admin Socket
+2026-11-02T12:09:02.299497Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped HTTPS Server
+2026-11-02T12:09:02.299502Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Interval Actor
+2026-11-02T12:09:02.30144Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped 🛑 
