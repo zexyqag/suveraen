@@ -1,7 +1,8 @@
 ---
 # hello's group, whose members tenant-admins manage, and its confidential client in its tenant's Kanidm
-# (components/sso). IDs are fixed for good: Kanidm finds an entry by its ID, and never takes one back once a removal
-# named it.
+# (components/sso). Each ID comes from the tenant's Secret, so no one there knows it before Kanidm makes the entry: a
+# tenant admin may give a person any ID, and the file would then change that person or fail on them. IDs are fixed for
+# good: Kanidm finds an entry by its ID, and never takes one back once a removal named it.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,18 +11,18 @@ metadata:
 data:
   50-hello.json: |
     {
-      "id": "ab4d46e6-9285-4dae-90a3-8a48117bc333",
+      "id": "${HELLO_SSO_ID}",
       "assertions": [
         {
           "state": "present",
-          "id": "b66c8c43-0175-4dd8-b8fe-ebf2a5cc90c4",
+          "id": "${HELLO_USERS_ID}",
           "class": ["group"],
           "name": "hello-users",
           "entry_managed_by": ["tenant-admins"]
         },
         {
           "state": "present",
-          "id": "bb28c86c-bcef-4823-ab4c-6471f17617be",
+          "id": "${HELLO_OIDC_ID}",
           "class": ["account", "oauth2_resource_server", "oauth2_resource_server_basic"],
           "name": "hello-oidc",
           "displayname": "hello",

@@ -7,8 +7,11 @@
 # any. idm_admins, which holds idm_admin, manages platform-admins, and tenant-admins manage their own group, members
 # and each app's groups, of which they change the members alone: Kanidm keeps a deleted entry's ID, and fails every
 # later file that names it. IDs are fixed for good: Kanidm finds an entry by its ID, and never takes one back once a
-# removal named it. Kanidm's builtin groups are out of a migration's reach, so suveraen-idm admin sets their members
-# (nixos/idm.nix).
+# removal named it. These IDs alone are written here, the same in every tenant: Kanidm applies this file as it first
+# starts, before it takes a sign-in, so no person a tenant admin makes can hold one first, and render holds it to these
+# groups. Every other file takes its IDs from the tenant's Secret, KANIDM_<NAME>_ID for the platform's, which no one in
+# the tenant knows before Kanidm makes the entry. Kanidm's builtin groups are out of a migration's reach, so
+# suveraen-idm admin sets their members (nixos/idm.nix).
 apiVersion: v1
 kind: ConfigMap
 metadata:

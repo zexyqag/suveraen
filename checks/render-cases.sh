@@ -64,11 +64,19 @@ prod() { # tenant ID
   cp -r $T/alpha "clusters/prod/tenants/$1"
   sed -i "s/alpha/$1/g; s|clusters/test|clusters/prod|" "clusters/prod/tenants/$1"/*.yaml
 }
+ids() { # tenant, then keys: a Kanidm ID of its own for each, in the tenant's Secret
+  local t=$1 key
+  shift
+  for key; do
+    append "$T/$t/secrets.yaml" "  $key: $(printf %s "$t/$key" | sha256sum \
+      | sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/\1-\2-\3-\4-\5/')\n"
+  done
+}
 other() { # a second app like hello, which bravo also runs, with IDs of its own in Kanidm
   cp -r apps/hello apps/other
   rm apps/other/edge-apex.yaml
   sed -i 's/hello/other/g; s/HELLO/OTHER/g' apps/other/ks.yaml apps/other/*/*.yaml
-  sed -i 's/"id": "[0-9a-f]/"id": "f/' apps/other/sso/configmap.yaml
+  ids bravo OTHER_SSO_ID OTHER_USERS_ID OTHER_OIDC_ID
   yq -i '.spec.values.persistence.migrations.sources += [{"configMap": {"name": "sso-other", "optional": true}}]' \
     apps/kanidm/app/helmrelease.yaml
   sed -i 's|  - ../../../../../apps/hello/ks.yaml|&\n  - ../../../../../apps/other/ks.yaml|' \
@@ -79,7 +87,7 @@ other() { # a second app like hello, which bravo also runs, with IDs of its own 
   done
 }
 knob() { yq -i ".spec.postBuild.substitute.$1 = \"$2\"" "$T/bravo/tenant.yaml"; }
-export -f append np encsecret encmap prod other knob
+export -f append np encsecret encmap prod ids other knob
 export T sops encrypted
 keymap='---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: key\ndata:\n  KEY: '
 
@@ -380,14 +388,33 @@ refuses migration-file-name "sso-hello/60-hello.json: an app adds one file, 50-h
   "sed -i 's/  50-hello.json: |/  60-hello.json: |/' $S"
 refuses migration-not-json "sso-hello/50-hello.json: not JSON" "sed -i 's/\"assertions\": \[/\"assertions\": [,/' $S"
 refuses migration-person "never people, accounts of another kind or classes Kanidm sets itself: eve-x" \
-  "sed -i 's|      \"assertions\": \[|&\n        { \"state\": \"present\", \"id\": \"e0000000-0000-4000-8000-000000000001\", \
+  "ids alpha HELLO_EVE_ID; ids bravo HELLO_EVE_ID
+   sed -i 's|      \"assertions\": \[|&\n        { \"state\": \"present\", \"id\": \"\${HELLO_EVE_ID}\", \
 \"class\": [\"account\", \"person\"], \"name\": \"eve-x\", \"displayname\": \"Eve\" },|' $S"
 refuses migration-object-class "classes Kanidm sets itself: hello-users" \
   "sed -i 's|\"class\": \[\"group\"\],|\"class\": [\"group\", \"object\"],|' $S"
-refuses migration-builtin "IDs are UUIDs in lowercase from 00000000-0000-0000-0001-000000000000 on, not 00000000-" \
-  "sed -i 's/b66c8c43-0175-4dd8-b8fe-ebf2a5cc90c4/00000000-0000-0000-0000-000000000035/' $S"
+uuids="IDs are UUIDs in lowercase from 00000000-0000-0000-0001-000000000000 on, not"
+refuses migration-builtin "$uuids 00000000-" \
+  "sed -i 's/HELLO_USERS_ID: .*/HELLO_USERS_ID: 00000000-0000-0000-0000-000000000035/' $T/alpha/secrets.yaml"
+refuses migration-id-uppercase "$uuids DB77698C-" \
+  "sed -i 's/HELLO_USERS_ID: .*/HELLO_USERS_ID: DB77698C-7809-482B-BB76-4537C5FC2B83/' $T/alpha/secrets.yaml"
 refuses migration-same-id "ID b9573391-723b-42d6-aaa9-2b674ebb1078 is also kanidm-migrations/10-groups.json" \
-  "sed -i 's/b66c8c43-0175-4dd8-b8fe-ebf2a5cc90c4/b9573391-723b-42d6-aaa9-2b674ebb1078/' $S"
+  "sed -i 's/HELLO_USERS_ID: .*/HELLO_USERS_ID: b9573391-723b-42d6-aaa9-2b674ebb1078/' $T/alpha/secrets.yaml"
+refuses migration-id-twice "ID db77698c-7809-482b-bb76-4537c5fc2b83 is also test/alpha sso-hello/50-hello.json#1" \
+  "sed -i 's/HELLO_OIDC_ID: .*/HELLO_OIDC_ID: db77698c-7809-482b-bb76-4537c5fc2b83/' $T/alpha/secrets.yaml"
+refuses migration-id-shared "ID db77698c-7809-482b-bb76-4537c5fc2b83 is also test/alpha sso-hello/50-hello.json#1" \
+  "sed -i 's/HELLO_USERS_ID: .*/HELLO_USERS_ID: db77698c-7809-482b-bb76-4537c5fc2b83/' $T/bravo/secrets.yaml"
+refuses migration-id-missing "test/bravo-hello-sso doesn't render" "sed -i '/HELLO_USERS_ID/d' $T/bravo/secrets.yaml"
+secret="an ID past the founding file comes from the tenant's Secret, as"
+refuses migration-literal-id "$secret \${HELLO_<NAME>_ID} alone, without a default, so no one in the tenant knows it" \
+  "sed -i 's/\${HELLO_USERS_ID}/db77698c-7809-482b-bb76-4537c5fc2b83/' $S"
+refuses migration-id-default "Kanidm makes its entry: sso-hello/50-hello.json: \${HELLO_USERS_ID:=db77698c-" \
+  "sed -i 's/\${HELLO_USERS_ID}/\${HELLO_USERS_ID:=db77698c-7809-482b-bb76-4537c5fc2b83}/' $S"
+refuses migration-id-default-named "Kanidm makes its entry: sso-\${APP}/50-hello.json: \${HELLO_USERS_ID:=db77698c-" \
+  "sed -i 's/name: sso-hello/name: sso-\${APP}/' $S
+   sed -i 's/\${HELLO_USERS_ID}/\${HELLO_USERS_ID:=db77698c-7809-482b-bb76-4537c5fc2b83}/' $S"
+refuses migration-platform-map-named "./kubernetes/apps/kanidm/app holds its migrations in one ConfigMap" \
+  "sed -i 's/name: kanidm-migrations/name: \${APP}-migrations/' $M"
 refuses migration-name-without-dash "every name but members holds a -, which no login suveraen-idm admin makes does:" \
   "sed -i 's/\"hello-users\"/\"hellousers\"/g' $S"
 refuses migration-other-app-group "an app names its groups hello-<name>" "sed -i 's/\"hello-users\"/\"other-users\"/g' $S"
@@ -414,11 +441,20 @@ removed() { # a file of removals in the platform's migrations, from JSON on stdi
   rm removed.json
 }
 export -f removed
-refuses migration-removed-returns "a removed entry never comes back, as Kanidm refuses its ID for good: bb28c86c-" \
-  "echo '{\"id\": \"e0000000-0000-4000-8000-000000000090\",
-   \"assertions\": [{\"state\": \"absent\", \"id\": \"bb28c86c-bcef-4823-ab4c-6471f17617be\"}]}' | removed"
+refuses migration-removed-returns "a removed entry never comes back, as Kanidm refuses its ID for good: b11099d7-" \
+  "for t in alpha bravo; do
+     ids \$t KANIDM_REMOVED_ID
+     append $T/\$t/secrets.yaml \"  KANIDM_OLD_ID: \$(yq .stringData.HELLO_OIDC_ID $T/\$t/secrets.yaml)\n\"
+   done
+   echo '{\"id\": \"\${KANIDM_REMOVED_ID}\",
+   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_OLD_ID}\"}]}' | removed"
 refuses migration-empty "a migration has an id and assertions, at least one" \
-  "echo '{\"id\": \"e0000000-0000-4000-8000-000000000090\", \"assertions\": []}' | removed"
+  "ids alpha KANIDM_REMOVED_ID; ids bravo KANIDM_REMOVED_ID
+   echo '{\"id\": \"\${KANIDM_REMOVED_ID}\", \"assertions\": []}' | removed"
+refuses migration-platform-literal-id "$secret \${KANIDM_<NAME>_ID} alone" \
+  "ids alpha KANIDM_RETIRED_ID; ids bravo KANIDM_RETIRED_ID
+   echo '{\"id\": \"e0000000-0000-4000-8000-000000000090\",
+   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | removed"
 refuses migration-admins-by-name "as a list in Kanidm 1.11: tenant-admins" \
   "sed -i 's/\"entry_managed_by\": \[\"tenant-admins\"\]/\"entry_managed_by\": \"tenant-admins\"/' $M"
 refuses migration-platform-admins-own "idm_admins manages platform-admins, and tenant-admins their own" \
@@ -759,6 +795,7 @@ refuses max-age-missing "$age: ReplicationSource/data-2" \
 
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"
+renders encrypted-tenants "encsecret $T/alpha; encsecret $T/bravo; encmap clusters/test"
 renders own-app-key "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
   sed -i 's/PODINFO_UI_MESSAGE: .*/PODINFO_UI_MESSAGE: \${HELLO_API_KEY:=none}/' apps/hello/app/configmap.yaml"
 renders two-apps "other"
@@ -766,8 +803,9 @@ renders sso-public "sed -i 's/oauth2_resource_server_basic/oauth2_resource_serve
   yq -i '.metadata.annotations.\"suveraen/localhost-redirects\" = \"true\"' $S
   sed -i '/components\/sso-secret/d' apps/hello/ks.yaml"
 renders sso-without-pkce "yq -i '.metadata.annotations.\"suveraen/disable-pkce\" = \"true\"' $S"
-renders migration-removed "echo '{\"id\": \"e0000000-0000-4000-8000-000000000090\",
-  \"assertions\": [{\"state\": \"absent\", \"id\": \"e0000000-0000-4000-8000-000000000091\"}]}' | removed"
+renders migration-removed "ids alpha KANIDM_REMOVED_ID KANIDM_RETIRED_ID; ids bravo KANIDM_REMOVED_ID KANIDM_RETIRED_ID
+  echo '{\"id\": \"\${KANIDM_REMOVED_ID}\",
+  \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | removed"
 renders real-cluster "$real"
 renders recovery "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery"
 renders recovery-offsite "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery; knob POSTGRES_RESTORE_FROM offsite-2"

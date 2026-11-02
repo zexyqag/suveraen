@@ -118,6 +118,31 @@ print(json.dumps({"cluster": cluster, "tenant": tenant, "source": source, "app":
                   "annotations": (cm.get("metadata") or {}).get("annotations") or {},
                   "hosts": json.load(open(hosts)), "secrets": json.load(open(secrets))}))
 '
+# Prints each ID of the migrations in a ConfigMap as Flux builds it before it substitutes anything (JSON on stdin) that
+# isn't ${<APP>_<NAME>_ID} alone, for the app's prefix given, but in the founding file, which a tenant's Kanidm applies
+# as it first starts, before it takes a sign-in, after "bad "; and after "key " each key the others take. A tenant
+# admin may make a person with any ID, so every other ID comes from the tenant's Secret, which no one there reads, and
+# has no default, which would be the same in every tenant.
+sourceids='
+import json, re, sys
+cm, prefix = json.load(sys.stdin), sys.argv[1]
+key = re.compile(r"[$][{](" + prefix + r"_[A-Z0-9_]+_ID)[}]")
+for name, text in sorted((cm.get("data") or {}).items()):
+    where = cm["metadata"]["name"] + "/" + name
+    if where == "kanidm-migrations/10-groups.json":
+        continue
+    try:
+        m = json.loads(text)
+    except ValueError:
+        continue
+    if not isinstance(m, dict):
+        continue
+    assertions = m.get("assertions") if isinstance(m.get("assertions"), list) else []
+    for a in [m] + [a for a in assertions if isinstance(a, dict)]:
+        i = a.get("id")
+        k = key.fullmatch(i) if isinstance(i, str) else None
+        print(f"key {k.group(1)}" if k else f"bad {where}: {i}")
+'
 # Prints what is wrong with the migrations every tenant's Kanidm applies (JSON lines from migrationsource on stdin).
 # Kanidm applies each file in its own transaction and only logs what fails, so render refuses what it would skip.
 migrations='
@@ -160,6 +185,10 @@ def url(where, value, hosts):
 for line in sys.stdin:
     s = json.loads(line)
     app, source, tenant = s["app"], s["source"], s["cluster"] + "/" + s["tenant"]
+    # A file names, besides its own entries, only members and tenant-admins, which every tenant holds from the start,
+    # and the builtin idm_admins: Kanidm looks a name up among its entries before those of the file, so a name the
+    # platform holds nowhere yet could be held by a person a tenant admin made, who would then manage the group or get
+    # the scopes of the client.
     groups = {"members"} if source != "kanidm-migrations" else set()
     clients = []
     for key, text in sorted(s["files"].items()):
@@ -179,12 +208,14 @@ for line in sys.stdin:
                 or not m["assertions"] or not all(isinstance(a, dict) for a in m["assertions"]):
             bad(where, "a migration has an id and assertions, at least one, as Kanidm refuses an empty one")
             continue
+        # The IDs of the founding file are the same in every tenant, all others differ from tenant to tenant.
+        founding = source == "kanidm-migrations" and key == "10-groups.json"
         for n, a in enumerate([m] + m["assertions"]):
             i = a.get("id")
             if not isinstance(i, str) or not uuid.fullmatch(i) or i < dynamic:
                 bad(where, f"IDs are UUIDs in lowercase from {dynamic} on, not {i}")
             else:
-                claim(ids, i, f"{own}#{n}", where, "ID")
+                claim(ids, i, f"{own}#{n}" if founding else f"{tenant} {own}#{n}", where, "ID")
         states = {a.get("state") for a in m["assertions"]}
         if "absent" in states:
             if source != "kanidm-migrations" or states != {"absent"}:
@@ -192,7 +223,7 @@ for line in sys.stdin:
             for a in m["assertions"]:
                 if sorted(a) != ["id", "state"]:
                     bad(where, "a removal names an ID alone")
-                absent.setdefault(a.get("id"), where)
+                absent.setdefault((tenant, a.get("id")), where)
             continue
         if states != {"present"}:
             bad(where, f"an assertion is present or absent, not {sorted(map(str, states))}")
@@ -200,12 +231,12 @@ for line in sys.stdin:
         for a in m["assertions"]:
             name, classes = a.get("name"), a.get("class")
             classes = sorted(classes) if isinstance(classes, list) else classes
-            present.add(a.get("id"))
+            present.add((tenant, a.get("id")))
             if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)+", name) \
                     and not (name == "members" and source == "kanidm-migrations"):
                 bad(where, f"every name but members holds a -, which no login suveraen-idm admin makes does: {name}")
             else:
-                claim(names, name, own + "#" + str(a.get("id")), where, "name")
+                claim(names.setdefault(tenant, {}), name, own + "#" + str(a.get("id")), where, "name")
             if "member" in a:
                 bad(where, f"groups get their members from admins, not from files: {name}")
             if classes == ["group"]:
@@ -287,8 +318,8 @@ for line in sys.stdin:
         bad(where, f"an app with a confidential client holds Secret sso, which Flux makes once with client-secret"
             f" pending alone (components/sso-secret), and one with a public client none: {shape}")
 
-for i, where in absent.items():
-    if i in present:
+for (tenant, i), where in absent.items():
+    if (tenant, i) in present:
         bad(where, f"a removed entry never comes back, as Kanidm refuses its ID for good: {i}")
 print("\n".join(problems))
 '
@@ -490,6 +521,30 @@ dup=$(for tenant in kubernetes/clusters/*/tenants/*/; do basename "$tenant"; don
 
 : >"$work/tested"
 : >"$work/migrations.jsonl"
+mkdir "$work/sources"
+# Checks a Kustomization's migrations in its ConfigMap as Flux builds them before it substitutes anything (sourceids),
+# once for each path, which every tenant builds alike, and writes the keys they take IDs from to $w/<name>.idkeys. The
+# yq condition given finds the ConfigMap as the check once substituted does, so a name that takes a value is no way
+# around it.
+source_ids() { # Kustomization, path, condition, app
+  local name=$1 path=$2 condition=$3 knob maps found bad
+  knob=$(tr a-z A-Z <<<"$4")
+  found=$work/sources/${path//\//_}
+  if [ ! -e "$found" ]; then
+    yq 'del(.spec.postBuild)' "$w/$name.ks.yaml" >"$w/$name.source.yaml"
+    flux build kustomization "$name" --path "$path" --kustomization-file "$w/$name.source.yaml" --dry-run \
+      >"$w/$name.source" || fail "$cluster/$name doesn't build"
+    maps=$(yq ea -o=json -I=0 "[select(.kind == \"ConfigMap\" and $condition)]" "$w/$name.source")
+    [ "$(yq 'length' <<<"$maps")" = 1 ] \
+      || fail "$path holds its migrations in one ConfigMap, also as Flux builds it before it substitutes anything"
+    yq -o=json -I=0 '.[0]' <<<"$maps" | python3 -I -c "$sourceids" "$knob" >"$found"
+    bad=$(sed -n 's/^bad //p' "$found" | paste -sd';' -)
+    [ -z "$bad" ] || fail "$path: an ID past the founding file comes from the tenant's Secret, as" \
+      "\${${knob}_<NAME>_ID} alone, without a default, so no one in the tenant knows it before Kanidm makes its entry:" \
+      "${bad//;/; }"
+  fi
+  sed -n 's/^key //p' "$found" >"$w/$name.idkeys"
+}
 for dir in kubernetes/clusters/*/; do
   dir=${dir%/}
   cluster=$(basename "$dir")
@@ -522,6 +577,12 @@ for dir in kubernetes/clusters/*/; do
       || fail "$cluster/$parent creates a Kustomization named $name: templates are listed only by tenants"
     [ ! -e "$rendered/$name.yaml" ] || fail "$cluster: two Kustomizations are named $name"
     yq ea "select($fluxks and .metadata.name == \"$name\")" "$rendered/$parent.yaml" >"$w/$name.ks.yaml"
+    path=$(yq '.spec.path' "$w/$name.ks.yaml")
+    case $path in
+      ./kubernetes/apps/kanidm/app) source_ids "$name" "$path" '.metadata.name == "kanidm-migrations"' kanidm ;;
+      ./kubernetes/apps/*/sso) source_ids "$name" "$path" true "$(basename "$(dirname "$path")")" ;;
+      *) : >"$w/$name.idkeys" ;;
+    esac
     # Flux reads substituteFrom in order, then the inline values. A value must come from exactly one of them, so no
     # source silently shadows another.
     echo '{}' >"$w/$name.vars.yaml"
@@ -534,8 +595,15 @@ for dir in kubernetes/clusters/*/; do
       [ "$(yq 'length' "$w/src.yaml")" != 0 ] \
         || fail "$cluster/$name: substituteFrom names $kind/$ref, which the cluster doesn't define"
       # Names are readable even when values are encrypted; flux build masks a Secret's as **SOPS** and drops its sops
-      # key. Each stand-in differs per source and key, and is base64, as it may land in a Secret's data.
-      standin="(\"$ref-\" + key | downcase | sub(\"_\", \"-\") | @base64)"
+      # key. Each stand-in differs per source and key, and is base64, as it may land in a Secret's data, but a UUID for
+      # a key the Kustomization's migrations take an ID from.
+      yq "(.stringData // {}) * (.data // {})
+        | with(.[]; . = (\"$ref-\" + key | downcase | sub(\"_\", \"-\") | @base64))" "$w/src.yaml" >"$w/standins.yaml"
+      for key in $(yq 'keys | .[]' "$w/standins.yaml" | grep -xFf "$w/$name.idkeys" || true); do
+        id=$(printf '%s/%s' "$ref" "$key" | sha256sum | sed -E 's/^(.{8})(.{4})(.{4})(.{4})(.{12}).*/\1-\2-\3-\4-\5/')
+        yq -i ".[\"$key\"] = \"$id\"" "$w/standins.yaml"
+      done
+      standin="load(\"$w/standins.yaml\")[key]"
       if [ "$(yq 'has("sops")' "$w/src.yaml")" = true ]; then
         yq "(.stringData // .data // {}) | with(.[]; . = $standin)" "$w/src.yaml" >"$w/src.vars.yaml"
       elif [ "$kind" = ConfigMap ]; then
@@ -557,7 +625,6 @@ for dir in kubernetes/clusters/*/; do
       | select(. as \$k | load(\"$w/$name.vars.yaml\") | has(\$k))" \
       "$w/$name.ks.yaml")
     [ -z "$both" ] || fail "$cluster/$name: $both is set inline and by one of its sources"
-    path=$(yq '.spec.path' "$w/$name.ks.yaml")
     # A file from elsewhere in the repository can read a key too, so other apps' keys get a value to look for.
     case $path in
       ./kubernetes/apps/*/*) guarded=$(grep -vxF "$(basename "$(dirname "$path")" | tr a-z A-Z)" <<<"$appnames" \

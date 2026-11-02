@@ -36,16 +36,17 @@
 # tenant's pod logs a client's address.
 # Each tenant's Kanidm serves its own host through the gateway, which passes it through to Kanidm's own certificate,
 # to clients that Kanidm sees as the gateway whatever they claim, and to that tenant's apps alone under the same name;
-# it holds the platform's groups and each app's client as their files declare. suveraen-idm, which reaches each Kanidm
-# at the server's own gateway and never looks its name up, makes its first platform admin, who may enrol nothing but a
-# passkey of an approved make, and a tenant admin, who makes the tenant's people and changes its groups' members but
-# can't touch a platform admin or an admin group, nor delete or make a group, and sets Kanidm's own groups; refuses to
-# make an admin of a person who exists already; copies each confidential client's secret from Kanidm into its app, so
-# the release that adds an app is the only one, recovering idm_admin only when something is wrong; gives a client a
-# new secret; passes on nothing an app's namespace writes but a secret as Kanidm makes them; and leaves idm_admin,
-# admin and anonymous disabled. The checks take no run of Kanidm's migrations from lines a client had it log. Kanidm's
-# volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all replaces;
-# the server's checks alert once when an app holds a wrong one, and when that clears.
+# it holds the platform's groups and each app's client as their files declare, an app's under IDs of the tenant's own
+# from its Secret, which no other tenant's Kanidm holds, and hello signs in with its client in each. suveraen-idm, which
+# reaches each Kanidm at the server's own gateway and never looks its name up, makes its first platform admin, who may
+# enrol nothing but a passkey of an approved make, and a tenant admin, who makes the tenant's people and changes its
+# groups' members but can't touch a platform admin or an admin group, nor delete or make a group, and sets Kanidm's own
+# groups; refuses to make an admin of a person who exists already; copies each confidential client's secret from Kanidm
+# into its app, so the release that adds an app is the only one, recovering idm_admin only when something is wrong;
+# gives a client a new secret; passes on nothing an app's namespace writes but a secret as Kanidm makes them; and leaves
+# idm_admin, admin and anonymous disabled. The checks take no run of Kanidm's migrations from lines a client had it log.
+# Kanidm's volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all
+# replaces; the server's checks alert once when an app holds a wrong one, and when that clears.
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
 # tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
 # records it, its own off-site copies included, none of them late; one more pool still fits, and when it passes its
@@ -1496,6 +1497,19 @@ pkgs.testers.runNixOSTest {
               out = server.succeed("suveraen-idm sync 2>&1")
               assert "recovering" not in out and all(f"{t}: hello-oidc: in line" in out for t in tenants), out
               assert {t: recoveries(t) for t in tenants} == before, before
+
+          with subtest("Each tenant's Kanidm holds hello's group and client under IDs of the tenant's own, from its Secret, and hello signs in with its client in each"):
+              held = {}
+              for t in tenants:
+                  as_idm_admin(t)
+                  held[t] = [kanidm(t, f"{kind} get {name}")["attrs"]["uuid"] for kind, name in [
+                      ("group", "hello-users"), ("system oauth2", "hello-oidc")
+                  ]]
+                  disable_idm_admin(t)
+                  secrets = f"${cluster}/tenants/{t}/secrets.yaml"
+                  assert held[t] == [[read(secrets, key)] for key in ["HELLO_USERS_ID", "HELLO_OIDC_ID"]], (t, held[t])
+                  assert probe_token(t, sso_secret(t)) == "400", t
+              assert not {i for [i] in held[first]} & {i for [i] in held[second]}, held
 
           with subtest("suveraen-idm rotate gives a client a new secret, and no value an app's namespace writes reaches curl but a secret"):
               old = sso_secret(first)
