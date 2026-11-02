@@ -23,6 +23,11 @@ jobs:
       group: e2e-${{ github.ref }}
       cancel-in-progress: true
     steps:
+      # GitHub promises a runner 14 GB of free disk, and some have little more. The Nix store and the VMs' disks need
+      # more: the runner's own toolchains, which the test doesn't use, make room.
+      - run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup "$RUNNER_TOOL_CACHE"
+          df -h /
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
