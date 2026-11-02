@@ -2311,6 +2311,14 @@ pkgs.testers.runNixOSTest {
                   """ -p '{"data":{"PODINFO_UI_MESSAGE":"changed"}}'"""
               )
               forge.wait_until_succeeds(f"{fetch(hello[tenant][0])} | grep -F changed", timeout=180)
+              # Flux puts git's setting back now, or a later release would, restarting the app when no step expects it.
+              server.succeed(
+                  f"kubectl -n flux-system annotate kustomization {tenant}-hello --overwrite"
+                  " reconcile.fluxcd.io/requestedAt=$(date +%s)"
+              )
+              forge.wait_until_succeeds(
+                  f"{fetch(hello[tenant][0])} | grep -F 'hello from {tenant} at {domains[tenant]}'", timeout=300
+              )
 
           with subtest("Removing a tenant takes its Kustomizations, hosts, keys and pods, and leaves its namespaces"):
               theirs = hosts_of(second)
