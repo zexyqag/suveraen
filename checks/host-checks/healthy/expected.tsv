@@ -13,3 +13,4 @@ cluster	alpha-postgres/postgres WAL archiving	ok	4	backups late	archiving, limit
 cluster	alpha-postgres/postgres base backup	ok	4	backups late	last 2026-10-19T00:00:00Z (3d 12h ago), limit 8d
 host	cluster status	ok	4	cluster status unreadable	read
 host	etcd-snapshots	ok	4	backups late	last 2026-10-22T00:00:00Z (12h 0m ago), limit 13h
+kanidm	judged	{}

@@ -250,15 +250,23 @@ let
       fi
 
       [ -e "$state/kanidm-checked" ] || echo "$now" >"$state/kanidm-checked"
+      [ -e "$state/kanidm-judged.json" ] || echo '{}' >"$state/kanidm-judged.json"
       findings=$(jq -n --argjson now "$now" --slurpfile spec ${spec} --argjson files "$files" \
         --slurpfile seen "$state/first-seen.json" --argjson read "$(<"$state/last-read")" \
-        --argjson kanidm "$(<"$state/kanidm-checked")" --slurpfile cluster "$cluster" \
-        '{$now, spec: $spec[0], $files, state: {lastRead: $read, firstSeen: $seen[0], kanidmChecked: $kanidm},
-          cluster: $cluster[0]}' \
+        --argjson kanidm "$(<"$state/kanidm-checked")" --slurpfile judged "$state/kanidm-judged.json" \
+        --slurpfile cluster "$cluster" \
+        '{$now, spec: $spec[0], $files, cluster: $cluster[0],
+          state: {lastRead: $read, firstSeen: $seen[0], kanidmChecked: $kanidm, kanidmJudged: $judged[0]}}' \
         | jq -r -f ${./host-checks.jq})
       if grep -qx $'kanidm\tchecked' <<<"$findings"; then echo "$now" >"$state/kanidm-checked"; fi
-      jq -R -r 'split("\t") | if length == 2 then "\(.[0]) scope: \(.[1])" else "\(.[2]) \(.[1]): \(.[5])" end' \
-        <<<"$findings"
+      judged=$(jq -R -r 'split("\t") | select(.[0:2] == ["kanidm", "judged"]) | .[2]' <<<"$findings")
+      if [ -n "$judged" ]; then
+        printf '%s\n' "$judged" >"$state/kanidm-judged.json.new"
+        mv "$state/kanidm-judged.json.new" "$state/kanidm-judged.json"
+      fi
+      jq -R -r 'split("\t")
+        | if length == 6 then "\(.[2]) \(.[1]): \(.[5])" elif length == 2 then "\(.[0]) scope: \(.[1])"
+          else "\(.[0]) \(.[1]): \(.[2])" end' <<<"$findings"
 
       touch "$state/late.tsv"
       decision=$(jq -R -s -c --rawfile alerted "$state/late.tsv" --argjson now "$now" \

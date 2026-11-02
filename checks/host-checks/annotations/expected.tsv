@@ -16,3 +16,4 @@ cluster	young-postgres/offsite-check-2	ok	4	backups late	last 2026-10-21T13:41:0
 cluster	young-postgres/postgres WAL archiving	ok	4	backups late	no valid suveraen/max-age ("90") since 2026-10-22T11:30:00Z (30m ago), grace 1h
 cluster	young-postgres/postgres base backup	ok	4	backups late	last 2026-10-22T11:40:00Z (20m ago), limit 8d
 host	cluster status	ok	4	cluster status unreadable	read
+kanidm	judged	{}

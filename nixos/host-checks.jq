@@ -1,6 +1,7 @@
 # What host-checks.nix finds in what it read, judged at .now: a line saying whether this server checked the cluster
 # (evaluated, skipped or unreadable), one when every tenant's Kanidm was checked, then one per finding with its scope,
-# key, ok, late or unknown, priority, the title it alerts under and what was found, separated by tabs.
+# key, ok, late or unknown, priority, the title it alerts under and what was found, separated by tabs, and last, when
+# suveraen-idm check told of the tenants' Kanidm, what the report keeps of how each ran its migrations as it started.
 
 def time: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
 def stamp: if . == null then null else time end;
@@ -128,9 +129,18 @@ def ceph($c; $cluster):
 # What the checks could not tell this time, which stands as it was found last (host-checks.nix).
 def unknown($key; $title; $detail): ["cluster", $key, "unknown", 4, $title, ($detail | gsub("[\t\n\r]+"; " "))];
 
-# Each tenant's Kanidm as suveraen-idm check found it (idm.nix): its admin accounts, the last run of its migrations,
-# and its clients.
-def kanidm($idm):
+# How each tenant's Kanidm ran its migrations as its container started, where this run or one before here read it from
+# its log, by tenant: what the report keeps.
+def judged($idm; $before):
+  [$idm.tenants[] | .tenant as $t
+    | if .migrations != null and .started != null then {($t): {started, migrations}}
+      else $before[$t] // empty | {($t): .}
+      end]
+  | add // {};
+
+# Each tenant's Kanidm as suveraen-idm check found it (idm.nix): its admin accounts, how it ran its migrations as it
+# started, and its clients.
+def kanidm($c; $idm; $judged):
   $idm.tenants[]?
   | .tenant as $tenant
   | "\($tenant)-kanidm" as $ns
@@ -146,15 +156,26 @@ def kanidm($idm):
              else "\($enabled | join(", ")) enabled, which suveraen-idm sync \($tenant) disables"
              end)
          end),
-        # A long-running Kanidm's log no longer reaches back to its start, where it ran them.
-        (if .migrations == null then unknown("\($ns) migrations"; "Kanidm migrations failed"; "no run of them in its log")
-         else
-           .migrations
-           | finding("cluster"; "\($ns) migrations"; .failed != [] or .denied > 0; 4; "Kanidm migrations failed";
-               ([.failed[], (select(.denied > 0) | "\(.denied) changes skipped to entries it may not see")] | join("; "))
-               as $what
-               | if $what == "" then "the last run applied every file" else "in the last run: \($what)" end)
-         end),
+        # A long-running Kanidm's log no longer reaches back to its start, where it ran them, and a client can fill
+        # one until the kubelet rotates it: a start whose run no check here read counts as failed once it had time.
+        (.started as $started
+         | (.migrations // ($judged[$tenant] | select(.started == $started) | .migrations) // null) as $run
+         | if $run != null then
+             $run
+             | finding("cluster"; "\($ns) migrations"; .failed != [] or .denied > 0; 4; "Kanidm migrations failed";
+                 ([.failed[], (select(.denied > 0) | "\(.denied) changes skipped to entries it may not see")]
+                  | join("; ")) as $what
+                 | if $what == "" then "applied every file as it started" else "as it started: \($what)" end)
+           elif $started == null then
+             unknown("\($ns) migrations"; "Kanidm migrations failed"; "no start of a running container read")
+           elif $c.now - ($started | time) > $c.grace then
+             finding("cluster"; "\($ns) migrations"; true; 4; "Kanidm migrations failed";
+               "nothing here read how it ran them as it started at \($started), which counts as failed; restarting"
+               + " it runs them again")
+           else
+             unknown("\($ns) migrations"; "Kanidm migrations failed";
+               "nothing here read yet how it ran them as it started at \($started)")
+           end),
         (.clients[]
           | if .secret | IN("unknown", "missing") then
               unknown("\($ns)/\(.client)"; "Kanidm clients out of sync";
@@ -173,7 +194,8 @@ def kanidm($idm):
             end)
     end;
 
-# Why suveraen-idm check left part of the tenants' Kanidm unchecked, all but migrations no longer in a log, or null.
+# Why suveraen-idm check left part of the tenants' Kanidm unchecked, all but migrations, which count as failed once
+# they stay untold too long, or null.
 def unchecked($idm; $rows):
   [$rows[] | select(.[2] == "unknown" and (.[1] | endswith(" migrations") | not)) | .[1]] as $parts
   | if ($idm | type) != "object" then "no answer from suveraen-idm check"
@@ -199,7 +221,8 @@ def unchecked($idm; $rows):
    else "skipped"
    end) as $scope
 | {now: $now, grace: $spec.missingGrace, stale: $spec.cephStaleAfter, cronjobs: ($k.cronjobs // {})} as $c
-| [kanidm($k.idm)] as $kanidm
+| ($state.kanidmJudged // {}) as $judged
+| [kanidm($c; $k.idm; $judged)] as $kanidm
 | unchecked($k.idm; $kanidm) as $why
 # Whether every tenant's Kanidm was checked, which the report keeps the time of.
 | ["cluster", $scope],
@@ -232,5 +255,7 @@ def unchecked($idm; $rows):
              else "every tenant's Kanidm last checked \($checked | since($now)), limit \($spec.unreadableAfter | span):"
                + " \($why)"
              end)))
-  ] | unique_by(.[0:2])[])
+  ] | unique_by(.[0:2])[]),
+  (select($unreadable == null and ($k.idm.tenants? | type) == "array")
+    | ["kanidm", "judged", (judged($k.idm; $judged) | tojson)])
 | map(tostring) | join("\t")

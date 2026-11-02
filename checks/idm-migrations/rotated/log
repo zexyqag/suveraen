@@ -1,0 +1,22 @@
+2026-11-02T10:30:20.915621Z 11111111-2222-3333-4444-555555555555 INFO     migration_apply [ 9.81ms | 5.10% / 100.00% ]
+2026-11-02T10:30:20.915627Z 11111111-2222-3333-4444-555555555555 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/10-groups.json
+2026-11-02T10:30:20.915635Z 11111111-2222-3333-4444-555555555555 INFO     ┕━ handle_scim_migration_apply [ 3.12ms | 31.80% ]
+2026-11-02T10:30:20.915647Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Starting the web server...
+2026-11-02T10:30:20.915654Z x) Have you configured the OAuth2 resource server?
+2026-11-02T10:30:20.915661Z 76416ee6-e72c-429a-8389-12b714c9de24 ERROR    ┕━ 🚨 [error]: Unable to authorise - Error ID: 76416ee6-e72c-429a-8389-12b714c9de24 error: invalid_client_id | event_tag_id: 1
+2026-11-02T10:30:21.621378Z aef81f45-e3b1-45d7-8eb8-0a4fa228263c INFO     request [ 1.91ms | 14.33% / 100.00% ] method: POST | uri: /v1/auth | version: HTTP/1.1 | connection_address: "127.0.0.1:51358" | client_address: "127.0.0.1" | status_code: 200 | latency: 1 | kopid: "aef81f45-e3b1-45d7-8eb8-0a4fa228263c"
+2026-11-02T10:30:21.62149Z aef81f45-e3b1-45d7-8eb8-0a4fa228263c INFO     ┕━ auth [ 1.63ms | 85.67% ]
+2026-11-02T10:30:21.621508Z aef81f45-e3b1-45d7-8eb8-0a4fa228263c INFO        ┝━ ｉ [info]: Initiating Authentication Session | username: idm_admin | issue: Token | privileged: false | uuid: 00000000-0000-0000-0000-000000000018
+2026-11-02T10:30:21.621521Z aef81f45-e3b1-45d7-8eb8-0a4fa228263c INFO        ┝━ ｉ [info]: account has no available credentials | event_tag_id: 10
+2026-11-02T10:30:21.621538Z aef81f45-e3b1-45d7-8eb8-0a4fa228263c INFO        ┝━ ｉ [info]: Authentication Session Unable to begin | event_tag_id: 10
+2026-11-02T10:30:21.621545Z aef81f45-e3b1-45d7-8eb8-0a4fa228263c INFO        ┕━ ｉ [info]: Auth result: Denied: invalid credential state | event_tag_id: 10
+2026-11-02T10:30:21.688678Z 2dca58e7-56a4-4415-b3a4-7615f2f4a2ab INFO     request [ 1.53ms | 17.82% / 100.00% ] method: POST | uri: /v1/auth | version: HTTP/1.1 | connection_address: "127.0.0.1:51374" | client_address: "127.0.0.1" | status_code: 200 | latency: 1 | kopid: "2dca58e7-56a4-4415-b3a4-7615f2f4a2ab"
+2026-11-02T10:30:21.688769Z 2dca58e7-56a4-4415-b3a4-7615f2f4a2ab INFO     ┕━ auth [ 1.26ms | 82.18% ]
+2026-11-02T10:30:21.688785Z 2dca58e7-56a4-4415-b3a4-7615f2f4a2ab INFO        ┝━ ｉ [info]: Initiating Authentication Session | username: admin | issue: Token | privileged: false | uuid: 00000000-0000-0000-0000-000000000000
+2026-11-02T10:30:21.688797Z 2dca58e7-56a4-4415-b3a4-7615f2f4a2ab INFO        ┝━ ｉ [info]: account has no available credentials | event_tag_id: 10
+2026-11-02T10:30:21.688804Z 2dca58e7-56a4-4415-b3a4-7615f2f4a2ab INFO        ┝━ ｉ [info]: Authentication Session Unable to begin | event_tag_id: 10
+2026-11-02T10:30:21.688812Z 2dca58e7-56a4-4415-b3a4-7615f2f4a2ab INFO        ┕━ ｉ [info]: Auth result: Denied: invalid credential state | event_tag_id: 10
+2026-11-02T10:30:21.750207Z ba4011c9-b39c-43a7-90bc-2017198ae315 INFO     request [ 957µs | 23.01% / 100.00% ] method: POST | uri: /v1/auth | version: HTTP/1.1 | connection_address: "127.0.0.1:49446" | client_address: "127.0.0.1" | status_code: 200 | latency: 0 | kopid: "ba4011c9-b39c-43a7-90bc-2017198ae315"
+2026-11-02T10:30:21.750304Z ba4011c9-b39c-43a7-90bc-2017198ae315 INFO     ┕━ auth [ 737µs | 76.99% ]
+2026-11-02T10:30:21.750325Z ba4011c9-b39c-43a7-90bc-2017198ae315 INFO        ┝━ ｉ [info]: Initiating Authentication Session | username: anonymous | issue: Token | privileged: false | uuid: 00000000-0000-0000-0000-ffffffffffff
+2026-11-02T10:30:21.750337Z ba4011c9-b39c-43a7-90bc-2017198ae315 INFO        ┕━ ｉ [info]: Auth result: Choose(anonymous) | event_tag_id: 10

@@ -5,3 +5,4 @@ cluster	Ceph POOL_NEAR_FULL	late	5	Ceph HEALTH_ERR	1 pool(s) nearfull; ceph heal
 cluster	Ceph status	ok	4	Ceph status not updated	HEALTH_ERR, checked 2026-10-22T11:59:00Z (1m ago), limit 30m
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
 host	cluster status	ok	4	cluster status unreadable	read
+kanidm	judged	{}

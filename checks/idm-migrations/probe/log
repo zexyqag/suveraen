@@ -1,9 +1,0 @@
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     migration_apply [ 11.4ms | 4.72% / 100.00% ]
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/10-groups.json
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/50-hello.json
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┝━ handle_scim_migration_apply [ 3.98ms | 34.76% ]
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┕━ handle_scim_migration_apply [ 6.93ms | 60.52% ]
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO        ┕━ ｉ [info]: regenerating oauth2 basic secret | event_tag_id: 10
-e737b114-2bb0-45ab-a583-d409ff115c68 INFO     request [ 338µs | 48.06% / 100.00% ] method: POST | uri: /oauth2/token | version: HTTP/1.1 | connection_address: "127.0.0.1:49734" | client_address: "127.0.0.1" | status_code: 400 | latency: 0 | kopid: "e737b114-2bb0-45ab-a583-d409ff115c68"
-e737b114-2bb0-45ab-a583-d409ff115c68 INFO     ┕━ handle_oauth2_token_exchange [ 176µs | 51.94% ]
-e737b114-2bb0-45ab-a583-d409ff115c68 ERROR       ┕━ 🚨 [error]: Failed to deserialise a valid JWE

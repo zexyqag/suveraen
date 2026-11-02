@@ -2,3 +2,4 @@ cluster	evaluated
 kanidm	checked
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
 host	cluster status	ok	4	cluster status unreadable	read
+kanidm	judged	{}

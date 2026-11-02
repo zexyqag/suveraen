@@ -1,6 +1,59 @@
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     migration_apply [ 11.4ms | 4.72% / 100.00% ]
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/10-groups.json
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/50-hello.json
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┝━ handle_scim_migration_apply [ 3.98ms | 34.76% ]
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO     ┕━ handle_scim_migration_apply [ 6.93ms | 60.52% ]
-7b1d97f3-8264-472f-aee2-f83db5d792a9 INFO        ┕━ ｉ [info]: regenerating oauth2 basic secret | event_tag_id: 10
+2026-11-02T08:40:32.397379Z Logging filter initialized: "kanidmd_core::https::middleware=info,h2::proto::streams::prioritize=warn,kanidmd_core::https::trace=info,tonic=warn,hyper=warn,h2=warn,info"
+2026-11-02T08:40:32.397458Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Starting Kanidmd | version: 1.11.2
+2026-11-02T08:40:32.397524Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Running in server mode ...
+2026-11-02T08:40:32.397687Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Starting kanidm with configuration: address: [::]:8443, domain: idm.alpha.test, ldap address: disabled, origin: https://idm.alpha.test/ admin bind path: /run/kanidmd/sock, thread count: 2, dbpath: /data/kanidm.db, arcsize: AUTO, max request size: 262144b, http client address info: none, ldap client address info: none, with TLS: true, online_backup: disabled, integration mode: false, log_level: inforole: write replica, replication: disabled, otel_grpc_endpoint: None
+2026-11-02T08:40:32.403651Z 00000000-0000-0000-0000-000000000000 ERROR    🚨 [error]: SQLite Error | event_tag_id: 1 | e: SqliteFailure(Error { code: Unknown, extended_code: 1 }, Some("no such table: id2entry"))
+2026-11-02T08:40:32.404034Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: dbv_id2entry migrated (id2entry, db_sid) | entry: 1
+2026-11-02T08:40:32.404087Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: dbv_id2entry migrated (db_did) | entry: 2
+2026-11-02T08:40:32.404146Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: dbv_id2entry migrated (db_op_ts) | entry: 3
+2026-11-02T08:40:32.40434Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: dbv_id2entry migrated (name2uuid, uuid2spn, uuid2rdn) | entry: 4
+2026-11-02T08:40:32.404355Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: dbv_id2entry migrated (dbentryv1 -> dbentryv2) | entry: 5
+2026-11-02T08:40:32.404416Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: dbv_id2entry migrated (externalid2uuid) | entry: 6
+2026-11-02T08:40:32.404446Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: dbv_id2entry migrated (quarantine) | entry: 7
+2026-11-02T08:40:32.4045Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: dbv_id2entry migrated (keyhandles) | entry: 8
+2026-11-02T08:40:32.404513Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: dbv_id2entry migrated (dbentryv2 -> dbentryv3) | entry: 9
+2026-11-02T08:40:32.404591Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: dbv_id2entry migrated (db_ruv) | entry: 10
+2026-11-02T08:40:32.410172Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 INFO     ｉ IMMEDIATE ｉ system_initialisation > migrate_domain_1_10_to_1_11 > reindex > System reindex: started - this may take a long time!
+2026-11-02T08:40:32.482082Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 INFO     system_initialisation [ 73.5ms | 20.30% / 100.00% ]
+2026-11-02T08:40:32.482194Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 INFO     ┝━ migrate_domain_1_10_to_1_11 [ 58.6ms | 70.43% / 79.70% ]
+2026-11-02T08:40:32.482207Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 WARN     │  ┝━ 🚧 [warn]: No indexing slopes available. You should consider reindexing to generate these
+2026-11-02T08:40:32.482215Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 INFO     │  ┝━ reindex [ 6.82ms | 9.27% ]
+2026-11-02T08:40:32.482224Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 INFO     │  │  ┝━ ｉ [info]: System reindex: started - this may take a long time!
+2026-11-02T08:40:32.482233Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 INFO     │  │  ┝━ ｉ [info]: Reindexed 0 entries
+2026-11-02T08:40:32.482241Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 INFO     │  │  ┝━ ｉ [info]: Optimising Indexes: started
+2026-11-02T08:40:32.482249Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 INFO     │  │  ┝━ ｉ [info]: Optimising Indexes: complete ✅
+2026-11-02T08:40:32.482257Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 INFO     │  │  ┝━ ｉ [info]: Calculating Index Optimisation Slopes: started
+2026-11-02T08:40:32.482264Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 INFO     │  │  ┝━ ｉ [info]: Calculating Index Optimisation Slopes: complete ✅
+2026-11-02T08:40:32.482271Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 INFO     │  │  ┕━ ｉ [info]: System reindex: complete 🎉
+2026-11-02T08:40:32.482279Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 WARN     │  ┝━ 🚧 [warn]: plugin_domain: Applying domain version transform
+2026-11-02T08:40:32.482286Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 WARN     │  ┕━ 🚧 [warn]: delete: no candidates match filter
+2026-11-02T08:40:32.482294Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 WARN     ┝━ 🚧 [warn]: Domain level has been bootstrapped to 15
+2026-11-02T08:40:32.482302Z 618f35b2-6673-4c9b-8eb4-5af1041e6a20 WARN     ┕━ 🚧 [warn]: Domain patch level has been raised to 0
+2026-11-02T08:40:32.504963Z 4cb325f5-504e-492b-8d81-e9c3187512d1 INFO     migration_apply [ 8.60ms | 5.89% / 100.00% ]
+2026-11-02T08:40:32.50506Z 4cb325f5-504e-492b-8d81-e9c3187512d1 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/10-groups.json
+2026-11-02T08:40:32.505069Z 4cb325f5-504e-492b-8d81-e9c3187512d1 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/50-hello.json
+2026-11-02T08:40:32.505075Z 4cb325f5-504e-492b-8d81-e9c3187512d1 INFO     ┝━ handle_scim_migration_apply [ 3.34ms | 38.86% ]
+2026-11-02T08:40:32.505081Z 4cb325f5-504e-492b-8d81-e9c3187512d1 INFO     ┕━ handle_scim_migration_apply [ 4.75ms | 55.25% ]
+2026-11-02T08:40:32.505085Z 4cb325f5-504e-492b-8d81-e9c3187512d1 INFO        ┕━ ｉ [info]: regenerating oauth2 basic secret | event_tag_id: 10
+2026-11-02T08:40:32.505918Z e9ae2389-6b35-4214-9b9b-e8314dfc877b INFO     handle_purgetombstoneevent [ 817µs | 100.00% ]
+2026-11-02T08:40:32.505987Z e9ae2389-6b35-4214-9b9b-e8314dfc877b INFO     ┕━ ｉ [info]: Tombstone purge operation success | event_tag_id: 3
+2026-11-02T08:40:32.5061Z e04563eb-bf86-4938-b49c-8074d3926e07 INFO     handle_purgerecycledevent [ 212µs | 100.00% ]
+2026-11-02T08:40:32.506203Z 6f6acd77-f064-4f94-b809-e414c79fc2e9 INFO     handle_purge_delete_after_event [ 89.7µs | 100.00% ]
+2026-11-02T08:40:32.507287Z 9aad791a-4b05-442b-b914-1102790ca3fa INFO     handle_purgetombstoneevent [ 947µs | 100.00% ]
+2026-11-02T08:40:32.507315Z 9aad791a-4b05-442b-b914-1102790ca3fa INFO     ┕━ ｉ [info]: Tombstone purge operation success | event_tag_id: 3
+2026-11-02T08:40:32.507365Z ccc770b2-9f5b-4fc3-a92c-aa42af44b7d1 INFO     handle_purgerecycledevent [ 76.6µs | 100.00% ]
+2026-11-02T08:40:32.507479Z f119863a-8d50-411f-b35c-c5c51560fee0 INFO     handle_purge_delete_after_event [ 91.1µs | 100.00% ]
+2026-11-02T08:40:32.511881Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Starting the web server...
+2026-11-02T08:40:32.511911Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Ready to rock! 🪨  UI available at: https://idm.alpha.test/ | event_tag_id: 3
+2026-11-02T08:40:32.936707Z 4cb3fda5-f13a-4e65-887b-e85932072a0d INFO     request [ 329µs | 53.67% / 100.00% ] method: POST | uri: /oauth2/token | version: HTTP/1.1 | connection_address: "127.0.0.1:45012" | client_address: "127.0.0.1" | status_code: 401 | latency: 0 | kopid: "4cb3fda5-f13a-4e65-887b-e85932072a0d"
+2026-11-02T08:40:32.936843Z 4cb3fda5-f13a-4e65-887b-e85932072a0d INFO     ┕━ handle_oauth2_token_exchange [ 153µs | 46.33% ]
+2026-11-02T08:40:32.936856Z 4cb3fda5-f13a-4e65-887b-e85932072a0d INFO        ┕━ ｉ [info]: Invalid OAuth2 client_id secret
+2026-11-02T08:40:33.986717Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Signal received, shutting down
+2026-11-02T08:40:33.986857Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped TlsAcceptor Reload Monitor
+2026-11-02T08:40:33.986868Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Delayed Action Actor
+2026-11-02T08:40:33.986874Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Interval Actor
+2026-11-02T08:40:33.986879Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Auditd Actor
+2026-11-02T08:40:33.986884Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped HTTPS Server
+2026-11-02T08:40:33.986889Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Migration Reload Monitor
+2026-11-02T08:40:33.986894Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Admin Socket
+2026-11-02T08:40:33.98859Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped 🛑 

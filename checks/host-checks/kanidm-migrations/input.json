@@ -1,14 +1,60 @@
 {
+  "state": {
+    "kanidmJudged": {
+      "alpha": {"started": "2026-10-01T08:00:00Z", "migrations": {"failed": [], "denied": 0}},
+      "bravo": {"started": "2026-10-20T08:00:00Z", "migrations": {"failed": ["11-obj.json: AccessDenied"], "denied": 0}},
+      "corgi": {"started": "2026-10-01T08:00:00Z", "migrations": {"failed": [], "denied": 0}},
+      "eagle": {"started": "2026-10-01T08:00:00Z", "migrations": {"failed": [], "denied": 0}},
+      "fable": {"started": "2026-10-01T08:00:00Z", "migrations": {"failed": [], "denied": 0}},
+      "gamma": {"started": "2026-10-01T08:00:00Z", "migrations": {"failed": [], "denied": 0}}
+    }
+  },
   "cluster": {
     "idm": {
       "tenants": [
         {
           "tenant": "alpha",
           "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
+          "started": "2026-10-01T08:00:00Z",
           "migrations": null,
           "clients": [
             {"client": "hello-oidc", "app": "hello", "kind": "basic", "secret": "right", "flags": true}
           ]
+        },
+        {
+          "tenant": "bravo",
+          "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
+          "started": "2026-10-20T08:00:00Z",
+          "migrations": null,
+          "clients": []
+        },
+        {
+          "tenant": "corgi",
+          "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
+          "started": "2026-10-22T10:30:00Z",
+          "migrations": null,
+          "clients": []
+        },
+        {
+          "tenant": "delta",
+          "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
+          "started": "2026-10-22T11:30:00Z",
+          "migrations": null,
+          "clients": []
+        },
+        {
+          "tenant": "eagle",
+          "accounts": {"idm_admin": "unknown", "admin": "unknown", "anonymous": "unknown"},
+          "started": null,
+          "migrations": null,
+          "clients": []
+        },
+        {
+          "tenant": "fable",
+          "accounts": {"idm_admin": "expired", "admin": "expired", "anonymous": "expired"},
+          "started": "2026-10-22T11:50:00Z",
+          "migrations": {"failed": [], "denied": 1},
+          "clients": []
         }
       ]
     }

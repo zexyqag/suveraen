@@ -22,3 +22,4 @@ cluster	quiet-postgres/offsite-check-2	ok	4	backups late	last 2026-10-21T13:41:0
 cluster	quiet-postgres/postgres WAL archiving	late	4	backups late	not reported since 2026-10-22T10:00:00Z (2h 0m ago), limit 1h
 cluster	quiet-postgres/postgres base backup	late	4	backups late	no ObjectStore postgres, required since 2026-10-22T10:00:00Z (2h 0m ago), grace 1h
 host	cluster status	ok	4	cluster status unreadable	read
+kanidm	judged	{}

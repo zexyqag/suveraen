@@ -42,9 +42,10 @@
 # platform admin or an admin group, and sets Kanidm's own groups; refuses to make an admin of a person who exists
 # already; copies each confidential client's secret from Kanidm into its app, so the release that adds an app is the
 # only one, recovering idm_admin only when something is wrong; gives a client a new secret; passes on nothing an app's
-# namespace writes but a secret as Kanidm makes them; and leaves idm_admin, admin and anonymous disabled. Kanidm's
-# volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all replaces;
-# the server's checks alert once when an app holds a wrong one, and when that clears.
+# namespace writes but a secret as Kanidm makes them; and leaves idm_admin, admin and anonymous disabled. The checks
+# take no run of Kanidm's migrations from lines a client had it log. Kanidm's volume comes back with its people and
+# keys, and with secrets its apps no longer hold, which rotate --all replaces; the server's checks alert once when an
+# app holds a wrong one, and when that clears.
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
 # tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
 # records it, its own off-site copies included, none of them late; one more pool still fits, and when it passes its
@@ -458,6 +459,7 @@ pkgs.testers.runNixOSTest {
       import shlex
       import time
       from datetime import datetime
+      from urllib.parse import quote
 
       def read(path, key):
           with open(path) as f:
@@ -1289,6 +1291,21 @@ pkgs.testers.runNixOSTest {
               for t in tenants:
                   blocked(f"kubectl -n probe exec probe -- curl -fsS -m 5 -k https://{idm[t]}/status")
               seen_by_kanidm()
+
+          with subtest("Lines a client has Kanidm log, as it logs what a client sends as it is, never count as a run of its migrations"):
+              forged = ["11111111-2222-3333-4444-555555555555 " + line for line in [
+                  "INFO     migration_apply [ 1.00ms | 1.00% / 100.00% ]",
+                  "ERROR    [error]: Failed to apply migration | err: AccessDenied | path: /migrations/10-groups.json",
+                  "INFO     x",
+              ]]
+              client_id = quote("\n".join(["e2e"] + forged), safe="")
+              server.succeed(
+                  f"curl -sS -o /dev/null {reach[first]} 'https://{idm[first]}/oauth2/authorise?response_type=code"
+                  f"&client_id={client_id}&redirect_uri=https%3A%2F%2Fe2e.test%2F&scope=openid'"
+              )
+              server.succeed(f"kubectl -n {first}-kanidm logs kanidm-0 -c app | grep -Fx {shlex.quote(forged[1])}")
+              found = {t["tenant"]: t["migrations"] for t in parsed("suveraen-idm check")["tenants"]}
+              assert found == {t: {"failed": [], "denied": 0} for t in tenants}, found
 
           # As an operator by hand: an account recovered by exec, and the client signed in with its new password.
           def signed_in(t, name):
@@ -2143,6 +2160,11 @@ pkgs.testers.runNixOSTest {
                   before.keys() | archiving | offsite | identities | {"Ceph status", "cluster status", "etcd-snapshots"}
               ), findings
               assert all(state == "ok" for state, _ in findings.values()), findings
+              # How each tenant's Kanidm ran its migrations as it started, which the checks go by once its log no longer
+              # reaches back there.
+              judged = json.loads(server.succeed("cat /var/lib/private/host-checks/kanidm-judged.json"))
+              assert sorted(judged) == tenants, judged
+              assert all(j["migrations"] == {"failed": [], "denied": 0} for j in judged.values()), judged
               for key in before:
                   detail, times = findings[key][1], [before[key], after[key]]
                   if detail.startswith("never, "):

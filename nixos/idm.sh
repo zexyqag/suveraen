@@ -399,15 +399,16 @@ tenant() {
 }
 
 # What the servers' checks judge (host-checks.nix), with no credential: for each tenant, how Kanidm answers for its
-# admin accounts, what went wrong in the last run of its migrations, null with none in the current log, and for each
-# client whether its app's copy of the secret passes the probe and its flags are applied. A tenant whose Kanidm can't
-# be looked at is unchecked, and anything without an answer unknown.
+# admin accounts, when its container started and what went wrong as it ran its migrations then, null once its log no
+# longer reaches back to that, and for each client whether its app's copy of the secret passes the probe and its flags
+# are applied. A tenant whose Kanidm can't be looked at is unchecked, and anything without an answer unknown.
 unchecked() {
   jq -nc --arg tenant "$1" --arg why "$2" '{$tenant, unchecked: $why}'
 }
 
 check() {
-  local list t origin attached app client kind redirect flags applied error state applied_all accounts migrations clients
+  local list t origin attached app client kind redirect flags applied error state applied_all accounts started migrations
+  local clients
   list=$(tenants) || exit 1
   for t in $list; do
     if ! origin=$(origin "$t"); then
@@ -421,8 +422,13 @@ check() {
     accounts=$(for name in idm_admin admin anonymous; do
       jq -nc --arg name "$name" --arg state "$(account "$origin" "$name")" '{($name): $state}'
     done | jq -sc add)
-    migrations=$(kubectl --request-timeout=60s -n "$t-kanidm" logs kanidm-0 -c app 2>/dev/null |
-      jq -Rsc -f "$logscan") || migrations=null
+    started=$(kubectl --request-timeout=30s -n "$t-kanidm" get pod kanidm-0 -o json 2>/dev/null | jq -r '
+      .status.containerStatuses[]? | select(.name == "app") | .state.running.startedAt // empty
+      | select(test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))') || started=
+    # Only its start counts, where Kanidm runs its migrations and starts its web server within a few kilobytes; the rest
+    # may be all a client had it log.
+    migrations=$(kubectl --request-timeout=60s -n "$t-kanidm" logs kanidm-0 -c app --timestamps \
+      --limit-bytes=1048576 2>/dev/null | jq -Rsc --arg started "$started" -f "$logscan") || migrations=null
     clients=$(while IFS=$'\t' read -r app client kind redirect flags applied error; do
       [ -n "$app" ] || continue
       if [ "$error" != - ]; then
@@ -449,8 +455,9 @@ check() {
       jq -nc --arg client "$client" --arg app "$app" --arg kind "$kind" --arg secret "$state" \
         --argjson flags "$applied_all" '{$client, $app, $kind, $secret, $flags}'
     done <<<"$attached" | jq -sc .)
-    jq -nc --arg tenant "$t" --argjson accounts "$accounts" --argjson migrations "$migrations" \
-      --argjson clients "$clients" '{$tenant, $accounts, $migrations, $clients}'
+    jq -nc --arg tenant "$t" --argjson accounts "$accounts" --arg started "$started" \
+      --argjson migrations "$migrations" --argjson clients "$clients" \
+      '{$tenant, $accounts, started: ($started | select(. != "") // null), $migrations, $clients}'
   done | jq -sc '{tenants: .}'
 }
 

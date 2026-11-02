@@ -15,3 +15,4 @@ cluster	other-hello/files-1	ok	4	backups late	never, counted from 2026-10-22T10:
 cluster	other-hello/offsite-check-1	late	4	backups late	missing, required since 2026-10-22T10:30:00Z (1h 30m ago), grace 1h
 cluster	other-hello/offsite-check-2	late	4	backups late	missing, required since 2026-10-22T10:30:00Z (1h 30m ago), grace 1h
 host	cluster status	ok	4	cluster status unreadable	read
+kanidm	judged	{}
