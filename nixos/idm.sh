@@ -461,8 +461,10 @@ check() {
   done | jq -sc '{tenants: .}'
 }
 
-# Kanidm's own groups through which tenant-admins make people, and change people and groups outside the admin groups.
-delegated=(idm_people_on_boarding idm_service_desk idm_group_admins)
+# Kanidm's own groups through which tenant-admins make people, and change the credentials and validity of people
+# outside the admin groups. The groups whose members they change name them as their manager, through which they may
+# neither rename nor delete one: Kanidm keeps a deleted group's ID, and fails every later file that names it.
+delegated=(idm_people_on_boarding idm_service_desk)
 
 valid_tenant() {
   [[ $1 =~ ^[a-z][a-z0-9]{4}$ ]] || usage
@@ -566,9 +568,9 @@ case $command in
     fi
     cli group add-members "$group" "$login" >/dev/null
     # Kanidm's own groups, which no migration reaches. People neither rename themselves nor set their mail, which apps
-    # take as verified; tenant admins may let them in their own tenant, until this runs again. Tenant admins make
-    # people, reset the credentials and validity of those outside the admin groups, and manage the groups no admin
-    # group holds; platform admins all of it.
+    # take as verified. Tenant admins make people, reset the credentials and validity of those outside the admin
+    # groups, and change the members of tenant-admins, members and each app's groups, but delete or rename no one,
+    # and make, delete or rename no group; platform admins do all of it.
     cli group purge-members idm_people_self_name_write >/dev/null
     cli group purge-members idm_people_self_mail_write >/dev/null
     for g in "${delegated[@]}"; do

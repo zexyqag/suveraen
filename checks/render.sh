@@ -132,7 +132,8 @@ clientkeys = {"state", "id", "class", "name", "displayname", "description", "oau
               "oauth2_rs_origin_landing", "oauth2_rs_scope_map", "oauth2_rs_sup_scope_map", "oauth2_rs_claim_map",
               "oauth2_prefer_short_username", "oauth2_consent_prompt_enable"}
 policykeys = {"credential_type_minimum", "authsession_expiry", "privilege_expiry", "entry_managed_by"}
-# Nested in idm_admins, a group takes members only from its manager, so idm_admins manages platform-admins.
+# Nested in idm_admins, a group takes members only from its manager, so idm_admins manages platform-admins. tenant-admins
+# manage every other group the files declare, which lets them change its members alone, never rename or delete it.
 managers = {"platform-admins": ["idm_admins"], "tenant-admins": ["tenant-admins"]}
 # What no migration can set on a client: a confidential one that sends no PKCE, a public one that redirects to the
 # device it runs on.
@@ -202,13 +203,16 @@ for line in sys.stdin:
             present.add(a.get("id"))
             if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)+", name) \
                     and not (name == "members" and source == "kanidm-migrations"):
-                bad(where, f"every name but members holds a -, so no person login can take it: {name}")
+                bad(where, f"every name but members holds a -, which no login suveraen-idm admin makes does: {name}")
             else:
                 claim(names, name, own + "#" + str(a.get("id")), where, "name")
             if "member" in a:
                 bad(where, f"groups get their members from admins, not from files: {name}")
             if classes == ["group"]:
-                extra = set(a) - {"state", "id", "class", "name", "description"}
+                extra = set(a) - {"state", "id", "class", "name", "description", "entry_managed_by"}
+                if a.get("entry_managed_by") != ["tenant-admins"]:
+                    bad(where, f"tenant-admins manage the members of every group but the admin groups, as a list in"
+                        f" Kanidm 1.11: {name}")
                 groups.add(name)
             elif classes == ["account_policy", "group"] and source == "kanidm-migrations":
                 extra = set(a) - {"state", "id", "class", "name", "description"} - policykeys

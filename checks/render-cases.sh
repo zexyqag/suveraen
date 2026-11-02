@@ -388,9 +388,13 @@ refuses migration-builtin "IDs are UUIDs in lowercase from 00000000-0000-0000-00
   "sed -i 's/b66c8c43-0175-4dd8-b8fe-ebf2a5cc90c4/00000000-0000-0000-0000-000000000035/' $S"
 refuses migration-same-id "ID b9573391-723b-42d6-aaa9-2b674ebb1078 is also kanidm-migrations/10-groups.json" \
   "sed -i 's/b66c8c43-0175-4dd8-b8fe-ebf2a5cc90c4/b9573391-723b-42d6-aaa9-2b674ebb1078/' $S"
-refuses migration-name-without-dash "every name but members holds a -, so no person login can take it: hellousers" \
+refuses migration-name-without-dash "every name but members holds a -, which no login suveraen-idm admin makes does:" \
   "sed -i 's/\"hello-users\"/\"hellousers\"/g' $S"
 refuses migration-other-app-group "an app names its groups hello-<name>" "sed -i 's/\"hello-users\"/\"other-users\"/g' $S"
+refuses migration-group-unmanaged "tenant-admins manage the members of every group but the admin groups, as a list in" \
+  "sed -i '/\"entry_managed_by\": \\[\"tenant-admins\"\\]/d; s/\"name\": \"hello-users\",/\"name\": \"hello-users\"/' $S"
+refuses migration-members-managed-elsewhere "tenant-admins manage the members of every group but the admin groups, as a list in Kanidm 1.11: members" \
+  "sed -i '0,/\"entry_managed_by\": \\[\"tenant-admins\"\\]/s//\"entry_managed_by\": [\"idm_admins\"]/' $M"
 refuses migration-member "groups get their members from admins, not from files: hello-users" \
   "sed -i 's|          \"name\": \"hello-users\"|&,\n          \"member\": [\"admin\"]|' $S"
 refuses migration-client-name "an app has one OAuth2 client, hello-oidc" "sed -i 's/\"hello-oidc\"/\"hello-web\"/' $S"

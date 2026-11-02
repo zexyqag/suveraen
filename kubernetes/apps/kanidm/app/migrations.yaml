@@ -4,9 +4,11 @@
 # member may use. platform-admins sign in only with a passkey of an approved make and model, tenant-admins with any
 # passkey, and both are asked for it again a few minutes into an admin's session. Kanidm checks the kind of
 # credential only as one is enrolled, never as one signs in, so a person joins such a group only before they have
-# any. idm_admins, which holds idm_admin, manages platform-admins, and tenant-admins their own. IDs are fixed for good:
-# Kanidm finds an entry by its ID, and never takes one back once a removal named it. Kanidm's builtin groups are out
-# of a migration's reach, so suveraen-idm admin sets their members (nixos/idm.nix).
+# any. idm_admins, which holds idm_admin, manages platform-admins, and tenant-admins manage their own group, members
+# and each app's groups, of which they change the members alone: Kanidm keeps a deleted entry's ID, and fails every
+# later file that names it. IDs are fixed for good: Kanidm finds an entry by its ID, and never takes one back once a
+# removal named it. Kanidm's builtin groups are out of a migration's reach, so suveraen-idm admin sets their members
+# (nixos/idm.nix).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -20,7 +22,8 @@ data:
           "state": "present",
           "id": "b9573391-723b-42d6-aaa9-2b674ebb1078",
           "class": ["group"],
-          "name": "members"
+          "name": "members",
+          "entry_managed_by": ["tenant-admins"]
         },
         {
           "state": "present",

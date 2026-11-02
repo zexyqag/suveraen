@@ -38,14 +38,14 @@
 # to clients that Kanidm sees as the gateway whatever they claim, and to that tenant's apps alone under the same name;
 # it holds the platform's groups and each app's client as their files declare. suveraen-idm, which reaches each Kanidm
 # at the server's own gateway and never looks its name up, makes its first platform admin, who may enrol nothing but a
-# passkey of an approved make, and a tenant admin, who manages the tenant's people and groups but can't touch a
-# platform admin or an admin group, and sets Kanidm's own groups; refuses to make an admin of a person who exists
-# already; copies each confidential client's secret from Kanidm into its app, so the release that adds an app is the
-# only one, recovering idm_admin only when something is wrong; gives a client a new secret; passes on nothing an app's
-# namespace writes but a secret as Kanidm makes them; and leaves idm_admin, admin and anonymous disabled. The checks
-# take no run of Kanidm's migrations from lines a client had it log. Kanidm's volume comes back with its people and
-# keys, and with secrets its apps no longer hold, which rotate --all replaces; the server's checks alert once when an
-# app holds a wrong one, and when that clears.
+# passkey of an approved make, and a tenant admin, who makes the tenant's people and changes its groups' members but
+# can't touch a platform admin or an admin group, nor delete or make a group, and sets Kanidm's own groups; refuses to
+# make an admin of a person who exists already; copies each confidential client's secret from Kanidm into its app, so
+# the release that adds an app is the only one, recovering idm_admin only when something is wrong; gives a client a
+# new secret; passes on nothing an app's namespace writes but a secret as Kanidm makes them; and leaves idm_admin,
+# admin and anonymous disabled. The checks take no run of Kanidm's migrations from lines a client had it log. Kanidm's
+# volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all replaces;
+# the server's checks alert once when an app holds a wrong one, and when that clears.
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
 # tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
 # records it, its own off-site copies included, none of them late; one more pool still fits, and when it passes its
@@ -1378,9 +1378,12 @@ pkgs.testers.runNixOSTest {
               for name in ["idm_people_self_name_write", "idm_people_self_mail_write"]:
                   assert not group(name).get("member"), (name, group(name))
               assert sorted(group("idm_admins")["member"]) == [f"idm_admin@{domain}", f"platform-admins@{domain}"]
-              for name in ["idm_people_on_boarding", "idm_service_desk", "idm_group_admins"]:
+              for name in ["idm_people_on_boarding", "idm_service_desk"]:
                   assert f"tenant-admins@{domain}" in group(name)["member"], (name, group(name))
-              assert group("idm_people_admins")["member"] == [f"idm_admins@{domain}"]
+              for name in ["idm_people_admins", "idm_group_admins"]:
+                  assert group(name)["member"] == [f"idm_admins@{domain}"], (name, group(name))
+              for name in ["members", "hello-users"]:
+                  assert group(name)["entry_managed_by"] == [f"tenant-admins@{domain}"], (name, group(name))
               client = kanidm(first, "system oauth2 get hello-oidc")["attrs"]
               assert client["oauth2_rs_scope_map"] == [f'hello-users@{domain}: {{"openid", "profile"}}'], client
               disable_idm_admin(first)
@@ -1388,8 +1391,10 @@ pkgs.testers.runNixOSTest {
               out = server.fail(f"suveraen-idm admin {first} platform e2eorg 'E2E organisation admin' /tmp/cas.json 2>&1")
               assert "e2eorg is a person outside platform-admins already" in out, out
 
-              # A tenant admin, here with a password Kanidm doesn't yet refuse as they sign in, manages the tenant's
-              # people and groups, but no platform admin, nor any admin group of Kanidm's or the platform's.
+              # A tenant admin, here with a password Kanidm doesn't yet refuse as they sign in, makes the tenant's
+              # people and changes the members of its groups, but touches no platform admin, nor any admin group of
+              # Kanidm's or the platform's, and deletes, renames or makes no group: Kanidm would keep a declared
+              # group's ID, and fail every later file that names it.
               signed_in(first, "e2eorg")
 
               def as_org(args):
@@ -1401,8 +1406,12 @@ pkgs.testers.runNixOSTest {
               assert "This link:" not in server.succeed(as_org("person credential create-reset-token e2eops") + " 2>&1")
               assert "failure" in server.succeed(as_org("person delete e2eops") + " 2>&1")
               server.fail(as_org("person validity expire-at e2eops now"))
-              for name in ["platform-admins", "idm_admins", "idm_people_admins"]:
+              for name in ["platform-admins", "idm_admins", "idm_people_admins", "idm_people_self_mail_write"]:
                   server.fail(as_org(f"group add-members {name} e2eorg"))
+              for args in ["group delete members", "group delete hello-users", "group rename hello-users hello-x",
+                           "group set-entry-manager hello-users e2eorg"]:
+                  server.fail(as_org(args))
+              assert "Http(403" in server.succeed(as_org("group create e2e-users") + " 2>&1")
               server.fail(as_org("system oauth2 show-basic-secret hello-oidc") + " | grep -Ex '[a-hjkp-z0-9]{48}'")
               as_idm_admin(first)
               ops = kanidm(first, "person get e2eops")["attrs"]

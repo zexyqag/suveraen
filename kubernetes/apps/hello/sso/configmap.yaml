@@ -1,6 +1,7 @@
 ---
-# hello's group and its confidential client in its tenant's Kanidm (components/sso). IDs are fixed for good: Kanidm
-# finds an entry by its ID, and never takes one back once a removal named it.
+# hello's group, whose members tenant-admins manage, and its confidential client in its tenant's Kanidm
+# (components/sso). IDs are fixed for good: Kanidm finds an entry by its ID, and never takes one back once a removal
+# named it.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,7 +16,8 @@ data:
           "state": "present",
           "id": "b66c8c43-0175-4dd8-b8fe-ebf2a5cc90c4",
           "class": ["group"],
-          "name": "hello-users"
+          "name": "hello-users",
+          "entry_managed_by": ["tenant-admins"]
         },
         {
           "state": "present",
