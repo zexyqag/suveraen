@@ -1,4 +1,10 @@
-{ config, lib, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  utils,
+  ...
+}:
 let
   cfg = config.suveraen.storage;
   zfs = config.boot.zfs.package;
@@ -9,17 +15,68 @@ let
     pool = "rpool";
   };
 
+  # The system disks' LUKS volumes, in the order of systemDisks.
+  volumes = lib.imap0 (i: _: "crypt-system${toString i}") cfg.systemDisks;
+
   # disko reads the passphrase from here while formatting; nixos-anywhere puts it there.
+  passwordFile = "/tmp/disk.key";
+
   luks = i: {
     type = "luks";
-    name = "crypt-system${toString i}";
-    passwordFile = "/tmp/disk.key";
+    name = lib.elemAt volumes i;
+    inherit passwordFile;
     settings = {
       allowDiscards = true;
-      # A wrong passphrase at boot asks again instead of giving up after three, which would need a hard reset.
-      crypttabExtraOpts = [ "tries=0" ];
+      crypttabExtraOpts = [
+        # A wrong passphrase at boot asks again instead of giving up after three, which would need a hard reset.
+        "tries=0"
+      ]
+      # Only the volume this host was installed with opens, by its key's id. disko's script, which makes the volumes
+      # these ids come from, is built without them; no system is (assertions).
+      ++ lib.optional (cfg.volumeKeyIds != [ ]) "fixate-volume-key=${lib.elemAt cfg.volumeKeyIds i}";
     };
     content = member;
+  };
+
+  # The system disks' volumes as systemd-cryptsetup opened them, by their name and the UUID cryptsetup gives a LUKS2
+  # mapping, which no logical volume of the same name has. rpool is imported from these alone.
+  poolMembers = lib.concatMapStrings (name: ''
+    SUBSYSTEM=="block", ENV{DM_NAME}=="${name}", ENV{DM_UUID}=="CRYPT-LUKS2-*-${name}", SYMLINK+="disk/rpool/${name}"
+  '') volumes;
+
+  # What fixate-volume-key compares: HMAC-SHA256 of "cryptsetup:<name>:<LUKS UUID>", keyed with the volume key, which
+  # the header gives up for the passphrase. For each volume open now, in the order of systemDisks.
+  keyIds = pkgs.writeShellApplication {
+    name = "suveraen-volume-key-ids";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.cryptsetup
+      pkgs.gnused
+      pkgs.python3
+    ];
+    text = ''
+      # From the terminal, or all of standard input, as disko reads its password file.
+      if [ -t 0 ]; then
+        IFS= read -rsp "Disk passphrase: " passphrase
+        echo >&2
+      else
+        passphrase=$(cat)
+      fi
+      dir=$(mktemp -d -p /run)
+      trap 'rm -rf "$dir"' EXIT
+      volumes=(${lib.escapeShellArgs volumes})
+      for name in "''${volumes[@]}"; do
+        if ! status=$(cryptsetup status "$name"); then
+          echo "$name is not open: open its volume under that name first." >&2
+          exit 1
+        fi
+        device=$(sed -n 's/^ *device: *//p' <<<"$status")
+        printf %s "$passphrase" | cryptsetup luksDump --dump-volume-key --batch-mode --key-file=- \
+          --volume-key-file="$dir/$name" "$device" >/dev/null
+        python3 -I -c 'import hashlib, hmac, sys; print(hmac.new(open(sys.argv[1], "rb").read(), sys.argv[2].encode(), hashlib.sha256).hexdigest())' \
+          "$dir/$name" "cryptsetup:$name:$(cryptsetup luksUUID "$device")"
+      done
+    '';
   };
 
   esp =
@@ -124,6 +181,8 @@ let
   pool = datasets: {
     type = "zpool";
     mode = if mirrored then "mirror" else "";
+    # At install, once every volume is made: the ids volumeKeyIds takes.
+    postCreateHook = lib.optionalString cfg.encrypted "${lib.getExe keyIds} <${passwordFile}";
     options = {
       ashift = "12";
       autotrim = "on";
@@ -187,7 +246,21 @@ in
       description = ''
         Directory with PK.auth, KEK.auth, db.auth and dbx.auth: the firmware's Secure Boot variables as this host
         enrolls them. They are copied to the boot partition, from where the boot menu enrolls them in setup mode: at
-        install, and again after a firmware reset. Public data. Encrypted hosts only.
+        install, and again after a firmware reset, which gives back the state the boot-time SSH host key is sealed in.
+        Public data. Encrypted hosts only.
+      '';
+    };
+
+    volumeKeyIds = lib.mkOption {
+      type = lib.types.listOf (lib.types.strMatching "[0-9a-f]{64}");
+      default = [ ];
+      description = ''
+        Ids of the system disks' volume keys, one per disk in the order of systemDisks. disko prints them at install
+        once it made the volumes, before anything is built for the host, and `suveraen-volume-key-ids` prints them for
+        the volumes open now, from their headers and the passphrase. The boot opens a system disk only if its volume
+        has that key, which nobody without the passphrase can give a volume of their own, so a disk replaced in place
+        needs its new id here before the next boot: a boot whose ids its disks don't have stops, and only a fix from
+        outside it, such as from rescue, brings the host back. Public data. Required on encrypted hosts.
       '';
     };
 
@@ -275,6 +348,10 @@ in
         message = "suveraen.storage.systemDisks needs one or two disks.";
       }
       {
+        assertion = cfg.encrypted -> lib.length cfg.volumeKeyIds == lib.length cfg.systemDisks;
+        message = "Encrypted hosts name one id per system disk in suveraen.storage.volumeKeyIds, as disko prints them at install.";
+      }
+      {
         assertion = cfg.ceph.dbSlots >= lib.length cfg.ceph.disks;
         message = "suveraen.storage.ceph.dbSlots needs a DB volume for every disk in ceph.disks.";
       }
@@ -357,7 +434,9 @@ in
       '') cfg.ceph.disks
       + lib.optionalString withDb ''
         SUBSYSTEM=="block", ENV{DM_VG_NAME}=="osd[0-9]*-db", ENV{DM_LV_NAME}=="db", SYMLINK+="disk/by-osd/$env{DM_VG_NAME}"
-      '';
+      ''
+      + lib.optionalString cfg.encrypted poolMembers;
+    boot.initrd.services.udev.rules = lib.mkIf cfg.encrypted poolMembers;
 
     # ceph-volume, in Rook's OSD prepare pods, runs LVM's commands on the host through nsenter, found by the
     # container's PATH, which names none of NixOS's directories.
@@ -374,8 +453,8 @@ in
       zfsSupport = lib.mkForce false;
     };
 
-    # UEFI under Secure Boot with this host's own keys, so the firmware starts only boot files this host signed. The
-    # signing key stays on the encrypted pool.
+    # UEFI under Secure Boot with this host's own keys, so the firmware starts only boot files this host signed, and the
+    # TPM releases the boot-time SSH host key to them alone (unlock.nix). The signing key stays on the encrypted pool.
     boot.lanzaboote = lib.mkIf cfg.encrypted {
       enable = true;
       pkiBundle = lib.mkDefault "/var/lib/sbctl";
@@ -383,6 +462,8 @@ in
       configurationLimit = lib.mkDefault 10;
       settings.editor = false;
     };
+
+    environment.systemPackages = lib.mkIf cfg.encrypted [ keyIds ];
 
     # "auto": a VM enrolls this set by itself; real hardware only from the boot menu (systemd-boot's if-safe default).
     # lanzaboote's autoEnrollKeys would need PK's and KEK's private keys on the host, and enrolls no dbx.
@@ -405,11 +486,22 @@ in
     boot.supportedFilesystems.zfs = true;
     boot.kernelParams = [ "zfs.zfs_arc_max=${toString cfg.arcMax}" ];
     boot.zfs.forceImportRoot = false;
-    # Unlocking over SSH takes longer than the import's own wait for the LUKS devices.
-    boot.initrd.systemd.services.zfs-import-rpool = lib.mkIf cfg.encrypted {
-      after = [ "cryptsetup.target" ];
-      wants = [ "cryptsetup.target" ];
-    };
+    # rpool is imported only once every system disk opened as this host's own volume, and from those alone: the signed
+    # boot chain takes no pool of that name from anywhere else. Unlocking over SSH also takes longer than the import's
+    # own wait for its devices.
+    boot.zfs.pools.rpool = lib.mkIf cfg.encrypted { devNodes = "/dev/disk/rpool"; };
+    boot.initrd.systemd.services.zfs-import-rpool = lib.mkIf cfg.encrypted (
+      let
+        opened = map (name: "systemd-cryptsetup@${utils.escapeSystemdPath name}.service") volumes;
+        links = map (name: "/dev/disk/rpool/${name}") volumes;
+      in
+      {
+        requires = opened;
+        after = opened;
+        # systemd-cryptsetup passes over a volume whose name a device already has, which then gets no link.
+        preStart = "udevadm wait --timeout=60 ${toString links}";
+      }
+    );
 
     services.zfs = {
       autoScrub.enable = true;

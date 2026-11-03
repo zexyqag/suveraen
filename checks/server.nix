@@ -29,7 +29,12 @@
         dbSize = "150G";
       };
       secureBootKeys = pkgs.emptyDirectory;
+      volumeKeyIds = map (digit: pkgs.lib.strings.replicate 64 digit) [
+        "0"
+        "1"
+      ];
     };
+    unlock.sealedHostKey = pkgs.writeText "stand-in.cred" "stand-in";
     network = {
       ipv4 = "203.0.113.10/32";
       ipv4Gateway = "203.0.113.1";

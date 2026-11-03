@@ -125,6 +125,7 @@
             )
             // {
               inherit e2e;
+              unlock-seal = self.checks.x86_64-linux.unlock.sealing;
             };
         };
         pseudonym = import ./checks/pseudonym.nix {
