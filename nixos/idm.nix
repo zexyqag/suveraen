@@ -8,7 +8,9 @@
 #     restore or a cluster rebuilt;
 #   rotate TENANT CLIENT, rotate --all TENANT: a new secret for one client, or for all of them and the flags again,
 #     after a restore of the tenant's Kanidm, whose secrets may since have been replaced;
-#   check: what the servers' checks judge (host-checks.nix), with no credential.
+#   check: what the servers' checks judge (host-checks.nix), with no credential;
+#   accounts TENANT [ID...]: how the tenant's Kanidm answers for each of its people by their IDs, with no credential,
+#     for suveraen-mesh check (mesh.nix).
 {
   config,
   lib,

@@ -1,0 +1,538 @@
+{
+ "spec": {
+  "mesh": {
+   "minimumClient": "0.78.0",
+   "loginExpiry": 604800
+  },
+  "stun": {
+   "port": 3478,
+   "addresses": [
+    "203.0.113.10"
+   ]
+  }
+ },
+ "stun": {
+  "203.0.113.10": {
+   "answered": true
+  }
+ },
+ "state": {
+  "mesh": {
+   "alpha": {
+    "owner": "5d0c7a3e-8f41-4b6a-9e2d-1a7c3b9f0e01",
+    "tags": {
+     "8a4e2f10-3c6b-4d97-b1e5-7f0a9c2d4e02": "a1b2c3",
+     "c2f19b7d-5e83-4a0c-8d6f-3b1e7a9c5f03": "d4e5f6"
+    },
+    "access": {
+     "policies": {
+      "pol-own1": [
+       {
+        "from": [
+         "own-a1b2c3"
+        ],
+        "to": [
+         "own-a1b2c3"
+        ],
+        "fromResource": null,
+        "toResource": null,
+        "action": "accept",
+        "protocol": "all",
+        "ports": [],
+        "portRanges": [],
+        "bidirectional": true
+       }
+      ],
+      "pol-own2": [
+       {
+        "from": [
+         "own-d4e5f6"
+        ],
+        "to": [
+         "own-d4e5f6"
+        ],
+        "fromResource": null,
+        "toResource": null,
+        "action": "accept",
+        "protocol": "all",
+        "ports": [],
+        "portRanges": [],
+        "bidirectional": true
+       }
+      ],
+      "pol-box": [
+       {
+        "from": [
+         "own-a1b2c3"
+        ],
+        "to": [],
+        "fromResource": null,
+        "toResource": "peer peer-box",
+        "action": "accept",
+        "protocol": "tcp",
+        "ports": [
+         "3389"
+        ],
+        "portRanges": [],
+        "bidirectional": false
+       }
+      ],
+      "pol-camera": [
+       {
+        "from": [
+         "own-a1b2c3"
+        ],
+        "to": [],
+        "fromResource": null,
+        "toResource": "host res-camera",
+        "action": "accept",
+        "protocol": "tcp",
+        "ports": [
+         "8080"
+        ],
+        "portRanges": [],
+        "bidirectional": false
+       }
+      ],
+      "pol-share": [
+       {
+        "from": [
+         "own-d4e5f6"
+        ],
+        "to": [],
+        "fromResource": null,
+        "toResource": "host res-camera",
+        "action": "accept",
+        "protocol": "tcp",
+        "ports": [
+         "8080"
+        ],
+        "portRanges": [],
+        "bidirectional": false
+       }
+      ]
+     },
+     "groups": {
+      "All": {
+       "peers": 3,
+       "resources": 0
+      },
+      "own-a1b2c3": {
+       "peers": 1,
+       "resources": 0
+      },
+      "home-a1b2c3": {
+       "peers": 1,
+       "resources": 0
+      },
+      "own-d4e5f6": {
+       "peers": 1,
+       "resources": 0
+      },
+      "home-d4e5f6": {
+       "peers": 0,
+       "resources": 0
+      }
+     },
+     "networks": {
+      "net-home1": {
+       "routers": [
+        [
+         "peer-box",
+         null
+        ]
+       ],
+       "resources": [
+        [
+         "res-camera",
+         "host",
+         true,
+         "46bd0ead49e500f186bf3bbad18aab6d"
+        ]
+       ]
+      }
+     },
+     "users": {
+      "5d0c7a3e-8f41-4b6a-9e2d-1a7c3b9f0e01": {
+       "devices": 0,
+       "unexpiring": 0,
+       "blocked": false,
+       "pending": false
+      },
+      "8a4e2f10-3c6b-4d97-b1e5-7f0a9c2d4e02": {
+       "devices": 1,
+       "unexpiring": 0,
+       "blocked": false,
+       "pending": false
+      },
+      "c2f19b7d-5e83-4a0c-8d6f-3b1e7a9c5f03": {
+       "devices": 1,
+       "unexpiring": 0,
+       "blocked": false,
+       "pending": false
+      }
+     },
+     "setupKeys": 1,
+     "routes": 0
+    }
+   }
+  }
+ },
+ "cluster": {
+  "mesh": {
+   "stunPort": "3478",
+   "tenants": [
+    {
+     "tenant": "alpha",
+     "mesh": {
+      "users": [
+       {
+        "id": "5d0c7a3e-8f41-4b6a-9e2d-1a7c3b9f0e01",
+        "role": "owner",
+        "blocked": false,
+        "pending": false,
+        "service": false,
+        "autoGroups": []
+       },
+       {
+        "id": "8a4e2f10-3c6b-4d97-b1e5-7f0a9c2d4e02",
+        "role": "user",
+        "blocked": false,
+        "pending": false,
+        "service": false,
+        "autoGroups": [
+         "g-own1"
+        ]
+       },
+       {
+        "id": "c2f19b7d-5e83-4a0c-8d6f-3b1e7a9c5f03",
+        "role": "user",
+        "blocked": false,
+        "pending": false,
+        "service": false,
+        "autoGroups": [
+         "g-own2"
+        ]
+       }
+      ],
+      "pats": [],
+      "setupKeys": [
+       {
+        "id": "key-box",
+        "type": "one-off",
+        "revoked": false,
+        "usageLimit": 1,
+        "autoGroups": [
+         "g-home1"
+        ],
+        "validSeconds": 86399.999994
+       }
+      ],
+      "groups": [
+       {
+        "id": "g-all",
+        "name": "All",
+        "peers": [
+         "peer-box",
+         "peer-laptop",
+         "peer-phone"
+        ],
+        "resources": null
+       },
+       {
+        "id": "g-own1",
+        "name": "own-a1b2c3",
+        "peers": [
+         "peer-laptop"
+        ],
+        "resources": []
+       },
+       {
+        "id": "g-home1",
+        "name": "home-a1b2c3",
+        "peers": [
+         "peer-box"
+        ],
+        "resources": []
+       },
+       {
+        "id": "g-own2",
+        "name": "own-d4e5f6",
+        "peers": [
+         "peer-phone"
+        ],
+        "resources": []
+       },
+       {
+        "id": "g-home2",
+        "name": "home-d4e5f6",
+        "peers": [],
+        "resources": []
+       }
+      ],
+      "policies": [
+       {
+        "id": "pol-own1",
+        "enabled": true,
+        "postureChecks": [
+         "pc-floor"
+        ],
+        "rules": [
+         {
+          "id": "pol-own1",
+          "enabled": true,
+          "action": "accept",
+          "sources": [
+           "g-own1"
+          ],
+          "destinations": [
+           "g-own1"
+          ],
+          "sourceResource": {
+           "ID": "",
+           "Type": ""
+          },
+          "destinationResource": {
+           "ID": "",
+           "Type": ""
+          },
+          "bidirectional": true,
+          "protocol": "all",
+          "ports": [],
+          "portRanges": [],
+          "authorizedGroups": {},
+          "authorizedUser": ""
+         }
+        ]
+       },
+       {
+        "id": "pol-own2",
+        "enabled": true,
+        "postureChecks": [
+         "pc-floor"
+        ],
+        "rules": [
+         {
+          "id": "pol-own2",
+          "enabled": true,
+          "action": "accept",
+          "sources": [
+           "g-own2"
+          ],
+          "destinations": [
+           "g-own2"
+          ],
+          "sourceResource": {
+           "ID": "",
+           "Type": ""
+          },
+          "destinationResource": {
+           "ID": "",
+           "Type": ""
+          },
+          "bidirectional": true,
+          "protocol": "all",
+          "ports": [],
+          "portRanges": [],
+          "authorizedGroups": {},
+          "authorizedUser": ""
+         }
+        ]
+       },
+       {
+        "id": "pol-box",
+        "enabled": true,
+        "postureChecks": [
+         "pc-floor"
+        ],
+        "rules": [
+         {
+          "id": "pol-box",
+          "enabled": true,
+          "action": "accept",
+          "sources": [
+           "g-own1"
+          ],
+          "destinations": [],
+          "sourceResource": {
+           "ID": "",
+           "Type": ""
+          },
+          "destinationResource": {
+           "ID": "peer-box",
+           "Type": "peer"
+          },
+          "bidirectional": false,
+          "protocol": "tcp",
+          "ports": [
+           "3389"
+          ],
+          "portRanges": [],
+          "authorizedGroups": {},
+          "authorizedUser": ""
+         }
+        ]
+       },
+       {
+        "id": "pol-camera",
+        "enabled": true,
+        "postureChecks": [
+         "pc-floor"
+        ],
+        "rules": [
+         {
+          "id": "pol-camera",
+          "enabled": true,
+          "action": "accept",
+          "sources": [
+           "g-own1"
+          ],
+          "destinations": [],
+          "sourceResource": {
+           "ID": "",
+           "Type": ""
+          },
+          "destinationResource": {
+           "ID": "res-camera",
+           "Type": "host"
+          },
+          "bidirectional": false,
+          "protocol": "tcp",
+          "ports": [
+           "8080"
+          ],
+          "portRanges": [],
+          "authorizedGroups": {},
+          "authorizedUser": ""
+         }
+        ]
+       },
+       {
+        "id": "pol-share",
+        "enabled": true,
+        "postureChecks": [
+         "pc-floor"
+        ],
+        "rules": [
+         {
+          "id": "pol-share",
+          "enabled": true,
+          "action": "accept",
+          "sources": [
+           "g-own2"
+          ],
+          "destinations": [],
+          "sourceResource": {
+           "ID": "",
+           "Type": ""
+          },
+          "destinationResource": {
+           "ID": "res-camera",
+           "Type": "host"
+          },
+          "bidirectional": false,
+          "protocol": "tcp",
+          "ports": [
+           "8080"
+          ],
+          "portRanges": [],
+          "authorizedGroups": {},
+          "authorizedUser": ""
+         }
+        ]
+       }
+      ],
+      "routes": [],
+      "networks": [
+       {
+        "id": "net-home1",
+        "routers": [
+         {
+          "id": "router-box",
+          "peer": "peer-box",
+          "peerGroups": null
+         }
+        ],
+        "resources": [
+         {
+          "id": "res-camera",
+          "type": "host",
+          "enabled": true,
+          "digest": "46bd0ead49e500f186bf3bbad18aab6d",
+          "family": 4,
+          "maskLength": 32,
+          "private": true
+         }
+        ]
+       }
+      ],
+      "postureChecks": [
+       {
+        "id": "pc-floor",
+        "checks": {
+         "NBVersionCheck": {
+          "MinVersion": "0.78.0"
+         }
+        }
+       }
+      ],
+      "peers": [
+       {
+        "id": "peer-box",
+        "user": null,
+        "version": "0.82.0",
+        "loginExpiry": false,
+        "embeddedProxy": false
+       },
+       {
+        "id": "peer-laptop",
+        "user": "8a4e2f10-3c6b-4d97-b1e5-7f0a9c2d4e02",
+        "version": "0.82.0",
+        "loginExpiry": true,
+        "embeddedProxy": false
+       },
+       {
+        "id": "peer-phone",
+        "user": "c2f19b7d-5e83-4a0c-8d6f-3b1e7a9c5f03",
+        "version": "0.78.0",
+        "loginExpiry": true,
+        "embeddedProxy": false
+       }
+      ],
+      "settings": {
+       "userApproval": true,
+       "jwtGroups": false,
+       "groupsPropagation": true,
+       "metricsPush": false,
+       "autoUpdate": "disabled",
+       "loginExpiry": true,
+       "loginExpirySeconds": 604800,
+       "dnsDomain": "",
+       "peerExpose": false,
+       "ipv6Groups": []
+      },
+      "counts": {
+       "nameserverGroups": 0,
+       "zones": 0,
+       "records": 0,
+       "jobs": 0,
+       "proxyTokens": 0,
+       "services": 0,
+       "targets": 0,
+       "domains": 0,
+       "proxies": 0,
+       "accessLog": 0,
+       "invites": 0,
+       "agentNetwork": 0
+      }
+     },
+     "people": {
+      "5d0c7a3e-8f41-4b6a-9e2d-1a7c3b9f0e01": "enabled",
+      "8a4e2f10-3c6b-4d97-b1e5-7f0a9c2d4e02": "enabled",
+      "c2f19b7d-5e83-4a0c-8d6f-3b1e7a9c5f03": "enabled"
+     }
+    }
+   ]
+  }
+ }
+}

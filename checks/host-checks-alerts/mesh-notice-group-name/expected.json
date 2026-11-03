@@ -1,0 +1,6 @@
+{
+  "title": "mesh share outside the rules; mesh access changed",
+  "priority": 4,
+  "body": "New:\nalpha-netbird share: policy pol-evil reaches group g-evil, not its own\nNoted:\nalpha-netbird changed: policy pol-evil added; group g-evil added",
+  "late": "cluster\talpha-netbird share\tlate\t4\tmesh share outside the rules\tpolicy pol-evil reaches group g-evil, not its own\n"
+}

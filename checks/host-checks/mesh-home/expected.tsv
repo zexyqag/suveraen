@@ -1,0 +1,23 @@
+cluster	evaluated
+kanidm	answered
+kanidm	checked
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
+cluster	alpha-netbird admins	ok	4	mesh admins outside the rules	one owner, as first seen, and people
+cluster	alpha-netbird all	ok	4	mesh rule for All	no rule names All
+cluster	alpha-netbird changed	notice	3	mesh access changed	policy pol-from-home added; policy pol-box: changed; setup keys: 1 to 2
+cluster	alpha-netbird check	ok	4	mesh unchecked	checked
+cluster	alpha-netbird exit	ok	4	mesh exit open	no route, and nothing routed beyond a home's private range
+cluster	alpha-netbird floor	ok	4	mesh below its version floor	every policy checks for 0.78.0 or later, which every peer runs
+cluster	alpha-netbird foreign	ok	4	mesh peer in a foreign group	every device in its own person's group, every box in one home's, and a group's resources routed by its home's box
+cluster	alpha-netbird home	late	4	mesh groups outside the rules	c2f19b7d-5e83-4a0c-8d6f-3b1e7a9c5f03 joins own-d4e5f6, home-d4e5f6; policy pol-box reaches peer peer-box both ways; policy pol-from-home is from home-a1b2c3, which holds a box; setup key key-own joins own-a1b2c3
+cluster	alpha-netbird leaver	ok	4	mesh leaver still in	everyone still in at Kanidm
+cluster	alpha-netbird powers	ok	4	mesh powers outside the rules	no check but the version, no job, DNS or SSH
+cluster	alpha-netbird public	ok	4	mesh exposed	no proxy, service or invite
+cluster	alpha-netbird settings	ok	4	mesh settings outside the rules	as the rules set them
+cluster	alpha-netbird share	late	4	mesh share outside the rules	policy pol-from-home is not from one person's own group
+cluster	alpha-netbird tokens	ok	4	mesh tokens outside the rules	no token, every setup key for one box within a day
+host	STUN 203.0.113.10	ok	4	STUN unanswered	answered on UDP 3478
+host	cluster status	ok	4	cluster status unreadable	read
+host	mesh STUN port	ok	4	mesh STUN port wrong	UDP 3478, the cluster's STUN_PORT
+kanidm	judged	{}
+mesh	state	{"alpha":{"owner":"5d0c7a3e-8f41-4b6a-9e2d-1a7c3b9f0e01","tags":{"8a4e2f10-3c6b-4d97-b1e5-7f0a9c2d4e02":"a1b2c3","c2f19b7d-5e83-4a0c-8d6f-3b1e7a9c5f03":"d4e5f6"},"access":{"policies":{"pol-own1":[{"from":["own-a1b2c3"],"to":["own-a1b2c3"],"fromResource":null,"toResource":null,"action":"accept","protocol":"all","ports":[],"portRanges":[],"bidirectional":true}],"pol-own2":[{"from":["own-d4e5f6"],"to":["own-d4e5f6"],"fromResource":null,"toResource":null,"action":"accept","protocol":"all","ports":[],"portRanges":[],"bidirectional":true}],"pol-box":[{"from":["own-a1b2c3"],"to":[],"fromResource":null,"toResource":"peer peer-box","action":"accept","protocol":"tcp","ports":["3389"],"portRanges":[],"bidirectional":true}],"pol-camera":[{"from":["own-a1b2c3"],"to":[],"fromResource":null,"toResource":"host res-camera","action":"accept","protocol":"tcp","ports":["8080"],"portRanges":[],"bidirectional":false}],"pol-share":[{"from":["own-d4e5f6"],"to":[],"fromResource":null,"toResource":"host res-camera","action":"accept","protocol":"tcp","ports":["8080"],"portRanges":[],"bidirectional":false}],"pol-from-home":[{"from":["home-a1b2c3"],"to":["own-a1b2c3"],"fromResource":null,"toResource":null,"action":"accept","protocol":"tcp","ports":["22"],"portRanges":[],"bidirectional":false}]},"groups":{"All":{"peers":3,"resources":0},"own-a1b2c3":{"peers":1,"resources":0},"home-a1b2c3":{"peers":1,"resources":0},"own-d4e5f6":{"peers":1,"resources":0},"home-d4e5f6":{"peers":0,"resources":0}},"networks":{"net-home1":{"routers":[["peer-box",null]],"resources":[["res-camera","host",true,"46bd0ead49e500f186bf3bbad18aab6d"]]}},"users":{"5d0c7a3e-8f41-4b6a-9e2d-1a7c3b9f0e01":{"devices":0,"unexpiring":0,"blocked":false,"pending":false},"8a4e2f10-3c6b-4d97-b1e5-7f0a9c2d4e02":{"devices":1,"unexpiring":0,"blocked":false,"pending":false},"c2f19b7d-5e83-4a0c-8d6f-3b1e7a9c5f03":{"devices":1,"unexpiring":0,"blocked":false,"pending":false}},"setupKeys":2,"routes":0}}}

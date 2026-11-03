@@ -24,8 +24,7 @@
     };
   };
   # The e2e's members' devices run NetBird's own Linux client, by the hash of its release tarball: this release, and
-  # the oldest one a mesh takes, which every policy's version check names.
-  floor = "0.78.0";
+  # the oldest one a mesh takes (suveraen.checks.mesh.minimumClient), which every policy's version check names.
   clients = {
     "0.82.0" = "sha256-tWn2XeMD0hMXvHFvMRYALizxda4iqfbSvtkSAKL1AAs=";
     "0.78.0" = "sha256-kr3Nd8trVsdqn2kV4xXe1Bt4K2S+7UUdGqDk/wmNWrk=";

@@ -1,8 +1,10 @@
 # Every server checks, from the status the controllers record and with an account that may read little else, how old
 # each tenant's WAL archiving, base backups, off-site copies, checks and volume copies are against what their templates
 # allow (suveraen/max-age), how old its own backup files are, and Ceph's health; whether its own addresses answer STUN;
-# and as root, with no Kanidm credential, each tenant's Kanidm (suveraen-idm check, idm.nix). It alerts once when that
-# changes, again while it lasts, and when it can't read the cluster or check every tenant's Kanidm.
+# and as root, with no credential, each tenant's Kanidm (suveraen-idm check, idm.nix) and each tenant's mesh against
+# the operator's rules (suveraen-mesh check, mesh.nix). It alerts once when that changes, again while it lasts, and
+# when it can't read the cluster or check every tenant's Kanidm and mesh, and notes each change of who can reach what in
+# a mesh once.
 {
   config,
   lib,
@@ -52,6 +54,10 @@ let
             inherit (stun) port;
             addresses = nodeIP;
           };
+      mesh = {
+        inherit (cfg.mesh) minimumClient;
+        loginExpiry = seconds cfg.mesh.loginExpiry;
+      };
     }
   );
 
@@ -100,27 +106,30 @@ let
     '';
   };
 
-  # Run by root after prepare: suveraen-idm reads the apps' copies of their secrets to probe Kanidm with, which the
-  # account below may not, and keeps them to itself. A check that fails says why, and alerts once it keeps failing.
-  idm = pkgs.writeShellApplication {
-    name = "host-checks-idm";
-    runtimeInputs = [
-      pkgs.coreutils
-      pkgs.jq
-    ];
-    text = ''
-      run=$RUNTIME_DIRECTORY
-      if [ -e "$run/unreadable" ]; then exit 0; fi
-      status=0
-      timeout 120 ${lib.getExe config.suveraen.idm.command} check >"$run/idm.json" 2>"$run/idm.err" || status=$?
-      if [ "$status" != 0 ]; then
-        why=$(tail -n 1 "$run/idm.err")
-        if [ "$status" = 124 ]; then why="no answer within 120 seconds"; fi
-        echo "suveraen-idm check: ''${why:-exit status $status}"
-        jq -n --arg why "''${why:-exit status $status}" '{failed: $why}' >"$run/idm.json"
-      fi
-    '';
-  };
+  # Run by root after prepare: suveraen-idm reads the apps' copies of their secrets to probe Kanidm with, and
+  # suveraen-mesh each mesh's database by exec into its PostgreSQL, which the account below may not, and keep them to
+  # themselves. A check that fails says why, and alerts once it keeps failing.
+  told =
+    part: command:
+    pkgs.writeShellApplication {
+      name = "host-checks-${part}";
+      runtimeInputs = [
+        pkgs.coreutils
+        pkgs.jq
+      ];
+      text = ''
+        run=$RUNTIME_DIRECTORY
+        if [ -e "$run/unreadable" ]; then exit 0; fi
+        status=0
+        timeout 120 ${lib.getExe command} check >"$run/${part}.json" 2>"$run/${part}.err" || status=$?
+        if [ "$status" != 0 ]; then
+          why=$(tail -n 1 "$run/${part}.err")
+          if [ "$status" = 124 ]; then why="no answer within 120 seconds"; fi
+          echo "${command.name} check: ''${why:-exit status $status}"
+          jq -n --arg why "''${why:-exit status $status}" '{failed: $why}' >"$run/${part}.json"
+        fi
+      '';
+    };
 
   read = pkgs.writeShellApplication {
     name = "host-checks-read";
@@ -168,14 +177,15 @@ let
       cronjobs "$run/replicationsources.json" offsite-check-1 offsite-check-2
 
       [ -s "$run/idm.json" ] || echo null >"$run/idm.json"
+      [ -s "$run/mesh.json" ] || echo null >"$run/mesh.json"
 
       args=()
-      for part in nodes clusters objectstores pvcs replicationsources cephcluster cronjobs idm; do
+      for part in nodes clusters objectstores pvcs replicationsources cephcluster cronjobs idm mesh; do
         args+=(--slurpfile "$part" "$run/$part.json")
       done
       jq -n "''${args[@]}" '{nodes: $nodes[0], clusters: $clusters[0], objectstores: $objectstores[0], pvcs: $pvcs[0],
         replicationsources: $replicationsources[0], cephcluster: $cephcluster[0], cronjobs: ($cronjobs | add // {}),
-        idm: $idm[0]}' >"$run/cluster.json"
+        idm: $idm[0], mesh: $mesh[0]}' >"$run/cluster.json"
     '';
   };
 
@@ -213,14 +223,16 @@ let
 
       [ -e "$state/kanidm-checked" ] || echo "$now" >"$state/kanidm-checked"
       [ -e "$state/kanidm-judged.json" ] || echo '{}' >"$state/kanidm-judged.json"
+      [ -e "$state/mesh.json" ] || echo '{}' >"$state/mesh.json"
       [ -e "$run/stun.json" ] || echo '{}' >"$run/stun.json"
       findings=$(jq -n --argjson now "$now" --slurpfile spec ${spec} --argjson files "$files" \
         --slurpfile stun "$run/stun.json" \
         --slurpfile seen "$state/first-seen.json" --argjson read "$(<"$state/last-read")" \
         --argjson kanidm "$(<"$state/kanidm-checked")" --slurpfile judged "$state/kanidm-judged.json" \
-        --slurpfile cluster "$cluster" \
+        --slurpfile mesh "$state/mesh.json" --slurpfile cluster "$cluster" \
         '{$now, spec: $spec[0], $files, stun: $stun[0], cluster: $cluster[0],
-          state: {lastRead: $read, firstSeen: $seen[0], kanidmChecked: $kanidm, kanidmJudged: $judged[0]}}' \
+          state: {lastRead: $read, firstSeen: $seen[0], kanidmChecked: $kanidm, kanidmJudged: $judged[0],
+            mesh: $mesh[0]}}' \
         | jq -r -f ${./host-checks.jq})
       if grep -qx $'kanidm\tchecked' <<<"$findings"; then echo "$now" >"$state/kanidm-checked"; fi
       judged=$(jq -R -r 'split("\t") | select(.[0:2] == ["kanidm", "judged"]) | .[2]' <<<"$findings")
@@ -228,7 +240,7 @@ let
         printf '%s\n' "$judged" >"$state/kanidm-judged.json.new"
         mv "$state/kanidm-judged.json.new" "$state/kanidm-judged.json"
       fi
-      jq -R -r 'split("\t")
+      jq -R -r 'split("\t") | select(.[0:2] != ["mesh", "state"])
         | if length == 6 then "\(.[2]) \(.[1]): \(.[5])" elif length == 2 then "\(.[0]) scope: \(.[1])"
           else "\(.[0]) \(.[1]): \(.[2])" end' <<<"$findings"
 
@@ -246,6 +258,12 @@ let
         echo "$now" >"$state/reminded-at"
       fi
       jq -j .late <<<"$decision" >"$state/late.tsv"
+      # Only once a change of who can reach what was sent, so one that got nowhere is noted again.
+      mesh=$(jq -R -r 'split("\t") | select(.[0:2] == ["mesh", "state"]) | .[2]' <<<"$findings")
+      if [ -n "$mesh" ]; then
+        printf '%s\n' "$mesh" >"$state/mesh.json.new"
+        mv "$state/mesh.json.new" "$state/mesh.json"
+      fi
     '';
   };
 in
@@ -267,6 +285,20 @@ in
       type = duration;
       default = "1d";
       description = "How often to alert again while something stays late.";
+    };
+
+    mesh = {
+      minimumClient = lib.mkOption {
+        type = lib.types.strMatching "[0-9]+\\.[0-9]+\\.[0-9]+";
+        default = "0.78.0";
+        description = "The oldest NetBird release a tenant's mesh takes: every policy checks for it, and no peer runs one older.";
+      };
+
+      loginExpiry = lib.mkOption {
+        type = duration;
+        default = "7d";
+        description = "The longest a device of a tenant's mesh may stay signed in before it signs in again.";
+      };
     };
 
     files = lib.mkOption {
@@ -395,11 +427,12 @@ in
           "AF_INET6"
           "AF_UNIX"
         ];
-        # Room for STUN's answers, suveraen-idm check, and suveraen-alert to try both channels.
-        TimeoutStartSec = stunSeconds * stunProbes + 2 * config.suveraen.alerts.retrySeconds + 420;
+        # Room for STUN's answers, suveraen-idm and suveraen-mesh check, and suveraen-alert to try both channels.
+        TimeoutStartSec = stunSeconds * stunProbes + 2 * config.suveraen.alerts.retrySeconds + 540;
         ExecStartPre = lib.optional (stun.port != null) (lib.getExe stunProbe) ++ [
           "+${lib.getExe prepare}"
-          "+${lib.getExe idm}"
+          "+${lib.getExe (told "idm" config.suveraen.idm.command)}"
+          "+${lib.getExe (told "mesh" config.suveraen.mesh.command)}"
         ];
         ExecStart = lib.getExe read;
         ExecStartPost = "+${lib.getExe report}";

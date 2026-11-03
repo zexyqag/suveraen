@@ -1,0 +1,6 @@
+{
+  "title": "mesh exit open; mesh access changed",
+  "priority": 4,
+  "body": "New:\nalpha-netbird exit: route route-legacy, which leads anywhere through its router; resource res-any is outside the private ranges; resource res-v6 is not IPv4; resource res-name is a domain; resource res-wide is wider than /16; network net-home1 routes by group; NetBird's agent network holds 2 rows\nNoted:\nalpha-netbird changed: policy pol-share-box added; policy pol-box gone; policy pol-share: changed; network net-home1: changed; group All: 3 to 4 peers; group own-d4e5f6: 1 to 2 peers; person c2f19b7d-5e83-4a0c-8d6f-3b1e7a9c5f03: 1 to 2 devices, pending approval; setup keys: 1 to 2; routes: 0 to 1",
+  "late": "cluster\talpha-netbird exit\tlate\t4\tmesh exit open\troute route-legacy, which leads anywhere through its router; resource res-any is outside the private ranges; resource res-v6 is not IPv4; resource res-name is a domain; resource res-wide is wider than /16; network net-home1 routes by group; NetBird's agent network holds 2 rows\n"
+}

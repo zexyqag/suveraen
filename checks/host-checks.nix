@@ -1,15 +1,22 @@
-# Runs the servers' checks (nixos/host-checks.jq) on what a cluster might hold, each case on top of base.json; on some,
-# what they then alert given the findings late before (nixos/host-checks-alert.jq); suveraen-idm's filter for Kanidm's
+# Runs the servers' checks (nixos/host-checks.jq) on what a cluster might hold, each case on top of base.json, and a
+# case of a tenant's mesh as a change to a mesh as the rules keep it (mesh.json); on some, what they then alert given
+# the findings late before, and when they last reminded (nixos/host-checks-alert.jq); suveraen-idm's filter for Kanidm's
 # log (nixos/idm-migrations.jq) on logs Kanidm wrote, stamped as the kubelet shows them, with the time its container
 # started; and its filter for the IDs a tenant's migrations declare (nixos/idm-ids.jq) on the ConfigMaps of a tenant's
 # Kanidm namespace; and compares what they find with what they should.
 { pkgs }:
 pkgs.runCommand "host-checks" { nativeBuildInputs = [ pkgs.jq ]; } ''
   failed=0
+  input() {
+    if [ -e "$1/mesh.jq" ]; then
+      jq -s '.[0] * .[1]' ${./host-checks/base.json} ${./host-checks/mesh.json} | jq -f "$1/mesh.jq"
+    else
+      jq -s '.[0] * .[1]' ${./host-checks/base.json} "$1/input.json"
+    fi
+  }
   for case in ${./host-checks}/*/; do
     name=$(basename "$case")
-    if jq -s '.[0] * .[1]' ${./host-checks/base.json} "$case/input.json" | jq -r -f ${../nixos/host-checks.jq} \
-      | diff -u "$case/expected.tsv" -; then
+    if input "$case" | jq -r -f ${../nixos/host-checks.jq} | diff -u "$case/expected.tsv" -; then
       echo "ok $name"
     else
       echo "WRONG $name"
@@ -18,11 +25,13 @@ pkgs.runCommand "host-checks" { nativeBuildInputs = [ pkgs.jq ]; } ''
   done
   for case in ${./host-checks-alerts}/*/; do
     name=$(basename "$case")
-    merged=$(jq -s '.[0] * .[1]' ${./host-checks/base.json} "$case/input.json")
+    merged=$(input "$case")
     now=$(jq .now <<<"$merged")
+    reminded=$now
+    if [ -e "$case/reminded" ]; then reminded=$(<"$case/reminded"); fi
     if jq -r -f ${../nixos/host-checks.jq} <<<"$merged" \
       | jq -R -s -c --rawfile alerted "$case/late.tsv" --argjson now "$now" --argjson remind 86400 \
-        --argjson reminded "$now" -f ${../nixos/host-checks-alert.jq} \
+        --argjson reminded "$reminded" -f ${../nixos/host-checks-alert.jq} \
       | diff -u <(jq -c . "$case/expected.json") -; then
       echo "ok alert $name"
     else

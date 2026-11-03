@@ -59,9 +59,11 @@
 # replaces; the server's checks alert once when an app holds a wrong one, and when that clears.
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
 # tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
-# records it, its own off-site copies included, none of them late; one more pool still fits, and when it passes its
-# quota's warning they alert once, and once more when that clears. Its etcd comes back in place from a provider's copy,
-# decrypted off the server, as it was when copied, and Ceph stays healthy.
+# records it, its own off-site copies included, none of them late, and each mesh within the operator's rules, in a
+# session that takes no write; one more pool still fits, and when it passes its quota's warning they alert once, and
+# once more when that clears, as for an exit, a token and a person who left in a mesh, with the change of who can reach
+# what. Its etcd comes back in place from a provider's copy, decrypted off the server, as it was when copied, and Ceph
+# stays healthy.
 {
   pkgs,
   module,
@@ -134,7 +136,7 @@ let
         }
       } -C $out/bin netbird
     '';
-  devices = {
+  devices = nodes: {
     # A person's laptop, whose own services the mesh reaches at its address.
     laptop = {
       node = "acme";
@@ -145,7 +147,7 @@ let
     # Another person's phone at the oldest release a mesh takes, which never connects directly.
     phone = {
       node = "acme";
-      version = netbird.floor;
+      version = nodes.server.suveraen.checks.mesh.minimumClient;
       n = 2;
       env.NB_FORCE_RELAY = "true";
     };
@@ -158,9 +160,9 @@ let
     };
   };
   device =
-    name:
+    nodes: name:
     let
-      d = devices.${name};
+      d = (devices nodes).${name};
     in
     {
       inherit (d) node;
@@ -173,7 +175,7 @@ let
   # Where the test puts what the devices trust and the names they reach the server by, before it starts them.
   meshFiles = "/run/netbird-e2e";
   devicesOn =
-    node:
+    nodes: node:
     lib.mapAttrs' (
       name: d:
       lib.nameValuePair "netbird-${name}" {
@@ -181,12 +183,12 @@ let
         environment = {
           NB_USE_NETSTACK_MODE = "true";
           NB_FORCE_USERSPACE_FIREWALL = "true";
-          NB_SOCKS5_LISTENER_PORT = toString (device name).socks;
+          NB_SOCKS5_LISTENER_PORT = toString (device nodes name).socks;
           SSL_CERT_FILE = "${meshFiles}/roots.pem";
         }
         // d.env;
         serviceConfig = {
-          ExecStart = "${(device name).netbird} service run --daemon-addr ${(device name).daemon} --log-file console";
+          ExecStart = "${(device nodes name).netbird} service run --daemon-addr ${(device nodes name).daemon} --log-file console";
           StateDirectory = "netbird-${name}";
           RuntimeDirectory = "netbird-${name}";
           BindPaths = [ "/var/lib/netbird-${name}:/var/lib/netbird" ];
@@ -196,13 +198,13 @@ let
           ];
         };
       }
-    ) (lib.filterAttrs (_: d: d.node == node) devices);
+    ) (lib.filterAttrs (_: d: d.node == node) (devices nodes));
   # A node's devices, the ports of their direct connections, which its firewall would otherwise leave to hole punching,
   # and the services the mesh reaches there.
-  meshNode = node: services: {
-    systemd.services = devicesOn node // lib.listToAttrs services;
-    networking.firewall.allowedUDPPorts = lib.mapAttrsToList (name: _: (device name).wireguard) (
-      lib.filterAttrs (_: d: d.node == node) devices
+  meshNode = nodes: node: services: {
+    systemd.services = devicesOn nodes node // lib.listToAttrs services;
+    networking.firewall.allowedUDPPorts = lib.mapAttrsToList (name: _: (device nodes name).wireguard) (
+      lib.filterAttrs (_: d: d.node == node) (devices nodes)
     );
   };
   # What a device or the camera serves: its own name, or at /paced a line a second for 100 seconds.
@@ -302,7 +304,7 @@ runTest {
         gitHttpBackend.checkExportOkFiles = false;
       };
       imports = [
-        (meshNode "forge" [
+        (meshNode nodes "forge" [
           # The box's services, which the mesh reaches at its address: one shared, one never.
           (listen "forge:3389" "127.0.0.1" 3389 { })
           (listen "forge:5900" "127.0.0.1" 5900 { })
@@ -376,7 +378,7 @@ runTest {
           address = s3Address;
           port = 80;
         })
-        (meshNode "acme" [
+        (meshNode nodes "acme" [
           # The laptop's services, which the mesh reaches at its address.
           (listen "acme:3389" "127.0.0.1" 3389 { })
           (listen "acme:8000" "127.0.0.1" 8000 { })
@@ -834,6 +836,7 @@ runTest {
               " | while read -r ns pod; do kubectl -n $ns logs $pod -c app --prefix | grep -E 'migration|ERROR'"
               " | tail -n 40; kubectl -n $ns logs $pod -c app --prefix --tail=40; done",
               "suveraen-idm check",
+              "suveraen-mesh check",
               phone,
           ]:
               print(f"$ {cmd}\n{shown(cmd)}")
@@ -1891,7 +1894,7 @@ runTest {
               f"kubectl -n {first}-postgres exec $(kubectl -n {first}-postgres get pod -l cnpg.io/instanceRole=primary"
               " -o name) -c postgres -- psql -tA -d netbird -c"
           )
-          nb_devices = ${builtins.toJSON (lib.genAttrs (lib.attrNames devices) device)}
+          nb_devices = ${builtins.toJSON (lib.genAttrs (lib.attrNames (devices nodes)) (device nodes))}
           nb_nodes = {"acme": acme, "forge": forge}
           nb_camera, nb_other = "${camera}", "${other}"
           # Its people by name, with their Kanidm IDs, passwords and tags; IDs the test keeps; the owner's token.
@@ -2112,7 +2115,7 @@ runTest {
               assert not nb_account["settings"].get("ipv6_enabled_groups"), nb_account
               nb_ids["floor"] = nb("POST", "/api/posture-checks", {
                   "name": "floor", "description": "The oldest release a mesh takes",
-                  "checks": {"nb_version_check": {"min_version": "${netbird.floor}"}},
+                  "checks": {"nb_version_check": {"min_version": "${nodes.server.suveraen.checks.mesh.minimumClient}"}},
               })["id"]
 
               # Without a token: paths of NetBird's own it doesn't route and those it refuses get the dashboard's 404
@@ -2931,20 +2934,20 @@ runTest {
               server.succeed("systemctl start host-checks")
               invocation = server.succeed("systemctl show -p InvocationID --value host-checks").strip()
               journal = f"journalctl -o cat _SYSTEMD_INVOCATION_ID={invocation}"
-              # Its own files come last.
-              server.wait_until_succeeds(f"{journal} | grep -Eq '^(ok|late) etcd-snapshots: '", timeout=60)
+              # Its findings come by scope and then key, so with a mesh in the cluster, its STUN port's comes last.
+              server.wait_until_succeeds(f"{journal} | grep -Eq '^(ok|late|unknown) mesh STUN port: '", timeout=60)
               findings = {}
               scope = None
               for line in shown(journal).splitlines():
                   if line.startswith("cluster scope: "):
                       scope = line.removeprefix("cluster scope: ")
-                  elif m := re.fullmatch(r"(ok|late|unknown) (.+?): (.*)", line):
+                  elif m := re.fullmatch(r"(ok|late|unknown|notice) (.+?): (.*)", line):
                       findings[m.group(2)] = (m.group(1), m.group(3))
               return scope, findings
 
           # What the server's checks have alerted so far, as the phone got it.
           def checks_said():
-              ours = ("backups ", "Ceph ", "cluster status ", "Kanidm ", "STUN ", "still: ")
+              ours = ("backups ", "Ceph ", "cluster status ", "Kanidm ", "STUN ", "mesh ", "still: ")
               return [(a["title"], a.get("priority", 3)) for a in alerts() if a.get("title", "").removeprefix(
                   "${nodes.server.networking.hostName}: ").startswith(ours)]
 
@@ -3020,8 +3023,13 @@ runTest {
                   f"{t}-kanidm{part}" for t in tenants for part in [" admin accounts", " migrations", " IDs"]
               }
               stun_findings = {f"STUN {a}" for a in ${builtins.toJSON nodes.server.suveraen.cluster.nodeIP}}
+              # Each tenant's mesh, part by part, and this server's STUN port as the cluster names it.
+              mesh_parts = {f"{t}-netbird {part}" for t in meshes for part in [
+                  "exit", "public", "all", "share", "foreign", "home", "admins", "tokens", "powers", "settings", "floor",
+                  "leaver", "changed", "check",
+              ]} | {"mesh STUN port"}
               assert findings.keys() == (
-                  before.keys() | archiving | offsite | identities | stun_findings
+                  before.keys() | archiving | offsite | identities | stun_findings | mesh_parts
                   | {"Ceph status", "cluster status", "etcd-snapshots"}
               ), findings
               assert all(state == "ok" for state, _ in findings.values()), findings
@@ -3047,13 +3055,51 @@ runTest {
                   assert m and moment(m.group(1)).timestamp() == stamp, (n, findings[f"etcd-offsite-{n}"], stamp)
               assert findings["Ceph status"][1].startswith("HEALTH_OK, "), findings["Ceph status"]
               assert checks_said() == [], checks_said()
+              # The first run that finds a mesh keeps its owner and its people's tags as it found them.
+              kept = json.loads(server.succeed("cat /var/lib/private/host-checks/mesh.json"))
+              assert kept[first]["owner"] == nb_people["op"]["uuid"], kept[first]
+              assert kept[first]["tags"] == {nb_people[w]["uuid"]: nb_people[w]["tag"] for w in ["alice", "bob"]}, kept
+              # The check's session takes no write, though its query reaches the whole database.
+              status, out = server.execute(
+                  "{ cat ${../nixos/mesh.sql}; echo 'UPDATE accounts SET network_serial = network_serial + 1;'; }"
+                  f" | suveraen-mesh sql {first} 2>&1"
+              )
+              assert status != 0 and "cannot execute UPDATE in a read-only transaction" in out, (status, out)
+              # It signs in as the mesh's own role, never the superuser, which would run what that role planted in its
+              # database with every right.
+              who = server.succeed(
+                  "echo 'select current_user, session_user, rolsuper from pg_roles where rolname = session_user'"
+                  f" | suveraen-mesh sql {first}"
+              ).strip()
+              assert who == "netbird|netbird|f", who
 
-          with subtest("A person who leaves is cut off: once Kanidm has expired them and the owner blocks them, their device is out of the mesh"):
+          with subtest("A planted exit, a token and a person who left reach the phone once, with the change of access, and so does their fix; once the owner blocks the person, their device is out of the mesh"):
+              said = len(checks_said())
+              host = "${nodes.server.networking.hostName}"
+              nb_op, nb_bob = nb_people["op"], nb_people["bob"]
+              # The owner can make what the rules forbid: a way to everywhere through the box, and a token.
+              nb_ids["anywhere"] = nb("POST", f"/api/networks/{nb_network['id']}/resources", {
+                  "name": "anywhere", "address": "0.0.0.0/0", "enabled": True, "groups": [],
+              })["id"]
+              nb_ids["token"] = nb("POST", f"/api/users/{nb_op['uuid']}/tokens", {
+                  "name": "planted", "expires_in": 1,
+              })["personal_access_token"]["id"]
               as_idm_admin(first)
               server.succeed(cli(first, "person validity expire-at bob now"))
               disable_idm_admin(first)
               assert signing_in(first, "bob") == {"denied": "account expired"}
-              nb_bob = nb_people["bob"]
+              left = f"{nb_bob['uuid']} of own-{nb_bob['tag']} is expired at Kanidm"
+              _, findings = host_checks()
+              assert [findings[f"{nb_ns} {part}"][0] for part in ["exit", "tokens", "leaver", "changed"]] == [
+                  "late", "late", "late", "notice",
+              ], findings
+              assert left in findings[f"{nb_ns} leaver"][1], findings[f"{nb_ns} leaver"]
+              assert checks_said()[said:] == [
+                  (f"{host}: mesh exit open; mesh leaver still in; mesh tokens outside the rules; mesh access changed", 4),
+              ], checks_said()[said:]
+              assert left in alerts()[-1]["message"], alerts()[-1]
+              nb("DELETE", f"/api/networks/{nb_network['id']}/resources/{nb_ids['anywhere']}")
+              nb("DELETE", f"/api/users/{nb_op['uuid']}/tokens/{nb_ids['token']}")
               nb("PUT", f"/api/users/{nb_bob['uuid']}", {"role": "user", "auto_groups": [nb_bob["own"]], "is_blocked": True})
               # Management ends the device's login, and refuses it as it comes back.
               retry(lambda _: (nb_status("phone") or {}).get("daemonStatus") in ["NeedsLogin", "SessionExpired"],
@@ -3062,6 +3108,13 @@ runTest {
               status, out = nb_fetch("phone", f"{nb_camera}:8080")
               assert status != 0, (status, out)
               nb_reaches("laptop", f"{nb_camera}:8080", "camera:8080")
+              _, findings = host_checks()
+              assert [findings[f"{nb_ns} {part}"][0] for part in ["exit", "tokens", "leaver", "changed"]] == [
+                  "ok", "ok", "ok", "notice",
+              ], findings
+              assert checks_said()[said + 1:] == [
+                  (f"{host}: mesh exits closed; mesh leavers out; mesh tokens within the rules again; mesh access changed", 3),
+              ], checks_said()[said + 1:]
 
           with subtest("A pool past its quota's warning reaches the phone, one more pool still fits, and the alert clears"):
               apply({

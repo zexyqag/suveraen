@@ -1,0 +1,23 @@
+cluster	evaluated
+kanidm	answered
+kanidm	checked
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
+cluster	alpha-netbird admins	unknown	4	mesh admins outside the rules	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird all	unknown	4	mesh rule for All	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird changed	unknown	4	mesh access changed	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird check	ok	4	mesh unchecked	unchecked since 2026-10-22T12:00:00Z (0m ago), limit 30m: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird exit	unknown	4	mesh exit open	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird floor	unknown	4	mesh below its version floor	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird foreign	unknown	4	mesh peer in a foreign group	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird home	unknown	4	mesh groups outside the rules	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird leaver	unknown	4	mesh leaver still in	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird powers	unknown	4	mesh powers outside the rules	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird public	unknown	4	mesh exposed	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird settings	unknown	4	mesh settings outside the rules	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird share	unknown	4	mesh share outside the rules	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird tokens	unknown	4	mesh tokens outside the rules	unchecked: suveraen-mesh check: no answer within 120 seconds
+host	STUN 203.0.113.10	ok	4	STUN unanswered	answered on UDP 3478
+host	cluster status	ok	4	cluster status unreadable	read
+host	mesh STUN port	unknown	4	mesh STUN port wrong	suveraen-mesh check: no answer within 120 seconds
+kanidm	judged	{}
+mesh	state	{"alpha":{"owner":"5d0c7a3e-8f41-4b6a-9e2d-1a7c3b9f0e01","tags":{"8a4e2f10-3c6b-4d97-b1e5-7f0a9c2d4e02":"a1b2c3","c2f19b7d-5e83-4a0c-8d6f-3b1e7a9c5f03":"d4e5f6"},"access":{"policies":{"pol-own1":[{"from":["own-a1b2c3"],"to":["own-a1b2c3"],"fromResource":null,"toResource":null,"action":"accept","protocol":"all","ports":[],"portRanges":[],"bidirectional":true}],"pol-own2":[{"from":["own-d4e5f6"],"to":["own-d4e5f6"],"fromResource":null,"toResource":null,"action":"accept","protocol":"all","ports":[],"portRanges":[],"bidirectional":true}],"pol-box":[{"from":["own-a1b2c3"],"to":[],"fromResource":null,"toResource":"peer peer-box","action":"accept","protocol":"tcp","ports":["3389"],"portRanges":[],"bidirectional":false}],"pol-camera":[{"from":["own-a1b2c3"],"to":[],"fromResource":null,"toResource":"host res-camera","action":"accept","protocol":"tcp","ports":["8080"],"portRanges":[],"bidirectional":false}],"pol-share":[{"from":["own-d4e5f6"],"to":[],"fromResource":null,"toResource":"host res-camera","action":"accept","protocol":"tcp","ports":["8080"],"portRanges":[],"bidirectional":false}]},"groups":{"All":{"peers":3,"resources":0},"own-a1b2c3":{"peers":1,"resources":0},"home-a1b2c3":{"peers":1,"resources":0},"own-d4e5f6":{"peers":1,"resources":0},"home-d4e5f6":{"peers":0,"resources":0}},"networks":{"net-home1":{"routers":[["peer-box",null]],"resources":[["res-camera","host",true,"46bd0ead49e500f186bf3bbad18aab6d"]]}},"users":{"5d0c7a3e-8f41-4b6a-9e2d-1a7c3b9f0e01":{"devices":0,"unexpiring":0,"blocked":false,"pending":false},"8a4e2f10-3c6b-4d97-b1e5-7f0a9c2d4e02":{"devices":1,"unexpiring":0,"blocked":false,"pending":false},"c2f19b7d-5e83-4a0c-8d6f-3b1e7a9c5f03":{"devices":1,"unexpiring":0,"blocked":false,"pending":false}},"setupKeys":1,"routes":0},"uncheckedSince":1792670400}}

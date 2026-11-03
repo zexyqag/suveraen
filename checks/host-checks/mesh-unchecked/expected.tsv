@@ -1,0 +1,22 @@
+cluster	evaluated
+kanidm	answered
+kanidm	checked
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
+cluster	alpha-netbird admins	unknown	4	mesh admins outside the rules	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird all	unknown	4	mesh rule for All	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird changed	unknown	4	mesh access changed	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird check	late	4	mesh unchecked	unchecked since 2026-10-22T11:15:00Z (45m ago), limit 30m: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird exit	unknown	4	mesh exit open	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird floor	unknown	4	mesh below its version floor	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird foreign	unknown	4	mesh peer in a foreign group	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird home	unknown	4	mesh groups outside the rules	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird leaver	unknown	4	mesh leaver still in	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird powers	unknown	4	mesh powers outside the rules	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird public	unknown	4	mesh exposed	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird settings	unknown	4	mesh settings outside the rules	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird share	unknown	4	mesh share outside the rules	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+cluster	alpha-netbird tokens	unknown	4	mesh tokens outside the rules	unchecked: psql:<stdin>:77: ERROR:  column "settings_peer_expose_enabled" does not exist
+host	STUN 203.0.113.10	ok	4	STUN unanswered	answered on UDP 3478
+host	cluster status	ok	4	cluster status unreadable	read
+host	mesh STUN port	ok	4	mesh STUN port wrong	UDP 3478, the cluster's STUN_PORT
+kanidm	judged	{}

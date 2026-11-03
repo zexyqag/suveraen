@@ -1,0 +1,22 @@
+cluster	evaluated
+kanidm	answered
+kanidm	checked
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
+cluster	alpha-netbird admins	ok	4	mesh admins outside the rules	one owner, as first seen, and people
+cluster	alpha-netbird all	ok	4	mesh rule for All	no rule names All
+cluster	alpha-netbird changed	ok	3	mesh access changed	as before
+cluster	alpha-netbird check	ok	4	mesh unchecked	checked
+cluster	alpha-netbird exit	ok	4	mesh exit open	no route, and nothing routed beyond a home's private range
+cluster	alpha-netbird floor	late	4	mesh below its version floor	policy pol-own2 checks for no version from 0.78.0; policy pol-share checks for no version from 0.78.0
+cluster	alpha-netbird foreign	ok	4	mesh peer in a foreign group	every device in its own person's group, every box in one home's, and a group's resources routed by its home's box
+cluster	alpha-netbird home	ok	4	mesh groups outside the rules	no box a source, every key into one home's group, every person into their own
+cluster	alpha-netbird leaver	ok	4	mesh leaver still in	everyone still in at Kanidm
+cluster	alpha-netbird powers	ok	4	mesh powers outside the rules	no check but the version, no job, DNS or SSH
+cluster	alpha-netbird public	ok	4	mesh exposed	no proxy, service or invite
+cluster	alpha-netbird settings	ok	4	mesh settings outside the rules	as the rules set them
+cluster	alpha-netbird share	ok	4	mesh share outside the rules	every rule from one person's own group, and to another's one way, on ports
+cluster	alpha-netbird tokens	ok	4	mesh tokens outside the rules	no token, every setup key for one box within a day
+host	STUN 203.0.113.10	ok	4	STUN unanswered	answered on UDP 3478
+host	cluster status	ok	4	cluster status unreadable	read
+host	mesh STUN port	ok	4	mesh STUN port wrong	UDP 3478, the cluster's STUN_PORT
+kanidm	judged	{}

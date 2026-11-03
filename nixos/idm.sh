@@ -12,6 +12,7 @@ usage: suveraen-idm admin TENANT platform|tenant LOGIN DISPLAY-NAME [ATTESTATION
        suveraen-idm rotate TENANT CLIENT
        suveraen-idm rotate --all TENANT
        suveraen-idm check
+       suveraen-idm accounts TENANT [ID...]
 EOF
   exit 2
 }
@@ -166,15 +167,19 @@ probe() {
   echo "${code:-000}"
 }
 
-# How Kanidm answers the first step of a sign-in as an account: expired once disabled, enabled when it offers a way
-# in, unusable when it can't (no credential yet), unknown without an answer.
+# How Kanidm answers the first step of a sign-in as an account, by name or ID: expired once disabled, enabled when it
+# offers a way in, unusable when it can't (no credential yet), gone when it has no such account, unknown without an
+# answer.
 account() {
   local state
-  state=$(web "$1" /v1/auth -H 'Content-Type: application/json' -d "{\"step\": {\"init\": \"$2\"}}" 2>/dev/null |
-    jq -r 'if .state.denied? == "account expired" then "expired"
-      elif (.state | type) == "object" and (.state | has("choose") or has("continue") or has("success")) then "enabled"
-      elif (.state.denied? | type) == "string" then "unusable"
-      else "unknown" end' 2>/dev/null) || true
+  state=$(web "$1" /v1/auth -H 'Content-Type: application/json' -d "{\"step\": {\"init\": \"$2\"}}" \
+    -w '\n%{http_code}' 2>/dev/null | jq -rs '.[0] as $answer
+      | if .[1] == 404 and $answer == "nomatchingentries" then "gone"
+        elif .[1] != 200 or ($answer | type) != "object" or ($answer.state | type) != "object" then "unknown"
+        elif $answer.state.denied == "account expired" then "expired"
+        elif $answer.state | has("choose") or has("continue") or has("success") then "enabled"
+        elif ($answer.state.denied | type) == "string" then "unusable"
+        else "unknown" end' 2>/dev/null) || true
   echo "${state:-unknown}"
 }
 
@@ -490,6 +495,21 @@ case $command in
       exit 0
     fi
     check
+    ;;
+  accounts)
+    # How Kanidm answers for each of the tenant's people by their IDs, as check does for its admin accounts.
+    [ $# != 0 ] || usage
+    valid_tenant "$1"
+    for id in "${@:2}"; do
+      [[ $id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || usage
+    done
+    if ! origin=$(origin "$1"); then
+      fail "$1: ConfigMap kanidm in $1-kanidm names no single origin."
+      exit 1
+    fi
+    for id in "${@:2}"; do
+      jq -nc --arg id "$id" --arg state "$(account "$origin" "$id")" '{($id): $state}'
+    done | jq -sc 'add // {}'
     ;;
   sync)
     [ $# -le 1 ] || usage
