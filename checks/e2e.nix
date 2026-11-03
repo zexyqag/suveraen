@@ -1899,10 +1899,10 @@ pkgs.testers.runNixOSTest {
               )
 
           with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied, Kanidm's with its people and keys"):
-              ns, idm_ns = f"{first}-hello", f"{first}-kanidm"
+              hello_ns, idm_ns = f"{first}-hello", f"{first}-kanidm"
               # VolSync copies a snapshot of the volume, which holds only what has reached its disk.
               server.succeed(
-                  f"kubectl -n {ns} exec deploy/hello -- sh -c 'echo kept > /data/marker && echo gone > /data/removed && sync'"
+                  f"kubectl -n {hello_ns} exec deploy/hello -- sh -c 'echo kept > /data/marker && echo gone > /data/removed && sync'"
               )
               # A person and Kanidm's signing keys, which its volume holds.
               as_idm_admin(first)
@@ -1920,7 +1920,7 @@ pkgs.testers.runNixOSTest {
 
               # Copies both volumes to both providers at once.
               def copy_volumes(value):
-                  copies = [(namespace, f"data-{n}") for namespace in [ns, idm_ns] for n in providers]
+                  copies = [(namespace, f"data-{n}") for namespace in [hello_ns, idm_ns] for n in providers]
                   for namespace, name in copies:
                       # A copy already running would take the new trigger as its own, though its snapshot may predate
                       # the files.
@@ -1945,7 +1945,7 @@ pkgs.testers.runNixOSTest {
                       f"${asCgit} sed -i '/_DATA_RESTORE/d' tenants/{first}/tenant.yaml"
                       f" && printf '{knobs}' | ${asCgit} tee -a tenants/{first}/tenant.yaml >/dev/null",
                   )
-                  for namespace in [ns, idm_ns]:
+                  for namespace in [hello_ns, idm_ns]:
                       server.wait_until_succeeds(
                           f"kubectl -n {namespace} get replicationdestination data -o jsonpath='{{.status.lastManualSync}}'"
                           f" | grep -x {value}",
@@ -2001,19 +2001,19 @@ pkgs.testers.runNixOSTest {
 
               # Provider 1's copies, restored, hold both files, and Kanidm's database with its own copy beside it.
               restore("one", 1)
-              assert read_restored(ns, 65534, "cat /data/marker /data/removed").split() == ["kept", "gone"]
+              assert read_restored(hello_ns, 65534, "cat /data/marker /data/removed").split() == ["kept", "gone"]
               listed = read_restored(idm_ns, 389, "ls /data").split()
               assert "kanidm.db" in listed and any(re.fullmatch(r"backup-.*\.json\.gz", f) for f in listed), listed
 
               # A file deleted before the next copies is gone again from provider 2's copy, restored over the first.
-              server.succeed(f"kubectl -n {ns} exec deploy/hello -- sh -c 'rm /data/removed && sync'")
+              server.succeed(f"kubectl -n {hello_ns} exec deploy/hello -- sh -c 'rm /data/removed && sync'")
               copy_volumes("second")
               # Kanidm's secret for hello changes after the copies, so the restore brings back one the app no longer
               # holds.
               server.succeed(f"suveraen-idm rotate {first} hello-oidc")
               restore("two", 2)
               # Once nothing mounts the lost volume, which its deletion waits for, Flux makes it anew from the restore.
-              for namespace, kind, name in [(ns, "deployment", "hello"), (idm_ns, "statefulset", "kanidm")]:
+              for namespace, kind, name in [(hello_ns, "deployment", "hello"), (idm_ns, "statefulset", "kanidm")]:
                   server.succeed(
                       f"kubectl -n {namespace} scale {kind} {name} --replicas=0"
                       f" && kubectl -n {namespace} delete pvc data --timeout=300s"
@@ -2027,8 +2027,8 @@ pkgs.testers.runNixOSTest {
                       f"kubectl -n {namespace} scale {kind} {name} --replicas=1"
                       f" && kubectl -n {namespace} rollout status {kind} {name} --timeout=300s"
                   )
-              assert server.succeed(f"kubectl -n {ns} exec deploy/hello -- cat /data/marker").strip() == "kept"
-              server.fail(f"kubectl -n {ns} exec deploy/hello -- test -e /data/removed")
+              assert server.succeed(f"kubectl -n {hello_ns} exec deploy/hello -- cat /data/marker").strip() == "kept"
+              server.fail(f"kubectl -n {hello_ns} exec deploy/hello -- test -e /data/removed")
               server.wait_until_succeeds(f"curl -fsS -o /dev/null {reach[first]} {discovery(first)}", timeout=300)
               assert signing_keys() == keys_before
               as_idm_admin(first)

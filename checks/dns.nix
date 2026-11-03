@@ -405,10 +405,8 @@ pkgs.testers.runNixOSTest {
 
       key = signer.succeed("sed -n 's/^ *secret: *//p' /var/lib/knot/acme-update.conf").strip()
 
-      def update(server, lines, secret=None, name="acme-update", zone=acme, signed=True):
-          # The signer's key by default, as cert-manager holds it.
-          secret = key if secret is None else secret
-          tsig = f"key hmac-sha256:{name} {secret}\n" if signed else ""
+      def update(server, lines, secret, name="acme-update", zone=acme):
+          tsig = f"key hmac-sha256:{name} {secret}\n" if secret else ""
           return client.execute(
               f"printf 'server {server}\\nzone {zone}.\\norigin {zone}.\\n{tsig}{lines}send\\nanswer\\n' | knsupdate -t 5 -r 0 2>&1"
           )[1]
@@ -419,7 +417,7 @@ pkgs.testers.runNixOSTest {
       label = target.split(".")[1]
 
       with subtest("The ACME zone takes TXT records at _acme-challenge names with its key, and nothing else"):
-          out = update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT token1\\n")
+          out = update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT token1\\n", key)
           assert accepted(out), out
           serial = in_sync(acme, signer, "${ip "signer"}")
           for n in serving(acme):
@@ -435,17 +433,17 @@ pkgs.testers.runNixOSTest {
               "TXT next to a forbidden record": "add _acme-challenge.b 60 TXT x\\nadd _acme-challenge.b 60 AAAA ::1\\n",
           }
           for what, lines in refused.items():
-              out = update("${ip "signer"}", lines)
+              out = update("${ip "signer"}", lines, key)
               assert not accepted(out), f"{what}: {out}"
-          assert not accepted(update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT x\\n", signed=False))
+          assert not accepted(update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT x\\n", secret=None))
           assert not accepted(update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT x\\n", secret="${transferKey.secret}", name="transfer"))
-          assert not accepted(update("${ip "signer"}", "add _acme-challenge.idm 60 TXT x\\n", zone="one.test"))
-          assert not accepted(update("${ip "ns1"}", f"add _acme-challenge.{label} 60 TXT x\\n"))
+          assert not accepted(update("${ip "signer"}", "add _acme-challenge.idm 60 TXT x\\n", key, zone="one.test"))
+          assert not accepted(update("${ip "ns1"}", f"add _acme-challenge.{label} 60 TXT x\\n", key))
           assert soa(signer, "${ip "signer"}", acme) == serial, "a refused update changed the zone"
           # The records come only from updates, and a restart keeps them.
           signer.succeed("systemctl restart knot")
           signer.wait_until_succeeds(f"kdig @${ip "signer"} +short TXT {target} | grep -q token1")
-          out = update("${ip "signer"}", f"del _acme-challenge.{label} TXT\\n")
+          out = update("${ip "signer"}", f"del _acme-challenge.{label} TXT\\n", key)
           assert accepted(out), out
 
       with subtest("Restarting its unit replaces the ACME zone's key"):
@@ -455,8 +453,8 @@ pkgs.testers.runNixOSTest {
           key = signer.succeed("sed -n 's/^ *secret: *//p' /var/lib/knot/acme-update.conf").strip()
           assert key != old
           assert not accepted(update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT x\\n", secret=old))
-          assert accepted(update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT x\\n"))
-          assert accepted(update("${ip "signer"}", f"del _acme-challenge.{label} TXT\\n"))
+          assert accepted(update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT x\\n", key))
+          assert accepted(update("${ip "signer"}", f"del _acme-challenge.{label} TXT\\n", key))
 
       with subtest("A CA validates a certificate's challenge through its CNAME into the ACME zone"):
           client.succeed(
@@ -505,7 +503,7 @@ pkgs.testers.runNixOSTest {
           ns1.wait_until_succeeds("systemctl show -p ActiveState --value dns-check.service | grep -qx -e inactive -e failed")
           check(True)
           ns2.succeed(f"knotc zone-freeze {acme}")
-          assert accepted(update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT token2\\n"))
+          assert accepted(update("${ip "signer"}", f"add _acme-challenge.{label} 60 TXT token2\\n", key))
           check(False, "serials differ")
           ns2.succeed(f"knotc zone-thaw {acme}")
           in_sync(acme, signer, "${ip "signer"}")
@@ -538,7 +536,7 @@ pkgs.testers.runNixOSTest {
           ns1.succeed("/run/booted-system/specialisation/promoted/bin/switch-to-configuration test")
           ns2.wait_for_unit("knot.service")
           key = ns2.succeed("sed -n 's/^ *secret: *//p' /var/lib/knot/acme-update.conf").strip()
-          assert accepted(update("${ip "ns2"}", f"add _acme-challenge.{label} 60 TXT token3\\n"))
+          assert accepted(update("${ip "ns2"}", f"add _acme-challenge.{label} 60 TXT token3\\n", key))
           ns2.succeed("knotc zone-sign one.test")
           for zone in top + [acme]:
               in_sync(zone, ns2, "${ip "ns2"}")
