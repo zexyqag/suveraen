@@ -1,0 +1,26 @@
+cases:7: finds_a_list_a_later_subtest_assigns_again uses the global forged, which the script binds again at 115: def finds_a_list_a_later_subtest_assigns_again(host):
+cases:34: finds_a_name_bound_twice_after_it uses the global twice, which the script binds again at 116, 117: def finds_a_name_bound_twice_after_it():
+cases:37: finds_a_name_a_later_loop_binds uses the global looped, which the script binds again at 118: def finds_a_name_a_later_loop_binds():
+cases:40: finds_what_its_inner_function_reads uses the global forged, which the script binds again at 115: def finds_what_its_inner_function_reads():
+cases:46: lambda uses the global forged, which the script binds again at 115: finds_a_stored_lambda = lambda: forged
+cases:48: genexpr uses the global forged, which the script binds again at 115: finds_a_kept_generator = (forged for _ in range(2))
+cases:50: lambda uses the global forged, which the script binds again at 115: def finds_a_lambda_default_reads(check=lambda: forged):
+cases:53: lambda uses the global forged, which the script binds again at 115: finds_a_lambda_the_value_of_a_call_may_hold = polling_condition(lambda: forged)
+cases:56: finds_in_a_method uses the global forged, which the script binds again at 115: def finds_in_a_method(self):
+cases:59: finds_a_name_another_function_declares_global uses the global counter, which the script binds in a function that declares it global: def finds_a_name_another_function_declares_global():
+cases:62: finds_a_function_that_binds_a_global uses the global counter, which the script binds in a function that declares it global: def finds_a_function_that_binds_a_global():
+cases:66: finds_a_name_another_function_imports_as_global uses the global shlex, which the script binds in a function that declares it global: def finds_a_name_another_function_imports_as_global():
+cases:69: finds_a_function_that_imports_a_global uses the global shlex, which the script binds in a function that declares it global: def finds_a_function_that_imports_a_global():
+cases:73: finds_a_driver_name_the_script_binds_once uses the global log, which the script binds again at 125: def finds_a_driver_name_the_script_binds_once():
+cases:76: finds_a_machine_the_script_binds_once uses the global server, which the script binds again at 126: def finds_a_machine_the_script_binds_once():
+cases:79: finds_the_only_machine_by_the_name_machine uses the global machine, which the script binds again at 127: def finds_the_only_machine_by_the_name_machine():
+cases:82: finds_a_builtin_the_script_binds_once uses the global input, which the script binds again at 128: def finds_a_builtin_the_script_binds_once():
+cases:95: genexpr uses the global forged, which the script binds again at 115: finds_a_generator_a_lazy_call_may_keep = map(str, (forged for _ in range(2)))
+cases:96: lambda uses the global forged, which the script binds again at 115: finds_a_lambda_the_call_it_is_handed_on_to_may_keep = wrap(polling_condition(lambda: forged))
+cases:97: lambda uses the global forged, which the script binds again at 115: finds_the_default_max_returns_when_empty = max([], default=lambda: forged)
+cases:98: genexpr uses the global forged, which the script binds again at 115: finds_a_generator_handed_to_a_name_the_script_binds = min(forged[0] for _ in range(2))
+cases:99: lambda uses the global forged, which the script binds again at 115: hooks.append(lambda: forged)
+cases:100: lambda uses the global forged, which the script binds again at 115: register(lambda: forged)
+cases:133: lambda uses the global marker, which the script binds again at 134, 136: with polling_condition(lambda: marker):
+cases:135: lambda uses the global marker, which the script binds again at 136: for line in map(lambda n: n + marker, ["x"]):
+cases:140: finds_a_loop_variable_from_inside_the_loop uses the global tenant, which the script binds again at 138: def finds_a_loop_variable_from_inside_the_loop():

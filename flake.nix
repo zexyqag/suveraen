@@ -45,6 +45,12 @@
 
       server = config ./checks/server.nix;
 
+      e2e = import ./checks/e2e.nix {
+        inherit pkgs;
+        module = self.nixosModules.default;
+        kubernetes = ./kubernetes;
+      };
+
       # The Kanidm client the servers run, whose version every tenant's Kanidm runs (checks/render.sh).
       inherit (server.suveraen.idm) kanidm;
 
@@ -79,13 +85,7 @@
         # `nix run .#e2e`: needs KVM and internet access, so it can't be one of the checks.
         e2e = {
           type = "app";
-          program = "${
-            (import ./checks/e2e.nix {
-              inherit pkgs;
-              module = self.nixosModules.default;
-              kubernetes = ./kubernetes;
-            }).driver
-          }/bin/nixos-test-driver";
+          program = "${e2e.driver}/bin/nixos-test-driver";
           meta.description = "Boot a server with internet access and let Flux deploy kubernetes/clusters/test onto it";
         };
       };
@@ -100,6 +100,16 @@
           kubernetes = ./kubernetes;
         };
         host-checks = import ./checks/host-checks.nix { inherit pkgs; };
+        test-scripts = import ./checks/test-scripts.nix {
+          inherit pkgs;
+          tests =
+            pkgs.lib.filterAttrs (_: check: check ? config.testScriptString) (
+              removeAttrs self.checks.x86_64-linux [ "test-scripts" ]
+            )
+            // {
+              inherit e2e;
+            };
+        };
         pseudonym = import ./checks/pseudonym.nix {
           inherit pkgs;
           source = ./kubernetes/platform/gateway/app/pseudonym;
