@@ -1,0 +1,87 @@
+---
+# A tenant's mesh: NetBird's dashboard, signal and relay in one pod and its management in another, behind one host
+# passed through to nginx, so long-lived gRPC streams and relay WebSockets meet no request timeout at the gateway, and
+# relayed peers keep their relay while management waits for Kanidm. People sign in with the tenant's own Kanidm; home
+# boxes join by setup keys. Its state is the tenant's PostgreSQL.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-netbird
+spec:
+  path: ./kubernetes/apps/netbird/app
+  targetNamespace: ${TENANT}-netbird
+  components:
+    - ../../../components/app
+    - ../../../components/db-client
+    - ../../../components/sso-client
+    - ../../../components/passthrough-app
+  dependsOn:
+    - name: policies
+    - name: issuer
+    - name: ${TENANT}-netbird-db
+    - name: ${TENANT}-netbird-sso
+  postBuild:
+    substitute:
+      APP: netbird
+      # Its sign-in names the host as it is, as an attachment substitutes APP alone.
+      HOST: netbird
+      # Peers' names end in a suffix no public DNS answers, so a lookup a device leaks reaches no server.
+      DNS_DOMAIN: ${NETBIRD_DNS_DOMAIN:=netbird.internal}
+      MEMORY: ${NETBIRD_MEMORY:=384Mi}
+      QUOTA_CPU: ${NETBIRD_QUOTA_CPU:=200m}
+      QUOTA_MEMORY: ${NETBIRD_QUOTA_MEMORY:=1Gi}
+      # The edge pod's three containers, management and one more pod at the defaults (checks/render.sh), 256Mi each.
+      QUOTA_EPHEMERAL_STORAGE: ${NETBIRD_QUOTA_EPHEMERAL_STORAGE:=1280Mi}
+      QUOTA_STORAGE: "0"
+      QUOTA_VOLUMES: "0"
+      # Recreate keeps one of each controller, and render keeps room for one more pod.
+      QUOTA_PODS: "3"
+      QUOTA_SERVICES: "2"
+      QUOTA_SECRETS: "12"
+      # netbird, roots, kube-root-ca.crt and one spare.
+      QUOTA_CONFIGMAPS: "4"
+      QUOTA_JOBS: "0"
+---
+# Passed through to nginx in the edge pod by name, so the gateway limits its clients only by their new connections.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-netbird-edge-netbird
+spec:
+  path: ./kubernetes/edge/passthrough-app
+  dependsOn:
+    - name: ${TENANT}-netbird
+    - name: gateway
+  postBuild:
+    substitute:
+      APP: netbird
+      EDGE: netbird
+      HOST: netbird
+      ROUTE_PORT: "443"
+      ROUTE_TARGET_PORT: "8443"
+---
+# Its database and role in the tenant's PostgreSQL (apps/postgres, components/db).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-netbird-db
+spec:
+  path: ./kubernetes/apps/netbird/db
+  dependsOn:
+    - name: ${TENANT}-postgres-cluster
+  postBuild:
+    substitute:
+      APP: netbird
+---
+# Its group and public client in the tenant's Kanidm (apps/kanidm, components/sso).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-netbird-sso
+spec:
+  path: ./kubernetes/apps/netbird/sso
+  dependsOn:
+    - name: ${TENANT}-kanidm
+  postBuild:
+    substitute:
+      APP: netbird

@@ -56,3 +56,8 @@ data:
   GATEWAY_PSEUDONYM_V4: 240.0.0.0/4
   GATEWAY_PSEUDONYM_V6: 3fff::/20
   GATEWAY_PSEUDONYM_PERIOD: 24h
+  # The UDP port the servers answer STUN on (suveraen.cluster.stun.port), which a tenant's mesh names to its devices.
+  STUN_PORT: "3478"
+  # Roots the public issuer's certificates chain to that images don't hold, as base64 PEM: the e2e's test CAs make
+  # theirs as they start, so it fills them in before it signs. Empty on a real cluster (checks/render.sh).
+  PUBLIC_CA_BUNDLE: ""

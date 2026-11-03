@@ -1,0 +1,19 @@
+---
+# As edge/passthrough, for a host on the tenant's app domain.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../passthrough
+patches:
+  - target:
+      kind: Gateway
+    patch: |-
+      - op: replace
+        path: /spec/listeners/0/hostname
+        value: ${HOST}.${TENANT_APP_DOMAIN}
+  - target:
+      kind: TLSRoute
+    patch: |-
+      - op: replace
+        path: /spec/hostnames/0
+        value: ${HOST}.${TENANT_APP_DOMAIN}

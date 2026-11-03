@@ -7,5 +7,6 @@ resources:
   - ../../../../../apps/kanidm/ks.yaml
   - ../../../../../apps/hello/ks.yaml
   - ../../../../../apps/hello/edge-apex.yaml
+  - ../../../../../apps/netbird/ks.yaml
 components:
   - ../../../../../components/tenant

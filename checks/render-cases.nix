@@ -5,6 +5,7 @@
   kubernetes,
   ranges,
   kanidm,
+  netbird,
   shards,
 }:
 pkgs.lib.genAttrs' (pkgs.lib.range 1 shards) (
@@ -20,7 +21,8 @@ pkgs.lib.genAttrs' (pkgs.lib.range 1 shards) (
       }
       ''
         set -o pipefail
-        export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges} KANIDM_VERSION=${kanidm.version}
+        export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges} KANIDM_VERSION=${kanidm.version} \
+          NETBIRD_PINS=${pkgs.lib.escapeShellArg (builtins.toJSON netbird)}
         bash ${./render-cases.sh} ${./render.sh} ${kubernetes} ${toString shard} ${toString shards} | tee $out
       ''
   )

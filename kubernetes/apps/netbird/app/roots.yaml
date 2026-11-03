@@ -1,0 +1,9 @@
+---
+# Roots the public issuer's certificates chain to beyond those management's image holds, as base64 PEM: none on a real
+# cluster, the test CAs' on a test one. Flux makes an empty value null, so none is a file of one empty line.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: roots
+binaryData:
+  extra.pem: ${PUBLIC_CA_BUNDLE:=Cg==}

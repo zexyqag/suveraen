@@ -8,6 +8,7 @@ metadata:
 data:
   example.test: alpha
   one.test: alpha-hello
+  netbird.example.test: alpha-netbird
   idm.one.test: alpha-kanidm
   org.test: bravo
   idm.org.test: bravo-kanidm

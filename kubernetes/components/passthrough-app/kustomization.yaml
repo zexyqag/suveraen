@@ -1,0 +1,13 @@
+---
+# As components/passthrough, for an app whose one host is on its tenant's app domain (edge/passthrough-app).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+components:
+  - ../passthrough
+patches:
+  - target:
+      kind: Certificate
+    patch: |-
+      - op: replace
+        path: /spec/dnsNames/0
+        value: ${HOST}.${TENANT_APP_DOMAIN}

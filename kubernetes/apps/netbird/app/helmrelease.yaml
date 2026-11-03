@@ -1,0 +1,311 @@
+---
+# Two controllers, so signal and the relay keep serving while management restarts or waits for Kanidm: netbird, the
+# edge, whose nginx terminates the host's TLS and routes to signal, the relay and management; and management alone,
+# behind a Service of its own. Neither keeps state: management's is the tenant's PostgreSQL.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: netbird
+spec:
+  interval: 1h
+  # A migration on real disks, and management waiting for Kanidm as it starts.
+  timeout: 15m
+  chartRef:
+    kind: OCIRepository
+    name: netbird
+  upgrade:
+    remediation:
+      # A rollback would run the previous management on a database the new one has migrated.
+      strategy: uninstall
+  values:
+    controllers:
+      netbird:
+        strategy: Recreate
+        annotations:
+          reloader.stakater.com/auto: "true"
+        initContainers:
+          # NetBird's own templating of the dashboard, which then runs the copy into /web for nginx.
+          web-env:
+            image:
+              repository: docker.io/netbirdio/dashboard
+              tag: v2.96.0-rootless@sha256:0f0097965c36bd4702eae6cdb007d6398ea7783f3d395942c909c7fb55a827d4
+            command: [/usr/local/init_react_envs.sh]
+            # Not cp -a, which can't keep the files' owner here and says so for each of them.
+            args: [sh, -c, cp -R /usr/share/nginx/html/. /web/]
+            env:
+              AUTH_AUTHORITY: https://idm.${TENANT_DOMAIN}/oauth2/openid/netbird-oidc
+              AUTH_CLIENT_ID: netbird-oidc
+              AUTH_AUDIENCE: netbird-oidc
+              # Kanidm refuses a request that asks for a scope it doesn't map, as the default list does.
+              AUTH_SUPPORTED_SCOPES: openid
+              AUTH_REDIRECT_URI: /nb-auth
+              AUTH_SILENT_REDIRECT_URI: /nb-silent-auth
+              USE_AUTH0: "false"
+              NETBIRD_MGMT_API_ENDPOINT: https://${HOST}.${TENANT_APP_DOMAIN}
+              NETBIRD_MGMT_GRPC_API_ENDPOINT: https://${HOST}.${TENANT_APP_DOMAIN}
+              NETBIRD_TOKEN_SOURCE: accessToken
+            # The templating writes into the image's own files, which belong to group 0.
+            securityContext:
+              runAsUser: 10001
+              runAsGroup: 0
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: [ALL]
+        containers:
+          web:
+            image:
+              repository: docker.io/netbirdio/dashboard
+              tag: v2.96.0-rootless@sha256:0f0097965c36bd4702eae6cdb007d6398ea7783f3d395942c909c7fb55a827d4
+            command: [/usr/sbin/nginx]
+            args: [-c, /etc/netbird/nginx.conf, -e, /dev/stderr]
+            probes:
+              liveness:
+                enabled: true
+                custom: true
+                spec:
+                  tcpSocket:
+                    port: 8443
+              readiness:
+                enabled: true
+                custom: true
+                spec:
+                  tcpSocket:
+                    port: 8443
+            securityContext:
+              runAsUser: 10001
+              runAsGroup: 0
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: [ALL]
+            resources:
+              requests:
+                cpu: 10m
+                memory: 16Mi
+              limits:
+                memory: 64Mi
+          signal:
+            image:
+              repository: ghcr.io/netbirdio/signal
+              tag: 0.82.0@sha256:0c0c38bbef7dcdfa1822b6d59844615db55dc7303b664e7aed498151edc0dbfb
+            args: [--port=10000, --metrics-port=9091, --log-file=console, --log-level=info]
+            probes:
+              liveness:
+                enabled: true
+                custom: true
+                spec:
+                  tcpSocket:
+                    port: 10000
+              readiness:
+                enabled: true
+                custom: true
+                spec:
+                  tcpSocket:
+                    port: 10000
+            # The image names no user of its own, and would run as root.
+            securityContext:
+              runAsUser: 65532
+              runAsGroup: 65532
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: [ALL]
+            resources:
+              requests:
+                cpu: 10m
+                memory: 16Mi
+              limits:
+                memory: 64Mi
+          relay:
+            image:
+              repository: ghcr.io/netbirdio/relay
+              tag: 0.82.0@sha256:8f6b9e4193653ede89e83dd4aa4e2cf2562579b3e2481dcf259a7ab28bcd5fa1
+            args:
+              - --listen-address=:8082
+              - --exposed-address=rels://${HOST}.${TENANT_APP_DOMAIN}:443
+              - --metrics-port=9092
+              - --log-level=warn
+            env:
+              NB_AUTH_SECRET:
+                valueFrom:
+                  secretKeyRef:
+                    name: netbird
+                    key: relay-secret
+            # Its health check dials its own public address, which nothing here reaches.
+            probes:
+              liveness:
+                enabled: true
+                custom: true
+                spec:
+                  tcpSocket:
+                    port: 8082
+              readiness:
+                enabled: true
+                custom: true
+                spec:
+                  tcpSocket:
+                    port: 8082
+            securityContext:
+              runAsUser: 65532
+              runAsGroup: 65532
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: [ALL]
+            resources:
+              requests:
+                cpu: 10m
+                memory: 16Mi
+              limits:
+                memory: 128Mi
+      management:
+        strategy: Recreate
+        annotations:
+          reloader.stakater.com/auto: "true"
+        pod:
+          # Where management looks for new releases, which it does every half hour without a switch to stop it, and
+          # where it would send metrics; the network policies stop those too.
+          hostAliases:
+            - ip: 127.0.0.1
+              hostnames: [pkgs.netbird.io, metrics.netbird.io, api.github.com]
+        containers:
+          management:
+            image:
+              repository: ghcr.io/netbirdio/management
+              tag: 0.82.0@sha256:07c8f979fcc980678cc64e584cf6b7b27204ceb4c871531b29e2dce39592e9ff
+            args:
+              - --config=/etc/netbird/management.json
+              - --datadir=/var/lib/netbird
+              - --port=8081
+              - --disable-legacy-port
+              - --metrics-port=9090
+              - --disable-anonymous-metrics
+              - --dns-domain=${DNS_DOMAIN}
+              - --log-file=console
+              - --log-level=info
+            env:
+              # Without it, a GeoLite download that fails stops management.
+              NB_DISABLE_GEOLOCATION: "true"
+              # Anything but false keeps a log of who did what.
+              NB_EVENT_ACTIVITY_LOG_ENABLED: "false"
+              SSL_CERT_DIR: /etc/ssl/certs:/etc/netbird-roots
+              NB_STORE_ENGINE_POSTGRES_DSN:
+                valueFrom:
+                  secretKeyRef:
+                    name: netbird
+                    key: store-dsn
+              NB_STORE_KEY:
+                valueFrom:
+                  secretKeyRef:
+                    name: netbird
+                    key: store-key
+              NB_RELAY_SECRET:
+                valueFrom:
+                  secretKeyRef:
+                    name: netbird
+                    key: relay-secret
+            probes:
+              # It answers only once it has migrated its database and found Kanidm.
+              startup:
+                enabled: true
+                custom: true
+                spec:
+                  httpGet:
+                    path: /api/instance
+                    port: 8081
+                  periodSeconds: 10
+                  failureThreshold: 90
+              # Not /api/instance, which logs every call.
+              liveness:
+                enabled: true
+                custom: true
+                spec:
+                  tcpSocket:
+                    port: 8081
+              readiness:
+                enabled: true
+                custom: true
+                spec:
+                  tcpSocket:
+                    port: 8081
+            securityContext:
+              runAsUser: 65532
+              runAsGroup: 65532
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: [ALL]
+            resources:
+              requests:
+                cpu: 20m
+                memory: 96Mi
+              limits:
+                memory: ${MEMORY}
+    defaultPodOptions:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+    service:
+      netbird:
+        controller: netbird
+        ipFamilyPolicy: PreferDualStack
+        ports:
+          https:
+            port: 443
+            targetPort: 8443
+      management:
+        controller: management
+        ports:
+          http:
+            port: 8081
+    persistence:
+      tmp:
+        type: emptyDir
+        globalMounts:
+          - path: /tmp
+      web:
+        type: emptyDir
+        advancedMounts:
+          netbird:
+            web-env:
+              - path: /web
+            web:
+              - path: /web
+                readOnly: true
+      config:
+        type: configMap
+        name: netbird
+        advancedMounts:
+          netbird:
+            web:
+              - path: /etc/netbird
+                readOnly: true
+          management:
+            management:
+              - path: /etc/netbird
+                readOnly: true
+      roots:
+        type: configMap
+        name: roots
+        advancedMounts:
+          management:
+            management:
+              - path: /etc/netbird-roots
+                readOnly: true
+      tls:
+        type: secret
+        name: tls
+        advancedMounts:
+          netbird:
+            web:
+              - path: /tls
+                readOnly: true
+      data:
+        type: emptyDir
+        advancedMounts:
+          management:
+            management:
+              - path: /var/lib/netbird

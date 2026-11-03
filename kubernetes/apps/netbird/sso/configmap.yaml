@@ -1,0 +1,37 @@
+---
+# NetBird's group, whose members tenant-admins manage and who may enrol only passkeys (Kanidm checks that only as a
+# credential is enrolled, so a person joins before they have any), and its public client in its tenant's Kanidm
+# (components/sso). Each ID comes from the tenant's Secret. Desktop and phone apps send members back to a port on their
+# own device, which suveraen-idm sync allows; the dashboard returns to its own two pages.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sso-netbird
+  namespace: ${TENANT}-kanidm
+  annotations:
+    suveraen/localhost-redirects: "true"
+data:
+  50-netbird.json: |
+    {
+      "id": "${NETBIRD_SSO_ID}",
+      "assertions": [
+        {
+          "state": "present",
+          "id": "${NETBIRD_USERS_ID}",
+          "class": ["account_policy", "group"],
+          "name": "netbird-users",
+          "credential_type_minimum": "passkey",
+          "entry_managed_by": ["tenant-admins"]
+        },
+        {
+          "state": "present",
+          "id": "${NETBIRD_OIDC_ID}",
+          "class": ["account", "oauth2_resource_server", "oauth2_resource_server_public"],
+          "name": "netbird-oidc",
+          "displayname": "NetBird",
+          "oauth2_rs_origin": ["https://netbird.${TENANT_APP_DOMAIN}/nb-auth", "https://netbird.${TENANT_APP_DOMAIN}/nb-silent-auth"],
+          "oauth2_rs_origin_landing": "https://netbird.${TENANT_APP_DOMAIN}/",
+          "oauth2_rs_scope_map": [{ "group": "netbird-users", "scopes": ["openid"] }]
+        }
+      ]
+    }

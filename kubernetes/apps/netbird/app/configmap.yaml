@@ -1,0 +1,127 @@
+---
+# Flux fills in ${...}; management fills in {{ .NB_* }} from its own environment, which takes them from Secret netbird,
+# so nothing here is secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: netbird
+data:
+  # Its one trusted reverse proxy is an address nothing connects from: none at all would trust what every client says
+  # of its address.
+  management.json: |
+    {
+      "Stuns": [{ "Proto": "udp", "URI": "stun:${HOST}.${TENANT_APP_DOMAIN}:${STUN_PORT}" }],
+      "Relay": {
+        "Addresses": ["rels://${HOST}.${TENANT_APP_DOMAIN}:443"],
+        "CredentialsTTL": "12h",
+        "Secret": "{{ .NB_RELAY_SECRET }}"
+      },
+      "Signal": { "Proto": "https", "URI": "${HOST}.${TENANT_APP_DOMAIN}:443" },
+      "Datadir": "/var/lib/netbird",
+      "DataStoreEncryptionKey": "{{ .NB_STORE_KEY }}",
+      "StoreConfig": { "Engine": "postgres" },
+      "HttpConfig": {
+        "AuthAudience": "netbird-oidc",
+        "AuthUserIDClaim": "sub",
+        "OIDCConfigEndpoint": "https://idm.${TENANT_DOMAIN}/oauth2/openid/netbird-oidc/.well-known/openid-configuration",
+        "IdpSignKeyRefreshEnabled": true
+      },
+      "IdpManagerConfig": { "ManagerType": "none" },
+      "DeviceAuthorizationFlow": { "Provider": "none" },
+      "PKCEAuthorizationFlow": {
+        "ProviderConfig": {
+          "ClientID": "netbird-oidc",
+          "Audience": "netbird-oidc",
+          "Scope": "openid",
+          "RedirectURLs": ["http://localhost:53000/", "http://localhost:54000/"],
+          "UseIDToken": false
+        }
+      },
+      "ReverseProxy": { "TrustedPeers": ["192.0.2.0/32"] },
+      "DisableDefaultPolicy": true
+    }
+  nginx.conf: |
+    # The container's process is nginx itself.
+    daemon off;
+    worker_processes 1;
+    pid /tmp/nginx.pid;
+    error_log /dev/stderr warn;
+    events { worker_connections 4096; }
+    http {
+      include /etc/nginx/mime.types;
+      default_type application/octet-stream;
+      access_log off;
+      server_tokens off;
+      client_body_temp_path /tmp/client;
+      proxy_temp_path /tmp/proxy;
+      fastcgi_temp_path /tmp/fastcgi;
+      uwsgi_temp_path /tmp/uwsgi;
+      scgi_temp_path /tmp/scgi;
+      server {
+        listen 8443 ssl;
+        listen [::]:8443 ssl;
+        http2 on;
+        ssl_certificate /tls/tls.crt;
+        ssl_certificate_key /tls/tls.key;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        # gRPC streams and relay WebSockets stay open for days.
+        client_header_timeout 1d;
+        client_body_timeout 1d;
+        send_timeout 1d;
+        location /relay {
+          proxy_pass http://127.0.0.1:8082;
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "Upgrade";
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-For "";
+          proxy_set_header X-Real-IP "";
+          proxy_set_header Forwarded "";
+          proxy_read_timeout 1d;
+          proxy_send_timeout 1d;
+        }
+        location /signalexchange.SignalExchange/ {
+          grpc_pass grpc://127.0.0.1:10000;
+          # A stream's messages over days count as one request body.
+          client_max_body_size 0;
+          grpc_set_header X-Forwarded-For "";
+          grpc_set_header X-Real-IP "";
+          grpc_set_header Forwarded "";
+          grpc_read_timeout 1d;
+          grpc_send_timeout 1d;
+          grpc_socket_keepalive on;
+        }
+        location /management.ManagementService/ {
+          grpc_pass grpc://netbird-management:8081;
+          client_max_body_size 0;
+          grpc_set_header X-Forwarded-For "";
+          grpc_set_header X-Real-IP "";
+          grpc_set_header Forwarded "";
+          grpc_read_timeout 1d;
+          grpc_send_timeout 1d;
+          grpc_socket_keepalive on;
+        }
+        # Unauthenticated and inert without NetBird's own IdP and proxy; closed here so a release cannot open them.
+        # Exact: a prefix would also close /api/setup-keys.
+        location = /api/setup { return 404; }
+        location /api/users/invites/ { return 404; }
+        location /api/reverse-proxy/ { return 404; }
+        location /api/ {
+          proxy_pass http://netbird-management:8081;
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-For "";
+          proxy_set_header X-Real-IP "";
+          proxy_set_header Forwarded "";
+        }
+        location / {
+          root /web;
+          try_files $uri $uri.html $uri/ =404;
+          add_header Content-Security-Policy "default-src 'none'; connect-src 'self' https://idm.${TENANT_DOMAIN}; frame-src 'self' https://idm.${TENANT_DOMAIN}; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; font-src 'self'; img-src 'self' data:; manifest-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests" always;
+          add_header Strict-Transport-Security "max-age=31536000" always;
+          add_header X-Content-Type-Options "nosniff" always;
+          add_header Cache-Control "no-store" always;
+        }
+        # The dashboard is a static export: its callback pages and nested routes are rendered by its 404 page.
+        error_page 404 /404.html;
+      }
+    }

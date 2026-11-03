@@ -1,0 +1,21 @@
+---
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ./configmap.yaml
+  - ./roots.yaml
+  - ./secret.yaml
+  - ./ocirepository.yaml
+  - ./helmrelease.yaml
+patches:
+  # Management alone signs in at Kanidm and keeps the mesh in PostgreSQL; the edge pod, which faces the internet,
+  # reaches neither.
+  - target:
+      kind: NetworkPolicy
+      name: ^to-(kanidm|postgres)$
+    patch: |-
+      - op: replace
+        path: /spec/podSelector
+        value:
+          matchLabels:
+            app.kubernetes.io/controller: management

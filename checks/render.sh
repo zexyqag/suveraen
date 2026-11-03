@@ -3,10 +3,11 @@
 # its own sources hold, a stand-in for each encrypted one, and strict substitution. Then checks the rules Flux itself
 # wouldn't catch, on what was rendered rather than on what a file says.
 # Usage: CLUSTER_RANGES=<the servers' ranges> KANIDM_VERSION=<the Kanidm client's version> \
-#   render.sh <kubernetes directory> <output directory>
+#   NETBIRD_PINS=<checks/netbird.nix as JSON> render.sh <kubernetes directory> <output directory>
 set -euo pipefail
 : "${CLUSTER_RANGES:?the ranges the servers give k3s (nixos/cluster.nix), as <setting>=<range> words}"
 : "${KANIDM_VERSION:?the version of the Kanidm client the platform builds, which the Kanidm server must match}"
+: "${NETBIRD_PINS:?the NetBird release and images checks/netbird.nix pins, as JSON}"
 out=$(realpath -m "$2")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -46,10 +47,11 @@ pgkinds=',ObjectBucketClaim.objectbucket.io,ObjectStore.barmancloud.cnpg.io,Job.
 export quotas hard appkinds
 privileged=pod-security.kubernetes.io/audit=privileged,pod-security.kubernetes.io/enforce=privileged
 privileged+=,pod-security.kubernetes.io/warn=privileged
-# Apps that terminate their users' TLS themselves, behind a listener that passes it through (edge/passthrough), which
-# skips the gateway's limits and pseudonyms, as it reads no request: an identity server, which must see its users'
-# passwords and passkeys where nothing else does.
-passthroughapps=kanidm
+# Apps that terminate their users' TLS themselves, behind a listener that passes it through (edge/passthrough, or
+# edge/passthrough-app for a host on the tenant's app domain), which skips the gateway's limits and pseudonyms, as it
+# reads no request: an identity server, which must see its users' passwords and passkeys where nothing else does, and
+# a mesh's control plane, whose streams and relayed connections outlive any request timeout.
+passthroughapps='kanidm netbird'
 # Traefik's options that could log or trust clients' addresses, or bypass the gateway's own settings for them.
 options='(?i)^--?(accesslog|log|entrypoints|forwardedheaders|proxyprotocol|experimental|providers)([.=]|$)'
 export options
@@ -107,6 +109,307 @@ bad += [k for k, v in (("domain", host), ("origin", "https://" + host)) if c.get
 if [m.get("path") for m in mounts] != [c.get("migration_path")]:
     bad.append("migration_path")
 print(" ".join(bad))
+'
+# Prints what the pods of an app's charts need at their most beyond its namespace's quota, from the rendered app (a JSON
+# list on stdin): each controller's pods, with the one more a rolling update starts, at their requests and limits, the
+# LimitRange's defaults for what a container leaves out, each init container against the others together, and one
+# more pod at the defaults, such as one that only asks the app something.
+quotafit='
+import json, math, re, sys
+docs = [d for d in json.load(sys.stdin) if isinstance(d, dict)]
+keys = ["requests.cpu", "requests.memory", "limits.memory", "requests.ephemeral-storage", "limits.ephemeral-storage"]
+units = {"m": 1, "": 1000, "k": 1000**2, "M": 1000**3, "G": 1000**4, "T": 1000**5, "Ki": 1000 * 1024,
+         "Mi": 1000 * 1024**2, "Gi": 1000 * 1024**3, "Ti": 1000 * 1024**4}
+
+def quantity(q):
+    m = re.fullmatch(r"([0-9]+)(m|k|M|G|T|Ki|Mi|Gi|Ti)?", str(q))
+    if not m:
+        raise SystemExit(f"{q} is not a whole quantity")
+    return int(m.group(1)) * units[m.group(2) or ""]
+
+defaults = [l for d in docs if d.get("kind") == "LimitRange" for l in d["spec"]["limits"]
+            if l.get("type") == "Container"]
+quota = [d for d in docs if d.get("kind") == "ResourceQuota"][0]["spec"]["hard"]
+charts = {d["metadata"]["name"] for d in docs if d.get("kind") == "OCIRepository"
+          and d["spec"].get("url", "").endswith("/app-template")}
+
+# What a container asks for and may use once the API server has taken its limits for requests it left out, and the
+# LimitRange has given it its defaults.
+def container(r):
+    out = {}
+    for key in keys:
+        kind, name = key.split(".", 1)
+        given = (r.get(kind) or {}).get(name)
+        if given is None and kind == "requests":
+            given = (r.get("limits") or {}).get(name)
+        if given is None:
+            given = (defaults[0].get("default" if kind == "limits" else "defaultRequest") or {}).get(name, 0)
+        out[key] = quantity(given)
+    return out
+
+# The resources of a container of a controller, with the defaults the chart gives its containers.
+def resources(ctl, c, init):
+    r = c.get("resources") or {}
+    options = (ctl.get("defaultContainerOptions") or {}).get("resources") or {}
+    if init and ctl.get("applyDefaultContainerOptionsToInitContainers", True) is not True:
+        return r
+    if ctl.get("defaultContainerOptionsStrategy", "overwrite") == "merge":
+        return {k: {**(options.get(k) or {}), **(r.get(k) or {})} for k in set(options) | set(r)}
+    return r or options
+
+def enabled(ctl, group):
+    return [c for c in (ctl.get(group) or {}).values() if c.get("enabled", True) is not False]
+
+need, pods = container({}), 1
+for release in docs:
+    if release.get("kind") != "HelmRelease" or (release["spec"].get("chartRef") or {}).get("name") not in charts:
+        continue
+    for ctl in ((release["spec"].get("values") or {}).get("controllers") or {}).values():
+        if ctl.get("enabled", True) is False:
+            continue
+        inits = enabled(ctl, "initContainers")
+        running = [container(resources(ctl, c, False)) for c in enabled(ctl, "containers")]
+        running += [container(resources(ctl, c, True)) for c in inits if c.get("restartPolicy") == "Always"]
+        once = [container(resources(ctl, c, True)) for c in inits if c.get("restartPolicy") != "Always"]
+        pod = {k: max([sum(r[k] for r in running)] + [r[k] for r in once]) for k in keys}
+        replicas = ctl.get("replicas", 1)
+        count = 1 if replicas is None else int(replicas)
+        if ctl.get("type", "deployment") == "deployment" and ctl.get("strategy", "Recreate") == "RollingUpdate":
+            rolling = ctl.get("rollingUpdate") or {}
+            surge = str(rolling.get("maxSurge", rolling.get("surge", "25%")))
+            count += math.ceil(count * int(surge[:-1]) / 100) if surge.endswith("%") else int(surge)
+        pods += count
+        for k in keys:
+            need[k] += count * pod[k]
+
+def shown(key, n):
+    return f"{n}m" if key.endswith("cpu") else f"{n / 1000 / 1024**2:g}Mi"
+
+bad = [f"{k} {shown(k, need[k])} of {quota[k]}" for k in keys if need[k] > quantity(quota[k])]
+bad += [f"pods {pods} of " + quota["pods"]] if pods > int(quota["pods"]) else []
+print(", ".join(bad))
+'
+# What is wrong with a tenant's mesh (apps/netbird) as rendered, a JSON list on stdin, for its host, its tenant's Kanidm
+# and the servers' STUN port given: its two controllers and their images, users, arguments and environment, and who
+# reaches the tenant's PostgreSQL and Kanidm; management.json, which management fills in from its environment; and
+# nginx.conf, which routes five paths alone.
+netbirdconfig='
+import json, os, re, sys
+docs = [d for d in json.load(sys.stdin) if isinstance(d, dict)]
+host, idm, stun = sys.argv[1:]
+pins = json.loads(os.environ["NETBIRD_PINS"])
+bad = []
+
+def server(name):
+    return "ghcr.io/netbirdio/" + name + ":" + pins["version"] + "@" + pins["digests"][name]
+
+dashboard = "docker.io/netbirdio/dashboard:" + pins["dashboard"]["tag"] + "@" + pins["dashboard"]["digest"]
+images = {"web-env": dashboard, "web": dashboard, "signal": server("signal"), "relay": server("relay"),
+          "management": server("management")}
+
+def one(kind, name):
+    found = [d for d in docs if d.get("kind") == kind and d["metadata"]["name"] == name]
+    return found[0] if len(found) == 1 else {}
+
+release = one("HelmRelease", "netbird").get("spec") or {}
+if ((release.get("upgrade") or {}).get("remediation") or {}).get("strategy") != "uninstall":
+    bad.append("an upgrade that fails is rolled back")
+controllers = (release.get("values") or {}).get("controllers") or {}
+shape = {name: (sorted(c.get("initContainers") or {}), sorted(c.get("containers") or {}))
+         for name, c in controllers.items()}
+if shape != {"netbird": (["web-env"], ["relay", "signal", "web"]), "management": ([], ["management"])}:
+    bad.append(f"controllers {shape}")
+containers = {}
+for name, c in controllers.items():
+    if c.get("type", "deployment") != "deployment" or c.get("strategy") != "Recreate" or c.get("replicas", 1) != 1 \
+            or c.get("enabled", True) is not True:
+        bad.append(f"{name} is not one pod that goes before the next starts")
+    for group in "initContainers", "containers":
+        containers.update(c.get(group) or {})
+
+def env(c):
+    e = c.get("env") or {}
+    if isinstance(e, list):
+        e = {x.get("name"): {k: v for k, v in x.items() if k != "name"} for x in e}
+    return {k: v["value"] if isinstance(v, dict) and list(v) == ["value"] else v for k, v in e.items()}
+
+def secret(key):
+    return {"valueFrom": {"secretKeyRef": {"name": "netbird", "key": key}}}
+
+envs = {
+    "web-env": {"AUTH_AUTHORITY": f"https://{idm}/oauth2/openid/netbird-oidc", "AUTH_CLIENT_ID": "netbird-oidc",
+                "AUTH_AUDIENCE": "netbird-oidc", "AUTH_SUPPORTED_SCOPES": "openid", "AUTH_REDIRECT_URI": "/nb-auth",
+                "AUTH_SILENT_REDIRECT_URI": "/nb-silent-auth", "USE_AUTH0": "false",
+                "NETBIRD_MGMT_API_ENDPOINT": f"https://{host}", "NETBIRD_MGMT_GRPC_API_ENDPOINT": f"https://{host}",
+                "NETBIRD_TOKEN_SOURCE": "accessToken"},
+    "web": {}, "signal": {},
+    "relay": {"NB_AUTH_SECRET": secret("relay-secret")},
+    "management": {"NB_DISABLE_GEOLOCATION": "true", "NB_EVENT_ACTIVITY_LOG_ENABLED": "false",
+                   "SSL_CERT_DIR": "/etc/ssl/certs:/etc/netbird-roots",
+                   "NB_STORE_ENGINE_POSTGRES_DSN": secret("store-dsn"), "NB_STORE_KEY": secret("store-key"),
+                   "NB_RELAY_SECRET": secret("relay-secret")},
+}
+levels = {"signal": ["info", "warn", "error"], "relay": ["warn", "error"], "management": ["info", "warn", "error"]}
+for name, c in containers.items():
+    image = c.get("image") or {}
+    ref = image.get("repository", "") + (":" + image["tag"] if image.get("tag") else "") \
+        + ("@" + image["digest"] if image.get("digest") else "")
+    if ref != images.get(name):
+        bad.append(f"{name} image {ref}")
+    have, want = env(c), envs.get(name, {})
+    bad += [f"{name} env {k}" for k in sorted(set(have) | set(want)) if have.get(k) != want.get(k)]
+    if c.get("envFrom"):
+        bad.append(f"{name} envFrom")
+    args = c.get("args") or []
+    if name in levels:
+        given = [a.split("=", 1)[1] for a in args if str(a).startswith("--log-level=")]
+        given += [args[i + 1] for i, a in enumerate(args[:-1]) if a == "--log-level"]
+        if len(given) != 1 or given[0] not in levels[name]:
+            bad.append(f"{name} log level {given}")
+        context = c.get("securityContext") or {}
+        if context.get("runAsUser") != 65532 or context.get("runAsGroup") != 65532:
+            bad.append(f"{name} runAsUser and runAsGroup")
+missing = {"--disable-anonymous-metrics", "--disable-legacy-port"}
+missing -= set((containers.get("management") or {}).get("args") or [])
+bad += [f"management without {a}" for a in sorted(missing)]
+if f"--exposed-address=rels://{host}:443" not in ((containers.get("relay") or {}).get("args") or []):
+    bad.append("relay exposed elsewhere")
+aliases = ((controllers.get("management") or {}).get("pod") or {}).get("hostAliases")
+if not isinstance(aliases, list) or [(a.get("ip"), sorted(a.get("hostnames") or [])) for a in aliases] \
+        != [("127.0.0.1", ["api.github.com", "metrics.netbird.io", "pkgs.netbird.io"])]:
+    bad.append("management hostAliases")
+policies = sorted(d["metadata"]["name"] for d in docs if d.get("kind") == "NetworkPolicy")
+if policies != ["default-deny", "dns", "same-namespace", "to-kanidm", "to-postgres"]:
+    bad.append(f"network policies {policies}")
+# The edge pod faces the internet, and needs neither.
+for name in "to-kanidm", "to-postgres":
+    if (one("NetworkPolicy", name).get("spec") or {}).get("podSelector") \
+            != {"matchLabels": {"app.kubernetes.io/controller": "management"}}:
+        bad.append(f"{name} for more than management")
+
+data = one("ConfigMap", "netbird").get("data") or {}
+text = data.get("management.json", "")
+# Management fills these in from its environment, where nothing but Secret netbird may give a value.
+secrets = {k for k, v in env(containers.get("management") or {}).items()
+           if isinstance(v, dict) and list(v) == ["valueFrom"] and list(v["valueFrom"]) == ["secretKeyRef"]
+           and v["valueFrom"]["secretKeyRef"].get("name") == "netbird"
+           and v["valueFrom"]["secretKeyRef"].get("optional", False) is False}
+for t in re.findall(r"[{][{].*?[}][}]", text, re.S):
+    m = re.fullmatch(r"[{][{] [.](NB_[A-Z0-9_]+) [}][}]", t)
+    if not m or m.group(1) not in secrets:
+        bad.append(f"management.json {t} not from Secret netbird")
+try:
+    j = json.loads(text)
+except ValueError as e:
+    j = {}
+    bad.append(f"management.json: {e}")
+http = j.get("HttpConfig") or {}
+pkce = (j.get("PKCEAuthorizationFlow") or {}).get("ProviderConfig") or {}
+template = re.compile(r"[{][{] [.]NB_[A-Z0-9_]+ [}][}]")
+for what, ok in [
+    ("DisableDefaultPolicy", j.get("DisableDefaultPolicy") is True),
+    ("EmbeddedIdP", "EmbeddedIdP" not in j),
+    ("ManagerType", (j.get("IdpManagerConfig") or {}).get("ManagerType") == "none"),
+    ("DeviceAuthorizationFlow", (j.get("DeviceAuthorizationFlow") or {}).get("Provider") == "none"),
+    ("OIDCConfigEndpoint", http.get("OIDCConfigEndpoint")
+        == f"https://{idm}/oauth2/openid/netbird-oidc/.well-known/openid-configuration"),
+    ("AuthAudience", http.get("AuthAudience") == "netbird-oidc"),
+    ("ClientID", pkce.get("ClientID") == "netbird-oidc" and pkce.get("Audience") == "netbird-oidc"),
+    ("Scope", pkce.get("Scope") == "openid"),
+    ("ClientSecret", "ClientSecret" not in text),
+    # Every device sign-in asks Kanidm for a fresh one.
+    ("DisablePromptLogin", "DisablePromptLogin" not in pkce),
+    ("RedirectURLs", pkce.get("RedirectURLs") == ["http://localhost:53000/", "http://localhost:54000/"]),
+    ("UseIDToken", pkce.get("UseIDToken") is False),
+    # An address nothing connects from: none at all would trust what every client says of its address.
+    ("TrustedPeers", (j.get("ReverseProxy") or {}).get("TrustedPeers") == ["192.0.2.0/32"]),
+    ("Signal", j.get("Signal") == {"Proto": "https", "URI": f"{host}:443"}),
+    ("Relay", (j.get("Relay") or {}).get("Addresses") == [f"rels://{host}:443"]
+        and template.fullmatch(str((j.get("Relay") or {}).get("Secret")))),
+    ("Stuns", j.get("Stuns") == [{"Proto": "udp", "URI": f"stun:{host}:{stun}"}]),
+    ("StoreConfig", (j.get("StoreConfig") or {}).get("Engine") == "postgres"),
+    ("DataStoreEncryptionKey", template.fullmatch(str(j.get("DataStoreEncryptionKey")))),
+]:
+    if not ok:
+        bad.append(f"management.json {what}")
+
+# nginx.conf as directives: a name, its arguments and, for a block, what it holds.
+def parse(text):
+    tokens = re.findall(r"\"((?:[^\"\\]|\\.)*)\"|(#[^\n]*)|([{};])|([^\s{};\"#]+)", text)
+    stack = [[]]
+    words = []
+    for quoted, comment, mark, word in tokens:
+        if comment:
+            continue
+        if mark == ";":
+            stack[-1].append((words[0], words[1:], None))
+            words = []
+        elif mark == "{":
+            block = []
+            stack[-1].append((words[0], words[1:], block))
+            stack.append(block)
+            words = []
+        elif mark == "}":
+            stack.pop()
+        else:
+            words.append(word or quoted)
+    return stack[0]
+
+def find(block, name):
+    return [d for d in block or [] if d[0] == name]
+
+def walk(block):
+    for d in block or []:
+        yield d
+        yield from walk(d[2])
+
+conf = parse(data.get("nginx.conf", ""))
+if ("daemon", ["off"], None) not in conf:
+    bad.append("nginx.conf without daemon off")
+logs = [d[1] for d in walk(conf) if d[0] == "access_log"]
+https = find(conf, "http")
+if not logs or any(a != ["off"] for a in logs) or ("access_log", ["off"], None) not in (https[0][2] if https else []):
+    bad.append("nginx.conf logs access")
+servers = [d for h in https for d in find(h[2], "server")]
+server_block = servers[0][2] if len(servers) == 1 and len(https) == 1 else []
+if not server_block:
+    bad.append("nginx.conf has no one server")
+if find(server_block, "error_page") != [("error_page", ["404", "/404.html"], None)]:
+    bad.append("nginx.conf without error_page 404 /404.html")
+upstreams = {"/relay": ("proxy_pass", "http://127.0.0.1:8082"),
+             "/signalexchange.SignalExchange/": ("grpc_pass", "grpc://127.0.0.1:10000"),
+             "/management.ManagementService/": ("grpc_pass", "grpc://netbird-management:8081"),
+             "/api/": ("proxy_pass", "http://netbird-management:8081")}
+refused = ["= /api/setup", "/api/users/invites/", "/api/reverse-proxy/"]
+seen = []
+for _, args, body in find(server_block, "location"):
+    where = " ".join(args)
+    seen.append(where)
+    passes = [(d[0], d[1]) for d in walk(body) if d[0] in ("proxy_pass", "grpc_pass")]
+    if find(body, "location"):
+        bad.append(f"nginx.conf location {where} holds others")
+    if where in upstreams:
+        if passes != [(upstreams[where][0], [upstreams[where][1]])]:
+            bad.append(f"nginx.conf {where} not routed to {upstreams[where][1]} alone")
+        header = "proxy_set_header" if upstreams[where][0] == "proxy_pass" else "grpc_set_header"
+        for name in "X-Forwarded-For", "X-Real-IP", "Forwarded":
+            if (header, [name, ""], None) not in body:
+                bad.append(f"nginx.conf {where} keeps {name}")
+    elif where in refused:
+        if body != [("return", ["404"], None)]:
+            bad.append(f"nginx.conf {where} not refused")
+    elif where == "/":
+        if passes or find(body, "root") != [("root", ["/web"], None)]:
+            bad.append("nginx.conf / is not the dashboard alone")
+        csp = [d[1][1] for d in find(body, "add_header") if d[1][:1] == ["Content-Security-Policy"] and len(d[1]) > 1]
+        named = {w for p in csp for w in re.split(r"[\s;]+", p) if "." in w or "://" in w}
+        if len(csp) != 1 or named - {f"https://{idm}", f"https://{host}", f"wss://{host}"}:
+            bad.append(f"nginx.conf CSP names {sorted(named)}")
+    else:
+        bad.append(f"nginx.conf location {where}")
+bad += [f"nginx.conf {where} not refused" for where in refused if where not in seen]
+bad += [f"nginx.conf {where} not routed" for where in list(upstreams) + ["/"] if where not in seen]
+print("; ".join(bad))
 '
 # One line of JSON for each source of a tenant's Kanidm migrations: its ConfigMap, and for an app the hosts its
 # listeners name and its Secret sso, in files named by the arguments after the cluster, tenant, source and app.
@@ -250,6 +553,17 @@ for line in sys.stdin:
                 if a.get("entry_managed_by") != managers.get(name):
                     bad(where, f"idm_admins manages platform-admins, and tenant-admins their own, as a list in Kanidm"
                         f" 1.11: {name}")
+                groups.add(name)
+            elif classes == ["account_policy", "group"]:
+                # Kanidm holds a person to the strictest policy of all their groups, so the group of an app only
+                # tightens what its members may enrol, which Kanidm checks as one is enrolled.
+                extra = set(a) - {"state", "id", "class", "name", "description", "entry_managed_by",
+                                  "credential_type_minimum"}
+                if a.get("entry_managed_by") != ["tenant-admins"]:
+                    bad(where, f"tenant-admins manage the members of every group but the admin groups, as a list in"
+                        f" Kanidm 1.11: {name}")
+                if a.get("credential_type_minimum") != "passkey":
+                    bad(where, f"an app group that is an account policy has its members enrol passkeys alone: {name}")
                 groups.add(name)
             elif classes in (sorted(basic), sorted(public)) and source != "kanidm-migrations":
                 extra = set(a) - clientkeys
@@ -426,14 +740,15 @@ for dir in kubernetes/apps/*/; do
         continue
       fi
       # A host passed through holds no certificate, so it needs no issuer.
-      yq ea -e "select(documentIndex == $i)"' | ((.metadata | keys | join(",")) == "name"
+      yq ea -e "select(documentIndex == $i)"' | (.spec.path | test("^[.]/kubernetes/edge/passthrough(-app)?$"))
+        as $through | ((.metadata | keys | join(",")) == "name"
         and (.spec | keys | sort | join(",")) == "dependsOn,path,postBuild"
-        and (.spec.path | test("^[.]/kubernetes/edge/(app|identity|apex|passthrough)$"))
-        and (.spec.path != "./kubernetes/edge/passthrough" or strenv(passthrough) == "true")
+        and (.spec.path | test("^[.]/kubernetes/edge/(app|identity|apex|passthrough|passthrough-app)$"))
+        and ($through == false or strenv(passthrough) == "true")
         and ((([.spec.dependsOn[].name] | sort | join(",")) == (["${TENANT}-" + strenv(app), "gateway", "issuer"]
-          | sort | join(",")) and .spec.path != "./kubernetes/edge/passthrough")
+          | sort | join(",")) and $through == false)
           or (([.spec.dependsOn[].name] | sort | join(",")) == (["${TENANT}-" + strenv(app), "gateway"]
-          | sort | join(",")) and .spec.path == "./kubernetes/edge/passthrough"))
+          | sort | join(",")) and $through))
         and (.spec.postBuild | keys | join(",")) == "substitute"
         and .spec.postBuild.substitute.APP == strenv(app)
         and (.spec.postBuild.substitute.EDGE | test("^[a-z][a-z0-9]{1,15}$"))
@@ -544,6 +859,16 @@ source_ids() { # Kustomization, path, condition, app
       "${bad//;/; }"
   fi
   sed -n 's/^key //p' "$found" >"$w/$name.idkeys"
+}
+# The hosts passed through to a tenant's app, from its edges as rendered: on the tenant's own domain (edge/passthrough),
+# or on its app domain (edge/passthrough-app).
+passed() { # tenant, app
+  local edge path domain
+  grep -E "^$1-$2-edge-[a-z0-9]+ ./kubernetes/edge/passthrough(-app)?$" "$w/paths" | while read -r edge path; do
+    domain=TENANT_APP_DOMAIN
+    [ "$path" != ./kubernetes/edge/passthrough ] || domain=TENANT_DOMAIN
+    yq ".spec.postBuild.substitute | .HOST + \".\" + .$domain" "$w/$edge.build.yaml"
+  done
 }
 for dir in kubernetes/clusters/*/; do
   dir=${dir%/}
@@ -890,6 +1215,10 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           [ "$(quantity "$limit")" -le "$(quantity "$quota")" ] \
             || fail "$cluster/$name: the LimitRange's $field, $limit, is above the quota's ${pair#*:}, $quota"
         done
+        bad=$(yq ea -o=json -I=0 '[.]' "$file" | python3 -I -c "$quotafit")
+        [ -z "$bad" ] || fail "$cluster/$name: the quota holds every pod the app's charts run at once, at its" \
+          "requests and limits or the LimitRange's defaults, with the one more a rolling update starts, and one more" \
+          "pod at the defaults: $bad"
         # Every Job the namespace may hold at once: each CronJob's running one and those it keeps, the others, a mover
         # for each of VolSync's copies and restores, and the one CloudNativePG runs to make an instance.
         need=$({
@@ -912,13 +1241,13 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           || fail "$cluster/$name: the quota's count/configmaps, $quota, holds every ConfigMap made in the namespace" \
             "and the cluster's CA: $need"
         # An app signs in through its tenant's Kanidm only with its attachment, which it waits for, and reaches Kanidm
-        # by components/sso-client alone.
+        # by components/sso-client alone, from those of its pods it chooses.
         if grep -qxF "$t-$app-sso" <<<"$known"; then
           want='{"egress":[{"ports":[{"port":8443}],"to":[{"namespaceSelector":{"matchLabels":'
           want+='{"kubernetes.io/metadata.name":"'$t'-kanidm"}},"podSelector":{"matchLabels":'
-          want+='{"app.kubernetes.io/controller":"kanidm"}}}]}],"podSelector":{},"policyTypes":["Egress"]}'
+          want+='{"app.kubernetes.io/controller":"kanidm"}}}]}],"policyTypes":["Egress"]}'
           [ "$(yq ea -o=json -I=0 '[select(.kind == "NetworkPolicy" and .metadata.name == "to-kanidm")
-            | .spec | sort_keys(..)] | .[]' "$file")" = "$want" ] \
+            | .spec | del(.podSelector) | sort_keys(..)] | .[]' "$file")" = "$want" ] \
             || fail "$cluster/$name: an app that signs in through Kanidm reaches it by components/sso-client"
           yq ea -e "select($fluxks and .metadata.name == \"$t-$app\") | .spec.dependsOn
             | any_c(.name == \"$t-$app-sso\")" "$rendered/tenant-$t.yaml" >/dev/null \
@@ -930,10 +1259,7 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
             "it or holds Secret sso: $bad"
         fi
         if [ "$passthrough" = true ]; then
-          passhost=$(grep -E "^$t-$app-edge-[a-z0-9]+ ./kubernetes/edge/passthrough$" "$w/paths" \
-            | while read -r edge _; do
-              yq '.spec.postBuild.substitute | .HOST + "." + .TENANT_DOMAIN' "$w/$edge.build.yaml"
-            done)
+          passhost=$(passed "$t" "$app")
           [ "$(wc -w <<<"$passhost")" = 1 ] \
             || fail "$cluster/$name: an app that terminates TLS itself has one host passed through to it:" $passhost
           export passhost
@@ -949,7 +1275,7 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
             and .[0].spec.privateKey.rotationPolicy == "Always")' "$file" >/dev/null \
             || fail "$cluster/$name: an app that terminates TLS itself holds one certificate, tls, for the host" \
               "passed through to it, $passhost, alone, from the public issuer, with a new ECDSA key each time, into" \
-              "Secret tls labelled with tenant $t (components/passthrough)"
+              "Secret tls labelled with tenant $t (components/passthrough, components/passthrough-app)"
           yq ea -e '[select(.kind == "Namespace")] | .[0].metadata.labels."suveraen/passthrough" == "true"' "$file" \
             >/dev/null || fail "$cluster/$name: an app that terminates TLS itself is labelled suveraen/passthrough"
         fi
@@ -977,6 +1303,21 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           python3 -I -c "$migrationsource" "$cluster" "$t" kanidm-migrations kanidm \
             <(yq ea -o=json -I=0 '[select(.kind == "ConfigMap" and .metadata.name == "kanidm-migrations")] | .[0]' \
               "$file") <(echo '[]') <(echo '[]') >>"$work/migrations.jsonl"
+        fi
+        if [ "$app" = netbird ]; then
+          # One host: Kanidm's own rules hold it to one, and the mesh's sign-in waits for Kanidm.
+          idm=$(passed "$t" kanidm)
+          stun=$(yq '.STUN_PORT // ""' "$w/$name.vars.yaml")
+          bad=$(yq ea -o=json -I=0 '[.]' "$file" | python3 -I -c "$netbirdconfig" "$passhost" "$idm" "$stun")
+          [ -z "$bad" ] || fail "$cluster/$name: a tenant's mesh runs the images checks/netbird.nix pins, in two" \
+            "controllers whose pods go before new ones start, as users of their own, logging little, calling nowhere" \
+            "and reaching the tenant's PostgreSQL and Kanidm from management alone," \
+            "with no NetBird settings in its environment but its own, and an upgrade that fails is installed again," \
+            "never rolled back; management keeps no default policy, IdP or devices' setup of its own, signs in only" \
+            "with its own Kanidm, by scope openid and on the devices' own ports, asking afresh each time, takes every" \
+            "secret from Secret netbird and names its own host alone; nginx stays in the foreground, routes five" \
+            "paths alone, refuses three, renders the dashboard's pages, clears what clients say of their addresses" \
+            "and logs no access: $bad"
         fi
         ;;
       ./kubernetes/apps/*/sso)
@@ -1028,6 +1369,7 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           "storage " + (.spec.storage.storageClass // "-") + "/" + (.spec | has("walStorage") | tostring) + "/"
             + (.spec.inheritedMetadata.labels."suveraen/backup" // "-"),
           "pg_hba " + (.spec.postgresql.pg_hba // [] | join(";")),
+          "pg_ident " + (.spec.postgresql.pg_ident // [] | join(";")),
           "archive " + ([.spec.plugins[] | .name + ":" + (.isWALArchiver // false | tostring) + ":"
             + (.parameters | to_entries | map(.key + "=" + .value) | join("+"))] | join(";")),
           "bootstrap " + ((.spec.bootstrap // {}) | keys | join(",")) + ":" + (.spec.bootstrap.recovery.source // "")
@@ -1035,12 +1377,14 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
             | join(","))] | .[]' "$file" | sed 's/^bootstrap initdb::$/bootstrap initdb/' >"$w/$name.pg"
         printf '%s\n' "prune disabled" "superuser false" "image false/ClusterImageCatalog/postgresql" \
           "storage ceph-block/false/postgres" "pg_hba hostssl sameuser all all scram-sha-256;host all all all reject" \
+          "pg_ident local postgres all" \
           "archive barman-cloud.cloudnative-pg.io:true:barmanObjectName=postgres+serverName=postgres-$generation" \
           "bootstrap $from" >"$w/$name.pg.want"
         bad=$(diff "$w/$name.pg.want" "$w/$name.pg" | sed -n 's/^> //p' | paste -sd';' || true)
         [ -z "$bad" ] || fail "$cluster/$name: a tenant's PostgreSQL is never pruned, has no superuser access, takes" \
           "its image from the catalog and its volume from ceph-block, labelled as Barman's to back up, lets each role" \
-          "reach its own database alone over TLS, and archives with Barman to postgres-$generation: $bad"
+          "reach its own database alone over TLS, and what runs in an instance as its own user sign in as any role, and" \
+          "archives with Barman to postgres-$generation: $bad"
         # Its namespace's quota holds every instance with its Barman sidecar, a job copying the bucket and one checking
         # a copy.
         app=$rendered/$t-postgres.yaml
@@ -1088,7 +1432,8 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
         [ -z "$bad" ] || fail "$cluster/$name: an app's role logs in with its Secret and nothing more, owns its" \
           "database of the same name, and is reached from $t-$app alone: $bad"
         ;;
-      ./kubernetes/edge/app | ./kubernetes/edge/identity | ./kubernetes/edge/apex | ./kubernetes/edge/passthrough)
+      ./kubernetes/edge/app | ./kubernetes/edge/identity | ./kubernetes/edge/apex | ./kubernetes/edge/passthrough \
+        | ./kubernetes/edge/passthrough-app)
         [[ $name =~ ^$t-([a-z0-9]+)-edge-([a-z0-9]+)$ ]] && [ -n "$t" ] \
           || fail "$cluster/$name: a host is <tenant>-<app>-edge-<key>, one of its tenant's"
         app=${BASH_REMATCH[1]}
@@ -1097,13 +1442,13 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
         export app base
         grep -qxF "$t-$app" <<<"$known" || fail "$cluster/$name: a host belongs to an app its tenant runs, $t-$app"
         case ${path##*/} in
-          app) host='.HOST + "." + .TENANT_APP_DOMAIN' ;;
+          app | passthrough-app) host='.HOST + "." + .TENANT_APP_DOMAIN' ;;
           identity | passthrough) host='.HOST + "." + .TENANT_DOMAIN' ;;
           apex) host='.TENANT_DOMAIN' ;;
         esac
         host=$(yq ".spec.postBuild.substitute | $host" "$w/$name.build.yaml")
         export host
-        if [ "${path##*/}" = passthrough ]; then
+        if [[ ${path##*/} == passthrough* ]]; then
           grep -qxF "$app" <<<"${passthroughapps// /$'\n'}" \
             || fail "$cluster/$name: only an app that terminates TLS itself is passed through, not $app"
           objects="Gateway/gateway/$base/$t,NetworkPolicy/$t-$app/from-gateway-$key/$t,TLSRoute/$t-$app/$key/$t"
@@ -1575,6 +1920,10 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       | .[]' \
       "$rendered/cluster.yaml")
     [ -z "$bad" ] || fail "$cluster: tenant secrets are encrypted in every value: $bad"
+    bundle=$(yq ea '[select(.kind == "ConfigMap" and .metadata.name == "cluster-settings")] | .[0].data.PUBLIC_CA_BUNDLE
+      // ""' "$rendered/cluster.yaml")
+    [ -z "$bundle" ] || fail "$cluster: the public issuer's certificates chain to roots the images hold, so" \
+      "PUBLIC_CA_BUNDLE is empty"
   fi
 
   # Two copies off-site at two providers, which a real cluster reaches over TLS only.

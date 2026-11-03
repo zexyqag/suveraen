@@ -46,6 +46,11 @@ spec:
     pg_hba:
       - hostssl sameuser all all scram-sha-256
       - host all all all reject
+    # What runs in an instance as its own user, already the superuser, may sign in as any role, so that the servers'
+    # tools work in an app's database as the app's own role (nixos/mesh.sh): as the superuser they would run whatever
+    # that role planted there with every right.
+    pg_ident:
+      - local postgres all
     parameters:
       # Statements, and the members' data in them, stay out of the logs.
       log_min_error_statement: fatal

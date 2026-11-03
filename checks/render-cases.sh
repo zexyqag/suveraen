@@ -682,6 +682,8 @@ refuses database-reached-elsewhere "$role" "sed -i 's/name: \${TENANT}-\${APP}\$
 refuses db-secret-opaque "$role" "yq -i '.type = \"Opaque\"' apps/hello/db/secret.yaml"
 refuses superuser-access "$pg" "yq -i '.spec.enableSuperuserAccess = true' $C"
 refuses pg-hba-open "$pg" "yq -i '.spec.postgresql.pg_hba = [\"host all all all scram-sha-256\"]' $C"
+refuses pg-ident-other "pg_ident local postgres all;local nobody postgres" \
+  "yq -i '.spec.postgresql.pg_ident += [\"local nobody postgres\"]' $C"
 refuses cluster-image-name "$pg" "yq -i '.spec.imageName = \"ghcr.io/cloudnative-pg/postgresql:18\"' $C"
 refuses cluster-prunable "$pg" "yq -i 'del(.metadata.annotations)' $C"
 refuses cluster-local-storage "$pg" "yq -i '.spec.storage.storageClass = \"local-path\"' $C"
@@ -801,6 +803,95 @@ refuses max-age-number "Flux takes only strings as values to substitute: bravo-p
 refuses max-age-weeks "bravo-postgres: $age: ObjectStore/postgres" "knob POSTGRES_BASE_MAX_AGE 2w"
 refuses max-age-missing "$age: ReplicationSource/data-2" \
   "yq -i '(select(.metadata.name == \"data-2\") | .metadata) |= del(.annotations)' components/volsync/volume.yaml"
+
+# A tenant's mesh.
+N=apps/netbird/app/configmap.yaml
+H=apps/netbird/app/helmrelease.yaml
+refuses mesh-default-policy "management.json DisableDefaultPolicy" \
+  "sed -i 's/\"DisableDefaultPolicy\": true/\"DisableDefaultPolicy\": false/' $N"
+refuses mesh-embedded-idp "management.json EmbeddedIdP" \
+  "sed -i 's/^      \"DisableDefaultPolicy\": true$/      \"EmbeddedIdP\": { \"Enabled\": true },\n&/' $N"
+refuses mesh-scopes "management.json Scope" "sed -i 's/\"Scope\": \"openid\"/\"Scope\": \"openid profile email\"/' $N"
+refuses mesh-silent-sign-in "management.json DisablePromptLogin" \
+  "sed -i 's/\"UseIDToken\": false/\"UseIDToken\": false,\n          \"DisablePromptLogin\": true/' $N"
+refuses mesh-template-unset "management.json {{ .NB_STORE_KEYS }} not from Secret netbird" \
+  "sed -i 's/{{ .NB_STORE_KEY }}/{{ .NB_STORE_KEYS }}/' $N"
+refuses mesh-proxy-service "nginx.conf location /management.ProxyService/" \
+  "sed -i 's|^        location /api/ {\$|        location /management.ProxyService/ {\n          grpc_pass \
+grpc://netbird-management:8081;\n        }\n&|' $N"
+refuses mesh-setup-open "nginx.conf = /api/setup not refused" "sed -i '/location = \\/api\\/setup/d' $N"
+refuses mesh-setup-prefix "nginx.conf location /api/setup;" "sed -i 's|location = /api/setup|location /api/setup|' $N"
+refuses mesh-daemonized "nginx.conf without daemon off" "sed -i '/^    daemon off;\$/d' $N"
+refuses mesh-no-error-page "nginx.conf without error_page 404 /404.html" "sed -i '/error_page 404/d' $N"
+refuses mesh-forwarded "nginx.conf /relay keeps X-Real-IP" "sed -i '0,/proxy_set_header X-Real-IP \"\";/{//d}' $N"
+refuses mesh-geolocation "management env NB_DISABLE_GEOLOCATION" \
+  "yq -i '.spec.values.controllers.management.containers.management.env.NB_DISABLE_GEOLOCATION = \"false\"' $H"
+refuses mesh-events "management env NB_EVENT_ACTIVITY_LOG_ENABLED" \
+  "yq -i '.spec.values.controllers.management.containers.management.env.NB_EVENT_ACTIVITY_LOG_ENABLED = \"true\"' $H"
+refuses mesh-relay-info "relay log level ['info']" "sed -i 's/--log-level=warn/--log-level=info/' $H"
+refuses mesh-management-debug "management log level ['debug']" \
+  "sed -i 's/^              - --log-level=info\$/              - --log-level=debug/' $H"
+refuses mesh-phone-home "management hostAliases" \
+  "yq -i 'del(.spec.values.controllers.management.pod.hostAliases[0].hostnames[0])' $H"
+refuses mesh-image-version "signal image ghcr.io/netbirdio/signal:0.81.5@" \
+  "sed -i '0,/tag: 0.82.0@/s//tag: 0.81.5@/' $H"
+refuses mesh-management-root "management runAsUser and runAsGroup" \
+  "yq -i 'del(.spec.values.controllers.management.containers.management.securityContext.runAsUser)' $H"
+refuses mesh-rollback "an upgrade that fails is rolled back" \
+  "yq -i '.spec.upgrade.remediation.strategy = \"rollback\"' $H"
+refuses mesh-ephemeral-quota "the quota holds every pod the app's charts run at once" \
+  "yq -i '.spec.postBuild.substitute.NETBIRD_QUOTA_EPHEMERAL_STORAGE = \"512Mi\"' $T/alpha/tenant.yaml"
+refuses mesh-internet "network policies ['default-deny', 'dns', 'internet'," \
+  "sed -i 's|^    - ../../../components/passthrough-app\$|&\n    - ../../../components/internet|' apps/netbird/ks.yaml"
+refuses mesh-edge-reaches-backends "to-kanidm for more than management" "yq -i 'del(.patches)' apps/netbird/app/kustomization.yaml"
+refuses mesh-extra-container "controllers {" \
+  "yq -i '.spec.values.controllers.management.initContainers.x = .spec.values.controllers.netbird.initContainers[\"web-env\"]' $H"
+refuses mesh-rolling-update "management is not one pod that goes before the next starts" \
+  "yq -i '.spec.values.controllers.management.strategy = \"RollingUpdate\"
+   | .spec.values.controllers.management.rollingUpdate.surge = 0' $H"
+refuses mesh-env-from "management envFrom" \
+  "yq -i '.spec.values.controllers.management.containers.management.envFrom = [{\"secretRef\": {\"name\": \"netbird\"}}]' $H"
+refuses mesh-metrics "management without --disable-anonymous-metrics" "sed -i '/--disable-anonymous-metrics/d' $H"
+refuses mesh-relay-exposed "relay exposed elsewhere" \
+  "sed -i 's|--exposed-address=rels://\${HOST}.\${TENANT_APP_DOMAIN}:443|--exposed-address=rels://relay.example.test:443|' $H"
+refuses mesh-oidc-elsewhere "management.json OIDCConfigEndpoint" \
+  "sed -i 's|https://idm.\${TENANT_DOMAIN}/oauth2/openid/netbird-oidc/.well-known|https://idm.example.test/oauth2/openid/netbird-oidc/.well-known|' $N"
+refuses mesh-client-secret "management.json ClientSecret" \
+  "sed -i 's/\"ClientID\": \"netbird-oidc\",/&\n          \"ClientSecret\": \"x\",/' $N"
+refuses mesh-redirect-elsewhere "management.json RedirectURLs" \
+  "sed -i 's|\"http://localhost:54000/\"\]|\"http://localhost:54000/\", \"https://example.test/\"]|' $N"
+refuses mesh-idp-manager "management.json ManagerType" "sed -i 's/\"ManagerType\": \"none\"/\"ManagerType\": \"keycloak\"/' $N"
+refuses mesh-device-flow "management.json DeviceAuthorizationFlow" \
+  "sed -i 's/\"Provider\": \"none\"/\"Provider\": \"hosted\"/' $N"
+refuses mesh-trusted-peers "management.json TrustedPeers" \
+  "sed -i 's|\"TrustedPeers\": \[\"192.0.2.0/32\"\]|\"TrustedPeers\": []|' $N"
+refuses mesh-signal-elsewhere "management.json Signal" \
+  "sed -i 's|\"URI\": \"\${HOST}.\${TENANT_APP_DOMAIN}:443\"|\"URI\": \"signal.example.test:443\"|' $N"
+refuses mesh-relay-elsewhere "management.json Relay" \
+  "sed -i 's|\"rels://\${HOST}.\${TENANT_APP_DOMAIN}:443\"|\"rels://relay.example.test:443\"|' $N"
+refuses mesh-stun-elsewhere "management.json Stuns" \
+  "sed -i 's|stun:\${HOST}.\${TENANT_APP_DOMAIN}:\${STUN_PORT}|stun:stun.example.test:3478|' $N"
+refuses mesh-access-log "nginx.conf logs access" "sed -i 's|^      access_log off;\$|      access_log /dev/stdout;|' $N"
+refuses mesh-csp-host "nginx.conf CSP names ['https://cdn.example.test'," \
+  "sed -i \"s|connect-src 'self' |connect-src 'self' https://cdn.example.test |\" $N"
+refuses mesh-dashboard-proxied "nginx.conf / is not the dashboard alone" \
+  "sed -i 's|^          root /web;\$|          proxy_pass http://example.test;|' $N"
+refuses mesh-api-elsewhere "nginx.conf /api/ not routed to http://netbird-management:8081 alone" \
+  "sed -i 's|^          proxy_pass http://netbird-management:8081;\$|          proxy_pass http://example.test;|' $N"
+refuses passthrough-app-for-hello "kubernetes/apps/hello/ks.yaml: a host is \${TENANT}-hello-edge-<EDGE>" \
+  "yq -i '(select(documentIndex == 1) | .spec.path) = \"./kubernetes/edge/passthrough-app\"
+   | (select(documentIndex == 1) | .spec.dependsOn) |= map(select(.name != \"issuer\"))' apps/hello/ks.yaml"
+refuses real-cluster-public-ca "prod: the public issuer's certificates chain to roots the images hold" \
+  "$real; yq -i '.data.PUBLIC_CA_BUNDLE = \"eA==\"' clusters/prod/settings.yaml"
+refuses mesh-group-session "netbird-users sets ['authsession_expiry']" \
+  "sed -i 's/^          \"credential_type_minimum\": \"passkey\",\$/&\n          \"authsession_expiry\": 3600,/' \
+  apps/netbird/sso/configmap.yaml"
+refuses mesh-group-any-credential "an app group that is an account policy has its members enrol passkeys alone" \
+  "sed -i 's/\"credential_type_minimum\": \"passkey\"/\"credential_type_minimum\": \"any\"/' \
+  apps/netbird/sso/configmap.yaml"
+refuses mesh-group-unmanaged "as a list in Kanidm 1.11: netbird-users" \
+  "sed -i '/\"entry_managed_by\": \[\"tenant-admins\"\]\$/d; s/\"credential_type_minimum\": \"passkey\",/\"credential_type_minimum\": \"passkey\"/' \
+  apps/netbird/sso/configmap.yaml"
 
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"

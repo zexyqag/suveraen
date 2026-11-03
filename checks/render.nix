@@ -5,6 +5,7 @@
   kubernetes,
   ranges,
   kanidm,
+  netbird,
 }:
 pkgs.runCommand "render"
   {
@@ -15,6 +16,7 @@ pkgs.runCommand "render"
     ];
   }
   ''
-    export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges} KANIDM_VERSION=${kanidm.version}
+    export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges} KANIDM_VERSION=${kanidm.version} \
+      NETBIRD_PINS=${pkgs.lib.escapeShellArg (builtins.toJSON netbird)}
     bash ${./render.sh} ${kubernetes} $out
   ''

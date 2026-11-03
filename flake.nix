@@ -54,6 +54,8 @@
       # The Kanidm client the servers run, whose version every tenant's Kanidm runs (checks/render.sh).
       inherit (server.suveraen.idm) kanidm;
 
+      netbird = import ./checks/netbird.nix;
+
       # What render checks each cluster's settings against: the ranges the servers give k3s.
       ranges =
         let
@@ -96,7 +98,12 @@
         ns = build ./checks/ns.nix;
         approve = import ./checks/approve.nix { inherit pkgs approve; };
         render = import ./checks/render.nix {
-          inherit pkgs ranges kanidm;
+          inherit
+            pkgs
+            ranges
+            kanidm
+            netbird
+            ;
           kubernetes = ./kubernetes;
         };
         host-checks = import ./checks/host-checks.nix { inherit pkgs; };
@@ -134,7 +141,12 @@
         storage = (machine ./checks/storage.nix).installTest;
       }
       // import ./checks/render-cases.nix {
-        inherit pkgs ranges kanidm;
+        inherit
+          pkgs
+          ranges
+          kanidm
+          netbird
+          ;
         kubernetes = ./kubernetes;
         shards = 4;
       };

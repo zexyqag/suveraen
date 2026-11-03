@@ -109,6 +109,9 @@ spec:
           - configMap:
               name: sso-hello
               optional: true
+          - configMap:
+              name: sso-netbird
+              optional: true
         globalMounts:
           - path: /migrations
             readOnly: true

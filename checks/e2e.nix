@@ -45,6 +45,9 @@
 # into its app, so the release that adds an app is the only one, recovering idm_admin only when something is wrong;
 # gives a client a new secret; passes on nothing an app's namespace writes but a secret as Kanidm makes them; and leaves
 # idm_admin, admin and anonymous disabled. The checks take no run of Kanidm's migrations from lines a client had it log.
+# A tenant's mesh answers on its own host, which the gateway passes through to its edge, whose port alone the gateway
+# reaches; it reaches its tenant's PostgreSQL and Kanidm and nothing else, and once its database is back from a restore,
+# suveraen-mesh raises its network serial and starts its management again.
 # Kanidm's volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all
 # replaces; the server's checks alert once when an app holds a wrong one, and when that clears.
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
@@ -109,8 +112,27 @@ let
   # A third client of the gateway, on acme but in an IPv6 /64 of its own, which the server reaches through acme.
   apartPrefix = "2001:db8:ffff::";
   apartClient = "${apartPrefix}1";
+
+  # The driver's builder gets the script in an environment variable, which holds no more than 128 KiB, so each driver,
+  # the interactive one and the one the test's own run uses too, gets its attributes from a file instead.
+  runTest =
+    args:
+    let
+      test = pkgs.testers.runNixOSTest args;
+      structured =
+        priority: driver: lib.mkOverride priority (driver.overrideAttrs { __structuredAttrs = true; });
+    in
+    test.extend {
+      modules = [
+        {
+          driver = structured 50 test.config.driver;
+          # The interactive test is this whole test again, with its own driver over this one.
+          interactive.driver = structured 40 test.config.interactive.driver;
+        }
+      ];
+    };
 in
-pkgs.testers.runNixOSTest {
+runTest {
   name = "suveraen-e2e";
   # Below the CI job's limit, so the waits in the script run out first and print what went wrong.
   globalTimeout = 7800;
@@ -390,7 +412,10 @@ pkgs.testers.runNixOSTest {
           contact = "hostmaster@example.test";
           # The test cluster's hosts on the zones we serve.
           zones = {
-            "example.test".certificates = [ "hello" ];
+            "example.test".certificates = [
+              "hello"
+              "netbird"
+            ];
             "one.test".certificates = [
               "@"
               "idm"
@@ -485,6 +510,20 @@ pkgs.testers.runNixOSTest {
               "install -d -o cgit -g cgit /srv/git /srv/src"
               " && cp -r ${kubernetes} /srv/src/kubernetes && chmod -R u+w /srv/src && chown -R cgit:cgit /srv/src"
               " && install -o cgit -m 600 ${keys.snakeOilEd25519PrivateKey} /srv/signer"
+          )
+          # The test CAs make their roots as they start, which apps in the cluster that reach its hosts trust
+          # (PUBLIC_CA_BUNDLE).
+          roots = ""
+          for unit, port in [("pebble", 15000), ("pebble-standby", 15001)]:
+              acme.wait_for_unit(f"{unit}.service")
+              acme.wait_for_open_port(port)
+              roots += acme.succeed(
+                  f"curl -fsS --cacert ${caCert} --resolve acme.test:{port}:127.0.0.1 https://acme.test:{port}/roots/0"
+              ).strip() + "\n"
+          bundle = base64.b64encode(roots.encode()).decode()
+          forge.succeed(
+              f"${asCgit} sed -i 's|^  PUBLIC_CA_BUNDLE: \"\"$|  PUBLIC_CA_BUNDLE: {bundle}|' ${checkout}/settings.yaml"
+              f" && grep -qxF '  PUBLIC_CA_BUNDLE: {bundle}' ${checkout}/settings.yaml"
           )
           forge.succeed(
               "cd /srv/src && ${asCgit} git init -q -b main && ${asCgit} git add -A"
@@ -996,9 +1035,11 @@ pkgs.testers.runNixOSTest {
               assert hosts, "no routes"
               passthrough = {h: r["metadata"]["namespace"] for r in items("tlsroute") for h in r["spec"]["hostnames"]}
               assert passthrough, "no routes passed through"
+              # What each app passed through answers on without a sign-in.
+              unsigned = {"kanidm": "status", "netbird": "api/instance"}
               for host in hosts + sorted(passthrough):
                   # -f: a refused connection, a bad certificate or an error status all fail.
-                  path = "status" if host in passthrough else ""
+                  path = unsigned[passthrough[host].split("-", 1)[1]] if host in passthrough else ""
                   forge.wait_until_succeeds(
                       f"curl -fsS -o /dev/null --cacert /tmp/ca.crt --resolve {host}:443:${server} https://{host}/{path}",
                       timeout=300,
@@ -1310,6 +1351,60 @@ pkgs.testers.runNixOSTest {
               for t in tenants:
                   blocked(f"kubectl -n probe exec probe -- curl -fsS -m 5 -k https://{idm[t]}/status")
               seen_by_kanidm()
+
+          with subtest("A tenant's mesh takes connections from the gateway on its edge's port alone, reaches its own PostgreSQL and Kanidm from management alone, and nothing else"):
+              meshes = sorted(
+                  n["metadata"]["labels"]["suveraen/tenant"] for n in items("namespaces")
+                  if n["metadata"].get("labels", {}).get("suveraen/app") == "netbird"
+              )
+              assert meshes, meshes
+              for mesh_t in meshes:
+                  mesh_ns = f"{mesh_t}-netbird"
+                  mesh_edge = f"https://netbird.{mesh_ns}.svc/api/instance"
+                  blocked(f"{outside} -k {mesh_edge}")
+                  blocked(f"{outside} http://netbird-management.{mesh_ns}.svc:8081/api/instance")
+                  # Once a pod of the gateway's gets through to the edge, the policies know it.
+                  server.succeed(
+                      f"{create(probe('gateway'))} && kubectl -n gateway wait pod probe --for=condition=Ready --timeout=300s"
+                  )
+                  at_gateway = "kubectl -n gateway exec probe -- curl -fsS -m 5 -o /dev/null"
+                  server.wait_until_succeeds(f"{at_gateway} -k {mesh_edge}", timeout=120)
+                  for controller, ports in [("netbird", [10000, 8082, 9091, 9092, 9000]), ("management", [8081, 9090])]:
+                      address = server.succeed(
+                          f"kubectl -n {mesh_ns} get pod -l app.kubernetes.io/controller={controller}"
+                          " -o jsonpath='{.items[0].status.podIP}'"
+                      ).strip()
+                      for port in ports:
+                          blocked(f"{at_gateway} http://{address if ':' not in address else f'[{address}]'}:{port}/")
+                  server.succeed("kubectl -n gateway delete pod probe")
+                  # From a pod labelled as management's, its own Kanidm at the public name and its own PostgreSQL, once
+                  # the policies know the pod; from one labelled as the edge's, which faces the internet, neither, once
+                  # it gets through to the edge's Service; and from either, nothing else.
+                  for controller in ["management", "netbird"]:
+                      apply(restricted(
+                          mesh_ns, "inside", "sleep 3600", {"app.kubernetes.io/controller": controller}, resources=light
+                      ))
+                      server.succeed(f"kubectl -n {mesh_ns} wait pod inside --for=condition=Ready --timeout=300s")
+                      inside_mesh = f"kubectl -n {mesh_ns} exec inside -- curl -sS -m 5 -o /dev/null"
+                      mesh_kanidm = f"-k https://{idm[mesh_t]}/status"
+                      mesh_postgres = f"telnet://postgres-rw.{mesh_t}-postgres.svc:5432"
+                      if controller == "management":
+                          server.wait_until_succeeds(f"{inside_mesh} -f {mesh_kanidm}", timeout=120)
+                          # PostgreSQL waits for a sign-in that never comes, so the connection is made and times out.
+                          status, out = server.execute(
+                              f"{inside_mesh} -w ' connects=%{{num_connects}}' {mesh_postgres} 2>&1"
+                          )
+                          assert "connects=1" in out.split(), (status, out)
+                      else:
+                          server.wait_until_succeeds(f"{inside_mesh} -f -k {mesh_edge}", timeout=120)
+                          blocked(f"{inside_mesh} {mesh_kanidm}")
+                          blocked(f"{inside_mesh} {mesh_postgres}")
+                      for t in tenants:
+                          if t != mesh_t:
+                              blocked(f"{inside_mesh} -k https://{idm[t]}/status")
+                      blocked(f"{inside_mesh} https://acme.test/")
+                      blocked(f"{inside_mesh} http://forge.test/")
+                      server.succeed(f"kubectl -n {mesh_ns} delete pod inside")
 
           with subtest("Lines a client has Kanidm log, as it logs what a client sends as it is, never count as a run of its migrations"):
               client_lines = ["11111111-2222-3333-4444-555555555555 " + line for line in [
@@ -1865,6 +1960,13 @@ pkgs.testers.runNixOSTest {
 
           with subtest("When the cluster's object store has lost a tenant's backups, a release brings its PostgreSQL back from a provider's copy"):
               ns = f"{first}-postgres"
+              # The tenant's mesh, whose state is in that database.
+              assert first in meshes, meshes
+              mesh_accounts = (
+                  f"kubectl -n {ns} exec $(kubectl -n {ns} get pod -l cnpg.io/instanceRole=primary -o name) -c postgres"
+                  " -- psql -tA -d netbird -c 'select id, network_serial from accounts'"
+              )
+              mesh_serials = dict(line.split("|") for line in server.succeed(mesh_accounts).split())
               merge("flux-system", f"kustomization {first}-postgres-cluster", {"spec": {"suspend": True}})
               server.succeed(f"kubectl -n {ns} delete cluster postgres --timeout=300s")
               # Its instance archives WAL until it stops, which would land after the wipe.
@@ -1921,6 +2023,14 @@ pkgs.testers.runNixOSTest {
                   f"kubectl -n flux-system wait kustomization -l suveraen/tenant={first} --for=condition=Ready --timeout=0",
                   timeout=600,
               )
+              # Its mesh runs again under serials past those its devices hold, which they would take no map below.
+              out = server.succeed(f"suveraen-mesh after-restore {first}")
+              # As the update found and left each one: once management starts again, devices coming back may step it.
+              raised = {m.group(1): (m.group(2), m.group(3)) for m in re.finditer(
+                  rf"^{first}: raised the network serial of account (\S+) from ([0-9]+) to ([0-9]+)$", out, re.M
+              )}
+              assert raised == {a: (n, str(int(n) + 1000000)) for a, n in mesh_serials.items()}, (mesh_serials, out)
+              server.succeed(f"kubectl -n {first}-netbird wait deployment netbird-management --for=condition=Available --timeout=0")
 
           with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied, Kanidm's with its people and keys"):
               hello_ns, idm_ns = f"{first}-hello", f"{first}-kanidm"
@@ -2208,10 +2318,13 @@ pkgs.testers.runNixOSTest {
                            for c in items("clusters.postgresql.cnpg.io")}
               assert len(archiving) == len(tenants), archiving
               offsite = {f"etcd-offsite-{n}" for n in providers}
-              # And each tenant's Kanidm, which the checks find in order.
-              identities = {"Kanidm check"} | {
-                  f"{t}-kanidm{part}"
-                  for t in tenants for part in [" admin accounts", " migrations", " IDs", "/hello-oidc"]
+              # And each tenant's Kanidm, which the checks find in order, with the client of each app that signs in there.
+              sso_clients = {
+                  f"{c['metadata']['namespace']}/{c['metadata']['name'].removeprefix('sso-')}-oidc"
+                  for c in items("configmaps") if c["metadata"]["name"].startswith("sso-")
+              }
+              identities = {"Kanidm check"} | sso_clients | {
+                  f"{t}-kanidm{part}" for t in tenants for part in [" admin accounts", " migrations", " IDs"]
               }
               stun_findings = {f"STUN {a}" for a in ${builtins.toJSON nodes.server.suveraen.cluster.nodeIP}}
               assert findings.keys() == (
