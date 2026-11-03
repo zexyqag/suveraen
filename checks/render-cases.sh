@@ -892,6 +892,11 @@ refuses mesh-group-any-credential "an app group that is an account policy has it
 refuses mesh-group-unmanaged "as a list in Kanidm 1.11: netbird-users" \
   "sed -i '/\"entry_managed_by\": \[\"tenant-admins\"\]\$/d; s/\"credential_type_minimum\": \"passkey\",/\"credential_type_minimum\": \"passkey\"/' \
   apps/netbird/sso/configmap.yaml"
+refuses mesh-scrub-image "scrub image ghcr.io/cloudnative-pg/postgresql:18.6-202610190957-standard-trixie@" \
+  "sed -i 's/minimal-trixie@sha256:/standard-trixie@sha256:/' $H"
+refuses mesh-scrub-columns "scrub.sql blanks [{" "sed -i 's/, \"meta_certificates\": \[\]//' $N"
+refuses mesh-scrub-password-argv "scrub puts PGPASSWORD in its command line" \
+  "sed -i 's/ON_ERROR_STOP=1 -f - &\$/ON_ERROR_STOP=1 -d \"password=\$PGPASSWORD\" -f - \&/' $H"
 
 # Variants that must still render.
 renders encrypted "encsecret $T/bravo; encmap clusters/test"

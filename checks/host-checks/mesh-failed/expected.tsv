@@ -13,6 +13,7 @@ cluster	alpha-netbird home	unknown	4	mesh groups outside the rules	unchecked: su
 cluster	alpha-netbird leaver	unknown	4	mesh leaver still in	unchecked: suveraen-mesh check: no answer within 120 seconds
 cluster	alpha-netbird powers	unknown	4	mesh powers outside the rules	unchecked: suveraen-mesh check: no answer within 120 seconds
 cluster	alpha-netbird public	unknown	4	mesh exposed	unchecked: suveraen-mesh check: no answer within 120 seconds
+cluster	alpha-netbird scrub	unknown	4	mesh inventory kept	unchecked: suveraen-mesh check: no answer within 120 seconds
 cluster	alpha-netbird settings	unknown	4	mesh settings outside the rules	unchecked: suveraen-mesh check: no answer within 120 seconds
 cluster	alpha-netbird share	unknown	4	mesh share outside the rules	unchecked: suveraen-mesh check: no answer within 120 seconds
 cluster	alpha-netbird tokens	unknown	4	mesh tokens outside the rules	unchecked: suveraen-mesh check: no answer within 120 seconds

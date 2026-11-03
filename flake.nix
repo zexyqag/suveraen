@@ -55,6 +55,8 @@
       inherit (server.suveraen.idm) kanidm;
 
       netbird = import ./checks/netbird.nix;
+      # What NetBird keeps of a device that the servers' check knows, which the scrub keeps out (checks/render.sh).
+      inherit (server.suveraen.mesh) peerColumns;
 
       # What render checks each cluster's settings against: the ranges the servers give k3s.
       ranges =
@@ -103,6 +105,7 @@
             ranges
             kanidm
             netbird
+            peerColumns
             ;
           kubernetes = ./kubernetes;
         };
@@ -146,6 +149,7 @@
           ranges
           kanidm
           netbird
+          peerColumns
           ;
         kubernetes = ./kubernetes;
         shards = 4;

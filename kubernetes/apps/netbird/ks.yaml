@@ -30,8 +30,9 @@ spec:
       MEMORY: ${NETBIRD_MEMORY:=384Mi}
       QUOTA_CPU: ${NETBIRD_QUOTA_CPU:=200m}
       QUOTA_MEMORY: ${NETBIRD_QUOTA_MEMORY:=1Gi}
-      # The edge pod's three containers, management and one more pod at the defaults (checks/render.sh), 256Mi each.
-      QUOTA_EPHEMERAL_STORAGE: ${NETBIRD_QUOTA_EPHEMERAL_STORAGE:=1280Mi}
+      # The edge pod's three containers, management and its scrub, and one more pod at the defaults (checks/render.sh),
+      # 256Mi each.
+      QUOTA_EPHEMERAL_STORAGE: ${NETBIRD_QUOTA_EPHEMERAL_STORAGE:=1536Mi}
       QUOTA_STORAGE: "0"
       QUOTA_VOLUMES: "0"
       # Recreate keeps one of each controller, and render keeps room for one more pod.

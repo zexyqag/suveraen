@@ -524,6 +524,16 @@
        "accessLog": 0,
        "invites": 0,
        "agentNetwork": 0
+      },
+      "scrub": {
+       "trigger": {
+        "definition": "CREATE TRIGGER scrub BEFORE INSERT OR UPDATE ON public.peers FOR EACH ROW EXECUTE FUNCTION scrub_peer()",
+        "enabled": "O"
+       },
+       "gone": [],
+       "unreviewed": [],
+       "unscrubbed": [],
+       "networkAddresses": 0
       }
      },
      "people": {

@@ -246,6 +246,8 @@ let
   # second address there that no policy names.
   camera = "192.168.50.10";
   other = "192.168.50.11";
+  # The serial number acme's firmware gives, which its devices report to the mesh.
+  serial = "e2e-acme-4d1c9b";
   inCamera = {
     requires = [ "camera.service" ];
     after = [ "camera.service" ];
@@ -394,6 +396,11 @@ runTest {
       ];
       # Two CAs, two nameservers, two object stores and two NetBird clients.
       virtualisation.memorySize = 1536;
+      # As the system and as its chassis, where a device looks first.
+      virtualisation.qemu.options = [
+        "-smbios type=1,serial=${serial}"
+        "-smbios type=3,serial=${serial}"
+      ];
       systemd.services.pebble.serviceConfig.ExecStart = lib.mkForce (
         lib.getExe (
           pebble "public" ''{"listenAddress": "0.0.0.0:443", "managementListenAddress": "0.0.0.0:15000"}''
@@ -1890,10 +1897,8 @@ runTest {
           nb_ns = f"{first}-netbird"
           [nb_host] = [h for h, namespace in passthrough.items() if namespace == nb_ns]
           nb_reach = f"--cacert {kanidm_ca} --resolve {nb_host}:443:${server}"
-          nb_db = (
-              f"kubectl -n {first}-postgres exec $(kubectl -n {first}-postgres get pod -l cnpg.io/instanceRole=primary"
-              " -o name) -c postgres -- psql -tA -d netbird -c"
-          )
+          nb_pod = f"$(kubectl -n {first}-postgres get pod -l cnpg.io/instanceRole=primary -o name)"
+          nb_db = f"kubectl -n {first}-postgres exec {nb_pod} -c postgres -- psql -tA -d netbird -c"
           nb_devices = ${builtins.toJSON (lib.genAttrs (lib.attrNames (devices nodes)) (device nodes))}
           nb_nodes = {"acme": acme, "forge": forge}
           nb_camera, nb_other = "${camera}", "${other}"
@@ -2075,7 +2080,7 @@ runTest {
           def nb_running():
               return sorted(i for i in server.succeed(
                   f"kubectl -n {nb_ns} get deployments -o jsonpath='{{.items[*].spec.template.spec.containers[*].image}}'"
-              ).split() if i.startswith("ghcr.io/"))
+              ).split() if i.startswith("ghcr.io/netbirdio/"))
 
           # Lines of a device's log since a moment that say it lost or found management or signal.
           def nb_reconnects(name, since):
@@ -2083,6 +2088,42 @@ runTest {
                   f"journalctl -u netbird-{name} --since @{since} -o cat --no-pager"
                   " | grep -E '(connected to|disconnected from) the (Management|Signal)'"
               )[1]
+
+          # The scrub as the servers' check reads it: its trigger on the peers, every column of theirs reviewed, no
+          # peer holding what it blanks, and no address in NetBird's table of them.
+          def nb_scrubbed():
+              scrub = json.loads(server.succeed(f"suveraen-mesh sql {first} < ${../nixos/mesh.sql}"))["scrub"]
+              assert scrub == {
+                  "trigger": {
+                      "definition": "CREATE TRIGGER scrub BEFORE INSERT OR UPDATE ON public.peers FOR EACH ROW"
+                      " EXECUTE FUNCTION scrub_peer()",
+                      "enabled": "O",
+                  },
+                  "gone": [], "unreviewed": [], "unscrubbed": [], "networkAddresses": 0,
+              }, scrub
+
+          # A grep for each of these strings, which prints each once it finds: the console shortens long output.
+          def nb_grep(strings):
+              return "grep -a -r -o -h -F" + "".join(f" -e {shlex.quote(s)}" for s in sorted(strings))
+
+          # Which of these strings the primary's WAL holds, as written.
+          def nb_wal(strings):
+              status, out = server.execute(
+                  f"kubectl -n {first}-postgres exec {nb_pod} -c postgres -- {nb_grep(strings)}"
+                  " /var/lib/postgresql/data/pgdata/pg_wal | sort -u"
+              )
+              assert status in [0, 1], out
+              return set(out.splitlines()) & set(strings)
+
+          # Which of these strings a dump of the mesh's database holds.
+          def nb_dumped(strings):
+              server.succeed(
+                  f"kubectl -n {first}-postgres exec {nb_pod} -c postgres -- pg_dump -d netbird > /tmp/mesh.sql"
+              )
+              status, out = server.execute(f"{nb_grep(strings)} /tmp/mesh.sql | sort -u")
+              server.succeed("rm /tmp/mesh.sql")
+              assert status in [0, 1], out
+              return set(out.splitlines()) & set(strings)
 
           with subtest("A tenant's mesh, at the release before its own, makes the first person of its group its owner, refuses anyone outside the group, holds no policy, and serves nothing but its five paths"):
               assert nb_running() == sorted(${builtins.toJSON (netbirdImages netbird.previous)}), nb_running()
@@ -2236,6 +2277,48 @@ runTest {
                   else:
                       nb_refused("home", f"{nb_laptop['ip']}:3389")
 
+          with subtest("What devices report beyond what the mesh needs, a serial number and their interfaces' addresses and MACs, reaches neither its database, nor its WAL, nor its API, and a scrub dropped by hand comes back by itself"):
+              nb_scrubbed()
+              assert acme.succeed("cat /sys/class/dmi/id/product_serial").strip() == "${serial}"
+              inventory = {"${serial}", acme.succeed("cat /sys/class/dmi/id/product_name").strip()}
+              # A device reports each address, but a loopback or link-local one, of each interface that has a MAC.
+              for node in [acme, forge]:
+                  for link in json.loads(node.succeed("ip -j address show up")):
+                      if link.get("link_type") == "ether" and link["address"].strip("0:"):
+                          inventory |= {link["address"]} | {
+                              f"{a['local']}/{a['prefixlen']}" for a in link.get("addr_info", []) if a["scope"] == "global"
+                          }
+              for peer in nb("GET", "/api/peers"):
+                  assert peer["hostname"] and peer["version"] and not peer["serial_number"], peer
+                  assert not peer.get("network_addresses"), peer
+              # The laptop reports what the scrub blanks: with the trigger in, its report each time it comes back
+              # differs from its row, so management saves it again, which steps the network serial.
+              nb_serial = f"{nb_db} 'select network_serial from accounts'"
+              nb_stepped = int(server.succeed(nb_serial))
+              acme.succeed("systemctl restart netbird-laptop")
+              retry(nb_back("laptop"), timeout_seconds=300)
+              server.wait_until_succeeds(f"test $({nb_serial}) -gt {nb_stepped}", timeout=120)
+              # The same rows hold the laptop's key, which it sent with them.
+              key = server.succeed(f"{nb_db} \"select key from peers where name = 'laptop'\"").strip()
+              assert nb_dumped(inventory | {key}) == {key}, nb_dumped(inventory)
+              assert nb_wal(inventory | {key}) == {key}, nb_wal(inventory)
+              # Dropped by hand, the trigger lets a write keep a MAC; the scrub puts it back and passes the rows
+              # through it, so that one is blank again with no device writing it.
+              scrub_log = f"kubectl -n {nb_ns} logs deployment/netbird-management -c scrub"
+              installs = server.succeed(scrub_log).count("scrub: trigger installed")
+              mac = "02:00:5e:10:00:01"
+              server.succeed(f"{nb_db} " + shlex.quote(
+                  "drop trigger scrub on peers; update peers set meta_network_addresses"
+                  f" = '[{{\"NetIP\": \"192.0.2.1/24\", \"Mac\": \"{mac}\"}}]' where name = 'home'"
+              ))
+              assert nb_wal({mac}) == {mac}
+              server.wait_until_succeeds(
+                  f"{nb_db} \"select meta_network_addresses from peers where name = 'home'\" | grep -qx '\\[\\]'",
+                  timeout=60,
+              )
+              assert server.succeed(scrub_log).count("scrub: trigger installed") == installs + 1
+              nb_scrubbed()
+
           with subtest("Two members' devices stay apart"):
               view = nb_status("phone")
               assert view and not view["peers"]["details"], view
@@ -2260,6 +2343,7 @@ runTest {
                   retry(nb_back(name), timeout_seconds=300)
                   assert "connected to the Management Service stream" in nb_reconnects(name, since[name]), name
               nb_reaches("laptop", f"{nb_camera}:8080", "camera:8080")
+              nb_scrubbed()
 
           with subtest("A share gives one port one way, relayed, past the gateway's timeouts"):
               nb_bob = nb_people["bob"]
@@ -2719,13 +2803,15 @@ runTest {
               assert raised == {a: (n, str(int(n) + 1000000)) for a, n in mesh_serials.items()}, (mesh_serials, out)
               server.succeed(f"kubectl -n {first}-netbird wait deployment netbird-management --for=condition=Available --timeout=0")
               # The device that ran on takes the mesh as restored, and what changes after: the serial it holds from the
-              # lost moments is below the new ones.
+              # lost moments is below the new ones. Devices coming back step the serial while the scrub is in, so this
+              # alone doesn't show the bump, which after-restore's own account of it does.
               retry(nb_back("laptop"), timeout_seconds=300)
               nb_ids["vnc"] = nb("POST", "/api/policies", nb_vnc)["id"]
               nb_reaches("laptop", f"{nb_home['ip']}:5900", "forge:5900")
               nb("DELETE", f"/api/policies/{nb_ids['vnc']}")
               nb_refused("laptop", f"{nb_home['ip']}:5900")
               assert nb_state() == nb_kept
+              nb_scrubbed()
               merge(ns, "cronjob offsite", {"spec": {"suspend": False}})
 
           with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied, Kanidm's with its people and keys"):
@@ -3026,7 +3112,7 @@ runTest {
               # Each tenant's mesh, part by part, and this server's STUN port as the cluster names it.
               mesh_parts = {f"{t}-netbird {part}" for t in meshes for part in [
                   "exit", "public", "all", "share", "foreign", "home", "admins", "tokens", "powers", "settings", "floor",
-                  "leaver", "changed", "check",
+                  "leaver", "scrub", "changed", "check",
               ]} | {"mesh STUN port"}
               assert findings.keys() == (
                   before.keys() | archiving | offsite | identities | stun_findings | mesh_parts
@@ -3476,6 +3562,7 @@ runTest {
               nb("DELETE", f"/api/policies/{nb_ids['vnc']}")
               nb_refused("laptop", f"{nb_home['ip']}:5900")
               nb_reaches("laptop", f"{nb_camera}:8080", "camera:8080")
+              nb_scrubbed()
           memory()
       except Exception:
           diagnose()

@@ -13,6 +13,7 @@ cluster	alpha-netbird home	late	4	mesh groups outside the rules	policy pol-own2 
 cluster	alpha-netbird leaver	late	4	mesh leaver still in	home-a1b2c3 holds 2 peers of no one still in: delete them
 cluster	alpha-netbird powers	ok	4	mesh powers outside the rules	no check but the version, no job, DNS or SSH
 cluster	alpha-netbird public	ok	4	mesh exposed	no proxy, service or invite
+cluster	alpha-netbird scrub	ok	4	mesh inventory kept	a trigger blanks every device's inventory as it is written, on the columns reviewed
 cluster	alpha-netbird settings	ok	4	mesh settings outside the rules	as the rules set them
 cluster	alpha-netbird share	late	4	mesh share outside the rules	policy pol-own2 reaches group own-d4e5f6 without ports
 cluster	alpha-netbird tokens	ok	4	mesh tokens outside the rules	no token, every setup key for one box within a day

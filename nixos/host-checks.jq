@@ -250,8 +250,8 @@ def meshtitles:
    foreign: "mesh peer in a foreign group", home: "mesh groups outside the rules",
    admins: "mesh admins outside the rules", tokens: "mesh tokens outside the rules",
    powers: "mesh powers outside the rules", settings: "mesh settings outside the rules",
-   floor: "mesh below its version floor", leaver: "mesh leaver still in", changed: "mesh access changed",
-   check: "mesh unchecked"};
+   floor: "mesh below its version floor", leaver: "mesh leaver still in", scrub: "mesh inventory kept",
+   changed: "mesh access changed", check: "mesh unchecked"};
 
 # What changed between two summaries of who can reach what: policies and networks by ID, groups by tag or ID, people
 # by their Kanidm IDs.
@@ -478,6 +478,18 @@ def mesh($spec; $t; $m; $people; $was):
                | "home-\($tg) holds \(.peers | length | many("peer"; "peers")) of no one still in: delete them")];
              "everyone still in at Kanidm")
          end),
+      part("scrub"; [
+        ($m.scrub.trigger | if . == null then "no trigger scrub on peers"
+          elif .enabled != "O" then "trigger scrub disabled"
+          elif .definition != "CREATE TRIGGER scrub BEFORE INSERT OR UPDATE ON public.peers FOR EACH ROW EXECUTE"
+            + " FUNCTION scrub_peer()" then "trigger scrub is another: \(.definition)"
+          else empty end),
+        ($m.scrub.gone[] | "no column \(.), which the scrub blanks"),
+        ($m.scrub.unreviewed[] | "column \(.) unreviewed"),
+        ($m.scrub.unscrubbed | select(. != []) | "\(length | many("peer holds"; "peers hold")) what the scrub blanks: "
+          + join(", ")),
+        ($m.scrub.networkAddresses | select(. > 0) | "network_addresses holds \(many("row"; "rows"))")];
+        "a trigger blanks every device's inventory as it is written, on the columns reviewed"),
       (if $was.access == null then finding("cluster"; "\($ns) changed"; false; 3; meshtitles.changed; "first seen")
        else changes($was.access; $state.access) as $changed
          | if $changed == [] then finding("cluster"; "\($ns) changed"; false; 3; meshtitles.changed; "as before")

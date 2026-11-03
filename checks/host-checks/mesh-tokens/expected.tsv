@@ -13,6 +13,7 @@ cluster	alpha-netbird home	ok	4	mesh groups outside the rules	no box a source, e
 cluster	alpha-netbird leaver	ok	4	mesh leaver still in	everyone still in at Kanidm
 cluster	alpha-netbird powers	ok	4	mesh powers outside the rules	no check but the version, no job, DNS or SSH
 cluster	alpha-netbird public	ok	4	mesh exposed	no proxy, service or invite
+cluster	alpha-netbird scrub	ok	4	mesh inventory kept	a trigger blanks every device's inventory as it is written, on the columns reviewed
 cluster	alpha-netbird settings	ok	4	mesh settings outside the rules	as the rules set them
 cluster	alpha-netbird share	ok	4	mesh share outside the rules	every rule from one person's own group, and to another's one way, on ports
 cluster	alpha-netbird tokens	late	4	mesh tokens outside the rules	token pat-1 of 5d0c7a3e-8f41-4b6a-9e2d-1a7c3b9f0e01; setup key key-reusable: reusable, unlimited uses, never expires; setup key key-week: valid 7d

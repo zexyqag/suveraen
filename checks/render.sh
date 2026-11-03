@@ -3,11 +3,13 @@
 # its own sources hold, a stand-in for each encrypted one, and strict substitution. Then checks the rules Flux itself
 # wouldn't catch, on what was rendered rather than on what a file says.
 # Usage: CLUSTER_RANGES=<the servers' ranges> KANIDM_VERSION=<the Kanidm client's version> \
-#   NETBIRD_PINS=<checks/netbird.nix as JSON> render.sh <kubernetes directory> <output directory>
+#   NETBIRD_PINS=<checks/netbird.nix as JSON> NETBIRD_PEER_COLUMNS=<the servers' suveraen.mesh.peerColumns as JSON> \
+#   render.sh <kubernetes directory> <output directory>
 set -euo pipefail
 : "${CLUSTER_RANGES:?the ranges the servers give k3s (nixos/cluster.nix), as <setting>=<range> words}"
 : "${KANIDM_VERSION:?the version of the Kanidm client the platform builds, which the Kanidm server must match}"
 : "${NETBIRD_PINS:?the NetBird release and images checks/netbird.nix pins, as JSON}"
+: "${NETBIRD_PEER_COLUMNS:?the columns of peers the scrub blanks and keeps, as nixos/mesh.nix names them, as JSON}"
 out=$(realpath -m "$2")
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -189,15 +191,17 @@ bad = [f"{k} {shown(k, need[k])} of {quota[k]}" for k in keys if need[k] > quant
 bad += [f"pods {pods} of " + quota["pods"]] if pods > int(quota["pods"]) else []
 print(", ".join(bad))
 '
-# What is wrong with a tenant's mesh (apps/netbird) as rendered, a JSON list on stdin, for its host, its tenant's Kanidm
-# and the servers' STUN port given: its two controllers and their images, users, arguments and environment, and who
-# reaches the tenant's PostgreSQL and Kanidm; management.json, which management fills in from its environment; and
-# nginx.conf, which routes five paths alone.
+# What is wrong with a tenant's mesh (apps/netbird) as rendered, a JSON list on stdin, for its host, its tenant's Kanidm,
+# the servers' STUN port, its tenant's PostgreSQL image and the tenant given: its two controllers and their images,
+# users, arguments and environment, and who reaches the tenant's PostgreSQL and Kanidm; management.json, which
+# management fills in from its environment; nginx.conf, which routes five paths alone; and scrub.sql, which blanks what
+# the servers' check knows a device reports beyond the mesh's needs.
 netbirdconfig='
 import json, os, re, sys
 docs = [d for d in json.load(sys.stdin) if isinstance(d, dict)]
-host, idm, stun = sys.argv[1:]
+host, idm, stun, postgres, tenant = sys.argv[1:]
 pins = json.loads(os.environ["NETBIRD_PINS"])
+columns = json.loads(os.environ["NETBIRD_PEER_COLUMNS"])
 bad = []
 
 def server(name):
@@ -205,7 +209,7 @@ def server(name):
 
 dashboard = "docker.io/netbirdio/dashboard:" + pins["dashboard"]["tag"] + "@" + pins["dashboard"]["digest"]
 images = {"web-env": dashboard, "web": dashboard, "signal": server("signal"), "relay": server("relay"),
-          "management": server("management")}
+          "management": server("management"), "scrub": postgres}
 
 def one(kind, name):
     found = [d for d in docs if d.get("kind") == kind and d["metadata"]["name"] == name]
@@ -217,7 +221,7 @@ if ((release.get("upgrade") or {}).get("remediation") or {}).get("strategy") != 
 controllers = (release.get("values") or {}).get("controllers") or {}
 shape = {name: (sorted(c.get("initContainers") or {}), sorted(c.get("containers") or {}))
          for name, c in controllers.items()}
-if shape != {"netbird": (["web-env"], ["relay", "signal", "web"]), "management": ([], ["management"])}:
+if shape != {"netbird": (["web-env"], ["relay", "signal", "web"]), "management": ([], ["management", "scrub"])}:
     bad.append(f"controllers {shape}")
 containers = {}
 for name, c in controllers.items():
@@ -248,6 +252,8 @@ envs = {
                    "SSL_CERT_DIR": "/etc/ssl/certs:/etc/netbird-roots",
                    "NB_STORE_ENGINE_POSTGRES_DSN": secret("store-dsn"), "NB_STORE_KEY": secret("store-key"),
                    "NB_RELAY_SECRET": secret("relay-secret")},
+    "scrub": {"PGHOST": f"postgres-rw.{tenant}-postgres.svc", "PGPORT": "5432", "PGDATABASE": "netbird",
+              "PGUSER": "netbird", "PGSSLMODE": "require", "PGPASSWORD": secret("db-password")},
 }
 levels = {"signal": ["info", "warn", "error"], "relay": ["warn", "error"], "management": ["info", "warn", "error"]}
 for name, c in containers.items():
@@ -260,6 +266,10 @@ for name, c in containers.items():
     bad += [f"{name} env {k}" for k in sorted(set(have) | set(want)) if have.get(k) != want.get(k)]
     if c.get("envFrom"):
         bad.append(f"{name} envFrom")
+    # Any process on the node may read a command line.
+    line = " ".join(str(a) for a in (c.get("command") or []) + (c.get("args") or []))
+    bad += [f"{name} puts {k} in its command line" for k, v in sorted(have.items())
+            if isinstance(v, dict) and "valueFrom" in v and re.search(rf"[$]([{{(]{k}[)}}]|{k}\b)", line)]
     args = c.get("args") or []
     if name in levels:
         given = [a.split("=", 1)[1] for a in args if str(a).startswith("--log-level=")]
@@ -409,6 +419,15 @@ for _, args, body in find(server_block, "location"):
         bad.append(f"nginx.conf location {where}")
 bad += [f"nginx.conf {where} not refused" for where in refused if where not in seen]
 bad += [f"nginx.conf {where} not routed" for where in list(upstreams) + ["/"] if where not in seen]
+
+blanked = []
+for literal in re.findall(r"\x27([{].*?[}])\x27::jsonb", data.get("scrub.sql", ""), re.S):
+    try:
+        blanked.append(json.loads(literal))
+    except ValueError:
+        blanked.append(literal)
+if blanked != [columns["scrubbed"]]:
+    bad.append(f"scrub.sql blanks {blanked}")
 print("; ".join(bad))
 '
 # One line of JSON for each source of a tenant's Kanidm migrations: its ConfigMap, and for an app the hosts its
@@ -1308,7 +1327,12 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           # One host: Kanidm's own rules hold it to one, and the mesh's sign-in waits for Kanidm.
           idm=$(passed "$t" kanidm)
           stun=$(yq '.STUN_PORT // ""' "$w/$name.vars.yaml")
-          bad=$(yq ea -o=json -I=0 '[.]' "$file" | python3 -I -c "$netbirdconfig" "$passhost" "$idm" "$stun")
+          postgres=$(yq ea "[select(.kind == \"Cluster\" and .apiVersion == \"postgresql.cnpg.io/v1\"
+            and .metadata.namespace == \"$t-postgres\") | .spec.imageCatalogRef.major] as \$major
+            | [select(.kind == \"ClusterImageCatalog\" and .metadata.name == \"postgresql\") | .spec.images[]
+            | select(.major == \$major[0]) | .image] | .[0] // \"\"" "$rendered"/*.yaml)
+          bad=$(yq ea -o=json -I=0 '[.]' "$file" |
+            python3 -I -c "$netbirdconfig" "$passhost" "$idm" "$stun" "$postgres" "$t")
           [ -z "$bad" ] || fail "$cluster/$name: a tenant's mesh runs the images checks/netbird.nix pins, in two" \
             "controllers whose pods go before new ones start, as users of their own, logging little, calling nowhere" \
             "and reaching the tenant's PostgreSQL and Kanidm from management alone," \
@@ -1317,7 +1341,9 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
             "with its own Kanidm, by scope openid and on the devices' own ports, asking afresh each time, takes every" \
             "secret from Secret netbird and names its own host alone; nginx stays in the foreground, routes five" \
             "paths alone, refuses three, renders the dashboard's pages, clears what clients say of their addresses" \
-            "and logs no access: $bad"
+            "and logs no access; the scrub runs its tenant's PostgreSQL image, signs in as management does with no" \
+            "secret in its command line, and blanks what the servers' check knows a device reports beyond the mesh's" \
+            "needs: $bad"
         fi
         ;;
       ./kubernetes/apps/*/sso)

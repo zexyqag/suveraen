@@ -39,6 +39,7 @@ def cleared($late):
            "mesh powers outside the rules": "mesh powers within the rules again",
            "mesh settings outside the rules": "mesh settings within the rules again",
            "mesh below its version floor": "mesh at its version floor again", "mesh leaver still in": "mesh leavers out",
+           "mesh inventory kept": "mesh inventory scrubbed again",
            "mesh unchecked": "mesh checked again", "mesh STUN port wrong": "mesh STUN port right again"}[$t]
         end)
   | unique

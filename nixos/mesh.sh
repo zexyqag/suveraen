@@ -1,8 +1,8 @@
 # Each tenant's mesh (kubernetes/apps/netbird), from a server: by exec into the tenant's PostgreSQL primary, where
 # management keeps the mesh, signed in as the mesh's own role, since the superuser would run whatever that role
 # planted there with every right (apps/postgres); and through the API server. It holds no credential. mesh.nix sets
-# query, what the check reads of a mesh (mesh.sql), and idm, suveraen-idm (idm.nix), which asks each tenant's Kanidm
-# after its people.
+# query, what the check reads of a mesh (mesh.sql); idm, suveraen-idm (idm.nix), which asks each tenant's Kanidm after
+# its people; and scrubbed and kept, the columns of peers the scrub blanks and keeps, as JSON.
 
 usage() {
   cat >&2 <<'EOF'
@@ -34,13 +34,15 @@ primary() {
   echo "$name"
 }
 
-# SQL from stdin in a tenant's mesh database, in a session that starts read-only. A SET in one -c string comes too late:
-# psql sends the string as one message, which PostgreSQL runs as one transaction begun before the SET applies.
+# SQL from stdin in a tenant's mesh database, in a session that starts read-only, with the columns of peers as
+# variables. A SET in one -c string comes too late: psql sends the string as one message, which PostgreSQL runs as one
+# transaction begun before the SET applies.
 sql() {
   local name
   name=$(primary "$1") || return 1
   kubectl --request-timeout=60s -n "$1-postgres" exec -i "$name" -c postgres -- \
-    env PGOPTIONS='-c default_transaction_read_only=on' psql -X -q -At -v ON_ERROR_STOP=1 -U netbird -d netbird -f -
+    env PGOPTIONS='-c default_transaction_read_only=on' psql -X -q -At -v ON_ERROR_STOP=1 \
+    -v "scrubbed=$scrubbed" -v "kept=$kept" -U netbird -d netbird -f -
 }
 
 # What the servers' checks judge (host-checks.nix), with no credential: the cluster's STUN port where a tenant runs a

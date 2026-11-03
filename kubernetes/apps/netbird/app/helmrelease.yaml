@@ -1,7 +1,7 @@
 ---
 # Two controllers, so signal and the relay keep serving while management restarts or waits for Kanidm: netbird, the
-# edge, whose nginx terminates the host's TLS and routes to signal, the relay and management; and management alone,
-# behind a Service of its own. Neither keeps state: management's is the tenant's PostgreSQL.
+# edge, whose nginx terminates the host's TLS and routes to signal, the relay and management; and management, behind a
+# Service of its own, with the scrub of its database. Neither keeps state: management's is the tenant's PostgreSQL.
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -241,6 +241,46 @@ spec:
                 memory: 96Mi
               limits:
                 memory: ${MEMORY}
+          # Keeps what devices report beyond what the mesh needs out of management's database (scrub.sql), in one
+          # session it holds open. It never exits, as a container that restarted would take the pod out of its Service.
+          scrub:
+            image:
+              repository: ghcr.io/cloudnative-pg/postgresql
+              tag: 18.6-202610190957-minimal-trixie@sha256:0675340b02be838319b9b6f323c206693e519dcd62ec729d539be9f46bb7a2f9
+            command: [sh, -c]
+            # Its shell is the container's first process, which ignores a signal it doesn't trap.
+            args:
+              - |
+                trap 'exit 0' TERM
+                while :; do
+                  { cat /etc/netbird/scrub.sql && echo '\watch 5'; } | psql -X -q -v ON_ERROR_STOP=1 -f - &
+                  wait $!
+                  sleep 5 &
+                  wait $!
+                done
+            # The password stays out of psql's command line, which any process on the node may read.
+            env:
+              PGHOST: postgres-rw.${TENANT}-postgres.svc
+              PGPORT: "5432"
+              PGDATABASE: ${APP}
+              PGUSER: ${APP}
+              PGSSLMODE: require
+              PGPASSWORD:
+                valueFrom:
+                  secretKeyRef:
+                    name: netbird
+                    key: db-password
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: [ALL]
+            resources:
+              requests:
+                cpu: 5m
+                memory: 32Mi
+              limits:
+                memory: 32Mi
     defaultPodOptions:
       automountServiceAccountToken: false
       enableServiceLinks: false
@@ -285,6 +325,9 @@ spec:
                 readOnly: true
           management:
             management:
+              - path: /etc/netbird
+                readOnly: true
+            scrub:
               - path: /etc/netbird
                 readOnly: true
       roots:

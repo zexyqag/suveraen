@@ -1,5 +1,6 @@
 # The NetBird release a tenant's mesh runs (kubernetes/apps/netbird), which render holds its images to
-# (checks/render.sh). NetBird supports only its latest release.
+# (checks/render.sh). NetBird supports only its latest release. The columns of its peers the scrub blanks and keeps
+# are reviewed with each release (nixos/mesh.nix).
 {
   version = "0.82.0";
   # Index digests at ghcr.io, where NetBird publishes the server images too.

@@ -125,3 +125,41 @@ data:
         error_page 404 /404.html;
       }
     }
+  scrub.sql: |
+    -- What a device reports beyond what the mesh needs never reaches a row, the WAL or a backup: a trigger blanks it in
+    -- each row of peers as it is written. The scrub container runs this every 5 seconds: once management has made the
+    -- table, it puts the trigger back whenever it is missing, disabled or another, and passes the rows already there
+    -- through it, in one transaction.
+    do $scrub$
+    declare
+      passed bigint;
+      -- Fields match by name, so a column NetBird renames or drops is passed over rather than failing every write;
+      -- the servers' check reports it.
+      body constant text := $body$
+    begin
+      new := jsonb_populate_record(new, '{
+        "meta_system_serial_number": "", "meta_system_product_name": "", "meta_system_manufacturer": "",
+        "meta_network_addresses": [], "meta_environment": {"Cloud": "", "Platform": ""},
+        "meta_files": [], "meta_certificates": []}'::jsonb);
+      return new;
+    end
+    $body$;
+    begin
+      if to_regclass('peers') is null or exists (select from pg_trigger t join pg_proc f on f.oid = t.tgfoid
+          where t.tgrelid = to_regclass('peers') and t.tgname = 'scrub' and t.tgenabled = 'O' and f.prosrc = body
+            and pg_get_triggerdef(t.oid)
+              = 'CREATE TRIGGER scrub BEFORE INSERT OR UPDATE ON public.peers FOR EACH ROW EXECUTE FUNCTION scrub_peer()')
+      then
+        return;
+      end if;
+      execute format('create or replace function scrub_peer() returns trigger language plpgsql as %L', body);
+      create or replace trigger scrub before insert or update on peers for each row execute function scrub_peer();
+      -- A trigger sees only what is written after it.
+      update peers set id = id;
+      get diagnostics passed = row_count;
+      raise notice 'scrub: trigger installed, and rows of peers passed through it: %', passed;
+    -- Tried again in 5 seconds.
+    exception when others then
+      raise warning 'scrub: %', sqlerrm;
+    end
+    $scrub$;

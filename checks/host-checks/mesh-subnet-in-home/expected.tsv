@@ -13,6 +13,7 @@ cluster	alpha-netbird home	ok	4	mesh groups outside the rules	no box a source, e
 cluster	alpha-netbird leaver	ok	4	mesh leaver still in	everyone still in at Kanidm
 cluster	alpha-netbird powers	ok	4	mesh powers outside the rules	no check but the version, no job, DNS or SSH
 cluster	alpha-netbird public	ok	4	mesh exposed	no proxy, service or invite
+cluster	alpha-netbird scrub	ok	4	mesh inventory kept	a trigger blanks every device's inventory as it is written, on the columns reviewed
 cluster	alpha-netbird settings	ok	4	mesh settings outside the rules	as the rules set them
 cluster	alpha-netbird share	late	4	mesh share outside the rules	policy pol-home2 reaches subnet res-lan in group home-d4e5f6, which no box of own-d4e5f6 routes
 cluster	alpha-netbird tokens	ok	4	mesh tokens outside the rules	no token, every setup key for one box within a day

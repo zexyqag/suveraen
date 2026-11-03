@@ -13,6 +13,7 @@ cluster	alpha-netbird home	late	4	mesh groups outside the rules	policy pol-wide 
 cluster	alpha-netbird leaver	ok	4	mesh leaver still in	everyone still in at Kanidm
 cluster	alpha-netbird powers	ok	4	mesh powers outside the rules	no check but the version, no job, DNS or SSH
 cluster	alpha-netbird public	ok	4	mesh exposed	no proxy, service or invite
+cluster	alpha-netbird scrub	ok	4	mesh inventory kept	a trigger blanks every device's inventory as it is written, on the columns reviewed
 cluster	alpha-netbird settings	ok	4	mesh settings outside the rules	as the rules set them
 cluster	alpha-netbird share	late	4	mesh share outside the rules	policy pol-from-peer is not from one person's own group; policy pol-group reaches group own-a1b2c3, not its own; policy pol-own-box reaches peer peer-box without ports; policy pol-share reaches host res-camera, not its own, without ports; policy pol-subnet reaches subnet res-lan, which no box of own-d4e5f6 routes; policy pol-two is not from one person's own group; policy pol-wide reaches peer peer-box, not its own, both ways, over all, without ports
 cluster	alpha-netbird tokens	ok	4	mesh tokens outside the rules	no token, every setup key for one box within a day
