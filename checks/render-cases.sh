@@ -838,5 +838,9 @@ renders two-hosts-in-template "yq ea 'select(documentIndex == 1)' apps/hello/ks.
   { cat apps/hello/ks.yaml; echo ---; cat www.yaml; } >ks.yaml; mv ks.yaml apps/hello/ks.yaml; rm www.yaml"
 
 wait
+# A case whose runner died before it judged the case, for want of disk say, fails too.
+for dir in "$cases"/*/; do
+  [ -e "$dir/result" ] || echo "NO RESULT   $(basename "$dir")" >"$dir/result"
+done
 cat "$cases"/*/result
 ! grep -qv '^ok ' "$cases"/*/result
