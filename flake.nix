@@ -46,7 +46,7 @@
       server = config ./checks/server.nix;
 
       e2e = import ./checks/e2e.nix {
-        inherit pkgs;
+        inherit pkgs netbird;
         module = self.nixosModules.default;
         kubernetes = ./kubernetes;
       };

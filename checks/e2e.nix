@@ -47,7 +47,14 @@
 # idm_admin, admin and anonymous disabled. The checks take no run of Kanidm's migrations from lines a client had it log.
 # A tenant's mesh answers on its own host, which the gateway passes through to its edge, whose port alone the gateway
 # reaches; it reaches its tenant's PostgreSQL and Kanidm and nothing else, and once its database is back from a restore,
-# suveraen-mesh raises its network serial and starts its management again.
+# suveraen-mesh raises its network serial and starts its management again. It starts at the release before its own: the
+# first person of its group to sign in owns it, no one outside the group gets in, and it holds no policy and serves
+# nothing but its own paths. Members' devices, which run NetBird's own client, one at the oldest release a mesh takes,
+# sign in through Kanidm's pages and wait for approval, a box at home joins by a one-off key and routes to a camera that
+# can't run NetBird, and each reaches what its policies name, one way, on their ports, and nothing else, relayed or
+# not; a token from another tenant's Kanidm gets nowhere. The mesh keeps no device's address and calls nowhere, and its
+# devices keep to it through an upgrade by a signed release, through the restore, whose lost changes they leave behind,
+# and through the server's reboot, without signing in again.
 # Kanidm's volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all
 # replaces; the server's checks alert once when an app holds a wrong one, and when that clears.
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
@@ -59,6 +66,7 @@
   pkgs,
   module,
   kubernetes,
+  netbird,
 }:
 let
   inherit (pkgs) lib;
@@ -113,6 +121,153 @@ let
   apartPrefix = "2001:db8:ffff::";
   apartClient = "${apartPrefix}1";
 
+  # Members' devices run NetBird's own Linux client from its releases, as daemons that keep the mesh in userspace and so
+  # touch no route, firewall rule or resolver of their node; each reaches the mesh through a SOCKS port of its own.
+  netbirdClient =
+    version:
+    pkgs.runCommand "netbird-client-${version}" { } ''
+      mkdir -p $out/bin
+      tar -xzf ${
+        pkgs.fetchurl {
+          url = "https://github.com/netbirdio/netbird/releases/download/v${version}/netbird_${version}_linux_amd64.tar.gz";
+          hash = netbird.clients.${version};
+        }
+      } -C $out/bin netbird
+    '';
+  devices = {
+    # A person's laptop, whose own services the mesh reaches at its address.
+    laptop = {
+      node = "acme";
+      version = netbird.version;
+      n = 1;
+      env.NB_ENABLE_NETSTACK_LOCAL_FORWARDING = "true";
+    };
+    # Another person's phone at the oldest release a mesh takes, which never connects directly.
+    phone = {
+      node = "acme";
+      version = netbird.floor;
+      n = 2;
+      env.NB_FORCE_RELAY = "true";
+    };
+    # The first person's box at home, joined by a setup key, which routes to a camera on its network.
+    home = {
+      node = "forge";
+      version = netbird.version;
+      n = 3;
+      env.NB_ENABLE_NETSTACK_LOCAL_FORWARDING = "true";
+    };
+  };
+  device =
+    name:
+    let
+      d = devices.${name};
+    in
+    {
+      inherit (d) node;
+      netbird = "${netbirdClient d.version}/bin/netbird";
+      daemon = "unix:///run/netbird-${name}/daemon.sock";
+      socks = 1080 + d.n;
+      wireguard = 51820 + d.n;
+      interface = "wt${toString d.n}";
+    };
+  # Where the test puts what the devices trust and the names they reach the server by, before it starts them.
+  meshFiles = "/run/netbird-e2e";
+  devicesOn =
+    node:
+    lib.mapAttrs' (
+      name: d:
+      lib.nameValuePair "netbird-${name}" {
+        description = "NetBird's client as ${name}";
+        environment = {
+          NB_USE_NETSTACK_MODE = "true";
+          NB_FORCE_USERSPACE_FIREWALL = "true";
+          NB_SOCKS5_LISTENER_PORT = toString (device name).socks;
+          SSL_CERT_FILE = "${meshFiles}/roots.pem";
+        }
+        // d.env;
+        serviceConfig = {
+          ExecStart = "${(device name).netbird} service run --daemon-addr ${(device name).daemon} --log-file console";
+          StateDirectory = "netbird-${name}";
+          RuntimeDirectory = "netbird-${name}";
+          BindPaths = [ "/var/lib/netbird-${name}:/var/lib/netbird" ];
+          BindReadOnlyPaths = [
+            "${meshFiles}/hosts:/etc/hosts"
+            "${meshFiles}/nsswitch.conf:/etc/nsswitch.conf"
+          ];
+        };
+      }
+    ) (lib.filterAttrs (_: d: d.node == node) devices);
+  # A node's devices, the ports of their direct connections, which its firewall would otherwise leave to hole punching,
+  # and the services the mesh reaches there.
+  meshNode = node: services: {
+    systemd.services = devicesOn node // lib.listToAttrs services;
+    networking.firewall.allowedUDPPorts = lib.mapAttrsToList (name: _: (device name).wireguard) (
+      lib.filterAttrs (_: d: d.node == node) devices
+    );
+  };
+  # What a device or the camera serves: its own name, or at /paced a line a second for 100 seconds.
+  listener = pkgs.writers.writePython3 "listener" { flakeIgnore = [ "E501" ]; } ''
+    import http.server
+    import sys
+    import time
+
+    name, address, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+
+
+    class Answer(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            lines = [f"{name} {i}\n".encode() for i in range(100)] if self.path == "/paced" else [f"{name}\n".encode()]
+            self.send_response(200)
+            self.send_header("Content-Length", str(sum(map(len, lines))))
+            self.end_headers()
+            for i, line in enumerate(lines):
+                if i:
+                    time.sleep(1)
+                self.wfile.write(line)
+                self.wfile.flush()
+
+        def log_message(self, *_):
+            pass
+
+
+    http.server.ThreadingHTTPServer((address, port), Answer).serve_forever()
+  '';
+  listen =
+    name: address: port: extra:
+    lib.nameValuePair "listen-${toString port}-${address}" (
+      lib.recursiveUpdate {
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig.ExecStart = "${listener} ${name} ${address} ${toString port}";
+      } extra
+    );
+  # A camera that can't run NetBird, on a network of its own behind the home box, which nothing else routes to; and a
+  # second address there that no policy names.
+  camera = "192.168.50.10";
+  other = "192.168.50.11";
+  inCamera = {
+    requires = [ "camera.service" ];
+    after = [ "camera.service" ];
+    serviceConfig.NetworkNamespacePath = "/run/netns/camera";
+  };
+  # The server images as the HelmRelease names them, at a release.
+  netbirdTags =
+    release:
+    map (image: "tag: ${release.version}@${release.digests.${image}}") [
+      "management"
+      "signal"
+      "relay"
+    ];
+  netbirdImages =
+    release:
+    map (image: "ghcr.io/netbirdio/${image}:${release.version}@${release.digests.${image}}") [
+      "management"
+      "signal"
+      "relay"
+    ];
+  signin = pkgs.writers.writePython3Bin "signin" { flakeIgnore = [ "E501" ]; } (
+    builtins.readFile ./signin.py
+  );
+
   # The driver's builder gets the script in an environment variable, which holds no more than 128 KiB, so each driver,
   # the interactive one and the one the test's own run uses too, gets its attributes from a file instead.
   runTest =
@@ -146,6 +301,16 @@ runTest {
         scanPath = "/srv/git";
         gitHttpBackend.checkExportOkFiles = false;
       };
+      imports = [
+        (meshNode "forge" [
+          # The box's services, which the mesh reaches at its address: one shared, one never.
+          (listen "forge:3389" "127.0.0.1" 3389 { })
+          (listen "forge:5900" "127.0.0.1" 5900 { })
+          (listen "camera:8080" camera 8080 inCamera)
+          (listen "camera:8081" camera 8081 inCamera)
+          (listen "other:8080" other 8080 inCamera)
+        ])
+      ];
       networking.firewall.allowedTCPPorts = [ 80 ];
       networking.interfaces.eth1.ipv6.routes = toServer nodes;
       environment.systemPackages = [
@@ -153,6 +318,25 @@ runTest {
         pkgs.openssh
         pkgs.curl
       ];
+
+      systemd.services.camera = {
+        description = "A camera's network behind the home box";
+        wantedBy = [ "multi-user.target" ];
+        path = [ pkgs.iproute2 ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        script = ''
+          ip netns add camera
+          ip link add camera type veth peer name eth0 netns camera
+          ip address add 192.168.50.1/24 dev camera
+          ip link set camera up
+          ip -n camera address add ${camera}/24 dev eth0
+          ip -n camera address add ${other}/24 dev eth0
+          ip -n camera link set eth0 up
+        '';
+      };
     };
 
   # The internet: two test ACME CAs (Pebble) with a resolver of their own, and a nameserver standing in for both our
@@ -192,13 +376,22 @@ runTest {
           address = s3Address;
           port = 80;
         })
+        (meshNode "acme" [
+          # The laptop's services, which the mesh reaches at its address.
+          (listen "acme:3389" "127.0.0.1" 3389 { })
+          (listen "acme:8000" "127.0.0.1" 8000 { })
+        ])
       ];
       environment.systemPackages = [
         # To find a tenant's copies there by the names its crypt encrypts.
         pkgs.rclone
         # To decrypt the server's own copies as the operator does.
         pkgs.age
+        # The browser of the people whose devices sign in here.
+        signin
       ];
+      # Two CAs, two nameservers, two object stores and two NetBird clients.
+      virtualisation.memorySize = 1536;
       systemd.services.pebble.serviceConfig.ExecStart = lib.mkForce (
         lib.getExe (
           pebble "public" ''{"listenAddress": "0.0.0.0:443", "managementListenAddress": "0.0.0.0:15000"}''
@@ -340,6 +533,8 @@ runTest {
           # test. is one of Unbound's empty local zones, and isn't signed.
           local-zone = [ ''"test." transparent'' ];
           domain-insecure = [ "test." ];
+          # What pods look up, so the test sees that a mesh's management asks for no name of its makers'.
+          log-queries = true;
         };
         # As a real cluster's are found through the registries, its zones are found at the published nameserver.
         stub-zone = map (name: {
@@ -357,6 +552,7 @@ runTest {
       environment.systemPackages = [
         config.suveraen.idm.kanidm
         pkgs.openssl
+        signin
       ];
 
       # Every run of every container of Rook's OSD prepare pods, kept for diagnose(): the Job deletes its pod once it
@@ -485,7 +681,7 @@ runTest {
       import shlex
       import time
       from datetime import datetime
-      from urllib.parse import quote
+      from urllib.parse import parse_qs, quote, urlsplit
 
       def read(path, key):
           with open(path) as f:
@@ -525,6 +721,14 @@ runTest {
               f"${asCgit} sed -i 's|^  PUBLIC_CA_BUNDLE: \"\"$|  PUBLIC_CA_BUNDLE: {bundle}|' ${checkout}/settings.yaml"
               f" && grep -qxF '  PUBLIC_CA_BUNDLE: {bundle}' ${checkout}/settings.yaml"
           )
+          # A tenant's mesh starts at the release before its own, which a later release upgrades.
+          nb_release = "/srv/src/kubernetes/apps/netbird/app/helmrelease.yaml"
+          nb_now, nb_before = ${builtins.toJSON (netbirdTags netbird)}, ${builtins.toJSON (netbirdTags netbird.previous)}
+          forge.succeed(" && ".join(
+              f"${asCgit} sed -i 's|{now}$|{before}|' {nb_release} && grep -qF '{before}' {nb_release}"
+              f" && ! grep -qF '{now}' {nb_release}"
+              for now, before in zip(nb_now, nb_before)
+          ))
           forge.succeed(
               "cd /srv/src && ${asCgit} git init -q -b main && ${asCgit} git add -A"
               " && ${asCgit} git -c user.name=test -c user.email=test@example.org -c gpg.format=ssh"
@@ -1424,14 +1628,19 @@ runTest {
                   t: ([], [], 0) for t in tenants
               }, found
 
-          # As an operator by hand: an account recovered by exec, and the client signed in with its new password.
-          def signed_in(t, name):
+          # A new password for an account, which Kanidm's recovery by exec gives whatever kind of credential the
+          # account may enrol, and takes at a sign-in.
+          def recovered(t, name):
               out = json.loads(server.succeed(
                   f"kubectl -n {t}-kanidm exec kanidm-0 -c app -- /sbin/kanidmd scripting recover-account {name}"
               ))
               assert out["status"] == "ok", out
+              return out["output"]
+
+          # As an operator by hand: an account recovered by exec, and the client signed in with its new password.
+          def signed_in(t, name):
               server.succeed(
-                  f"KANIDM_PASSWORD={out['output']} {pinned} kanidm login -H https://{idm[t]} -C {kanidm_ca} -D {name}"
+                  f"KANIDM_PASSWORD={recovered(t, name)} {pinned} kanidm login -H https://{idm[t]} -C {kanidm_ca} -D {name}"
               )
 
           def as_idm_admin(t):
@@ -1655,6 +1864,487 @@ runTest {
               server.succeed("suveraen-idm check")
               server.fail("test -e /run/suveraen-idm/home.held")
 
+          def release(message, change):
+              forge.succeed(
+                  f"cd ${checkout} && {change}"
+                  " && ${asCgit} git -c user.name=test -c user.email=test@example.org -c gpg.format=ssh"
+                  f" -c user.signingkey=/srv/signer commit -q -a -S -m {message}"
+                  " && ${asCgit} git push -q /srv/git/suveraen.git main"
+              )
+              signed = forge.succeed("${asCgit} git -C /srv/git/suveraen.git rev-parse main").strip()
+              server.succeed(
+                  "kubectl -n flux-system annotate gitrepository suveraen --overwrite reconcile.fluxcd.io/requestedAt=$(date +%s)"
+              )
+              server.wait_until_succeeds(
+                  f"kubectl -n flux-system get gitrepository suveraen -o jsonpath='{{.status.artifact.revision}}' | grep -F {signed}",
+                  timeout=300,
+              )
+              return signed
+
+          # A tenant's mesh as people use it: its owner through the dashboard's API, members' devices that run
+          # NetBird's own client and sign in at the tenant's Kanidm or join by a setup key, and a camera behind a box at
+          # someone's home.
+          nb_ns = f"{first}-netbird"
+          [nb_host] = [h for h, namespace in passthrough.items() if namespace == nb_ns]
+          nb_reach = f"--cacert {kanidm_ca} --resolve {nb_host}:443:${server}"
+          nb_db = (
+              f"kubectl -n {first}-postgres exec $(kubectl -n {first}-postgres get pod -l cnpg.io/instanceRole=primary"
+              " -o name) -c postgres -- psql -tA -d netbird -c"
+          )
+          nb_devices = ${builtins.toJSON (lib.genAttrs (lib.attrNames devices) device)}
+          nb_nodes = {"acme": acme, "forge": forge}
+          nb_camera, nb_other = "${camera}", "${other}"
+          # Its people by name, with their Kanidm IDs, passwords and tags; IDs the test keeps; the owner's token.
+          nb_people = {}
+          nb_ids = {}
+          nb_owner_token = {}
+
+          def nb_sign_in_token(t, person, password):
+              return (
+                  f"signin --cacert {kanidm_ca} --resolve {idm[t]}:${server} token https://{idm[t]} netbird-oidc"
+                  f" https://{nb_host}/nb-auth {person} {shlex.quote(password)}"
+              )
+
+          # Kanidm's access token for the dashboard's client, as the dashboard gets it.
+          def nb_token(t, person, password):
+              return json.loads(server.succeed(nb_sign_in_token(t, person, password)))["access_token"]
+
+          def nb_owner():
+              # Kanidm's access tokens last 15 minutes.
+              if time.monotonic() - nb_owner_token.get("at", -3600.0) > 600:
+                  nb_owner_token.update(value=nb_token(first, "op", nb_people["op"]["password"]), at=time.monotonic())
+              return nb_owner_token["value"]
+
+          # NetBird's API through the gateway, as the owner unless a token is given: the status, and what it said.
+          def nb_call(method, path, body=None, token=None):
+              send = "" if body is None else f" -H 'Content-Type: application/json' -d {shlex.quote(json.dumps(body))}"
+              status = server.succeed(
+                  f"curl -sS {nb_reach} -o /tmp/shared/nb -w '%{{http_code}}' -X {method}"
+                  f" -H 'Authorization: Bearer {token or nb_owner()}'{send} https://{nb_host}{path}"
+              )
+              text = (server.shared_dir / "nb").read_text()
+              try:
+                  return int(status), json.loads(text)
+              except json.JSONDecodeError:
+                  return int(status), text
+
+          def nb(method, path, body=None):
+              status, answer = nb_call(method, path, body)
+              assert status == 200, (method, path, status, answer)
+              return answer
+
+          def nb_peers():
+              return {p["name"]: p for p in nb("GET", "/api/peers")}
+
+          # A policy as the operator makes them: one rule, from one member's own group, with the version check.
+          def nb_policy(name, source, protocol="all", ports=None, two_way=False, group=None, resource=None):
+              rule = {"name": name, "enabled": True, "action": "accept", "bidirectional": two_way, "protocol": protocol,
+                      "sources": [source]}
+              if ports:
+                  rule["ports"] = ports
+              if group:
+                  rule["destinations"] = [group]
+              if resource:
+                  rule["destinationResource"] = resource
+              return {"name": name, "enabled": True, "source_posture_checks": [nb_ids["floor"]], "rules": [rule]}
+
+          # The operator's onboarding of a person whose first device waits for approval: a random tag, their own group
+          # and their home's, the policy within their own group, their own as the one group their devices join, and
+          # approval.
+          def nb_onboard(name):
+              person = nb_people[name]
+              person["tag"] = os.urandom(3).hex()
+              person["own"] = nb("POST", "/api/groups", {"name": f"own-{person['tag']}"})["id"]
+              person["home"] = nb("POST", "/api/groups", {"name": f"home-{person['tag']}"})["id"]
+              nb("POST", "/api/policies", nb_policy(f"own-{person['tag']}", person["own"], two_way=True,
+                                                    group=person["own"]))
+              nb("PUT", f"/api/users/{person['uuid']}", {"role": "user", "auto_groups": [person["own"]], "is_blocked": False})
+              nb("POST", f"/api/users/{person['uuid']}/approve")
+
+          # Who is in the mesh and what they may reach, without what changes as devices come and go.
+          def nb_state():
+              def ids(objects):
+                  return sorted(o["id"] for o in objects or [])
+
+              peers = sorted(
+                  (p["id"], p["name"], p["ip"], p["dns_label"], p["user_id"], ids(p["groups"]))
+                  for p in nb("GET", "/api/peers")
+              )
+              groups = sorted((g["id"], g["name"], ids(g.get("peers"))) for g in nb("GET", "/api/groups"))
+              policies = sorted(
+                  (q["id"], q["name"], q["enabled"], sorted(q.get("source_posture_checks") or []), sorted(
+                      (r["bidirectional"], r["protocol"], sorted(r.get("ports") or []), ids(r.get("sources")),
+                       ids(r.get("destinations")), json.dumps(r.get("destinationResource"), sort_keys=True))
+                      for r in q["rules"]
+                  ))
+                  for q in nb("GET", "/api/policies")
+              )
+              networks = sorted(
+                  (n["id"], n["name"],
+                   sorted((r["id"], r.get("peer"), r["enabled"]) for r in nb("GET", f"/api/networks/{n['id']}/routers")),
+                   sorted((r["id"], r["address"], r["enabled"]) for r in nb("GET", f"/api/networks/{n['id']}/resources")))
+                  for n in nb("GET", "/api/networks")
+              )
+              return {"peers": peers, "groups": groups, "policies": policies, "networks": networks}
+
+          def nb_cli(name, args):
+              return f"{nb_devices[name]['netbird']} {args} --daemon-addr {nb_devices[name]['daemon']}"
+
+          def nb_node(name):
+              return nb_nodes[str(nb_devices[name]["node"])]
+
+          # Runs netbird up on a device in the background, as its owner would: it ends once the device is in, or
+          # refused. Where it writes what it says.
+          def nb_up(name, flags=""):
+              d, node, log = nb_devices[name], nb_node(name), f"/tmp/netbird-up-{name}"
+              up = nb_cli(
+                  name,
+                  f"up --no-browser --management-url https://{nb_host} --hostname {name}"
+                  f" --wireguard-port {d['wireguard']} --interface-name {d['interface']} {flags}",
+              )
+              # Run from a desktop session, the client signs in through a browser and a listener of its own (PKCE).
+              node.succeed(
+                  f"rm -f {log} {log}.status && (DESKTOP_SESSION=e2e {up} > {log} 2>&1; echo $? > {log}.status)"
+                  " < /dev/null > /dev/null 2>&1 &"
+              )
+              return log
+
+          # Whether a device's netbird up got it in, and what it said.
+          def nb_ended(name, log):
+              node = nb_node(name)
+              node.wait_until_succeeds(f"test -s {log}.status", timeout=300)
+              return node.succeed(f"cat {log}.status").strip() == "0", node.succeed(f"cat {log}")
+
+          # A device signs in as a person: netbird up prints Kanidm's page, which a browser holding no session walks,
+          # and the code goes back to the device's own listener. The page it was sent to, and how up ended.
+          def nb_sign_in(name, person):
+              node, log = nb_node(name), nb_up(name)
+              page = f"https://{idm[first]}/ui/oauth2?"
+              node.wait_until_succeeds(f"grep -qF {shlex.quote(page)} {log}", timeout=120)
+              [authorize] = re.findall(rf"{re.escape(page)}\S+", node.succeed(f"cat {log}"))
+              node.succeed(
+                  f"signin --cacert ${meshFiles}/roots.pem --resolve {idm[first]}:${server} deliver"
+                  f" {shlex.quote(authorize)} {person} {shlex.quote(nb_people[person]['password'])}"
+              )
+              return (authorize, *nb_ended(name, log))
+
+          # A device's own view of the mesh, or None while its daemon doesn't answer.
+          def nb_status(name):
+              status, out = nb_node(name).execute(f"{nb_cli(name, 'status --json')} > /tmp/shared/nb-{name} 2>&1")
+              text = (nb_node(name).shared_dir / f"nb-{name}").read_text()
+              return json.loads(text) if status == 0 else None
+
+          # What a device gets from an address through its SOCKS port: curl's status and what it printed.
+          def nb_fetch(name, target):
+              return nb_node(name).execute(
+                  f"curl -sS -m 3 --socks5 127.0.0.1:{nb_devices[name]['socks']} http://{target}/ 2>&1"
+              )
+
+          # Lets nothing through: curl times out, or the device says it has no way there.
+          def nb_blocked(name, target):
+              status, out = nb_fetch(name, target)
+              assert status in [28, 97], (name, target, status, out)
+
+          def nb_reaches(name, target, served):
+              retry(lambda _: nb_fetch(name, target) == (0, f"{served}\n"), timeout_seconds=120)
+
+          # Once the policy that let it through is gone.
+          def nb_refused(name, target):
+              retry(lambda _: nb_fetch(name, target)[0] in [28, 97], timeout_seconds=60)
+
+          # Each device's daemon answers, and holds its streams to management and signal.
+          def nb_back(name):
+              def back(_):
+                  view = nb_status(name)
+                  return bool(view) and view["management"]["connected"] and view["signal"]["connected"]
+
+              return back
+
+
+          # The release Helm has deployed last, and those before, newest first.
+          def nb_history():
+              status, out = server.execute(f"kubectl -n {nb_ns} get helmrelease netbird -o jsonpath='{{.status.history}}'")
+              return sorted(json.loads(out), key=lambda s: s["version"], reverse=True) if status == 0 and out else []
+
+          def nb_deployed(version):
+              return lambda _: [(s["version"], s["status"]) for s in nb_history()[:1]] == [(version, "deployed")]
+
+          def nb_running():
+              return sorted(i for i in server.succeed(
+                  f"kubectl -n {nb_ns} get deployments -o jsonpath='{{.items[*].spec.template.spec.containers[*].image}}'"
+              ).split() if i.startswith("ghcr.io/"))
+
+          # Lines of a device's log since a moment that say it lost or found management or signal.
+          def nb_reconnects(name, since):
+              return nb_node(name).execute(
+                  f"journalctl -u netbird-{name} --since @{since} -o cat --no-pager"
+                  " | grep -E '(connected to|disconnected from) the (Management|Signal)'"
+              )[1]
+
+          with subtest("A tenant's mesh, at the release before its own, makes the first person of its group its owner, refuses anyone outside the group, holds no policy, and serves nothing but its five paths"):
+              assert nb_running() == sorted(${builtins.toJSON (netbirdImages netbird.previous)}), nb_running()
+              # Its people, in its group from the start, so a passkey is all they could enrol; and one outside it.
+              as_idm_admin(first)
+              for who in ["op", "alice", "bob", "eve"]:
+                  server.succeed(cli(first, f"person create {who} {who.capitalize()}"))
+                  nb_people[who] = {"uuid": kanidm(first, f"person get {who}")["attrs"]["uuid"][0]}
+              server.succeed(cli(first, "group add-members netbird-users op alice bob"))
+              disable_idm_admin(first)
+              for who, entry in nb_people.items():
+                  entry["password"] = recovered(first, who)
+              status, out = server.execute(f"{nb_sign_in_token(first, 'eve', nb_people['eve']['password'])} 2>&1")
+              assert status != 0 and "Access Denied" in out, out
+              # The first to sign in owns it.
+              nb_me = nb("GET", "/api/users/current")
+              assert (nb_me["id"], nb_me["role"]) == (nb_people["op"]["uuid"], "owner"), nb_me
+              assert nb("GET", "/api/policies") == [], "a policy came with the account"
+              assert [g["name"] for g in nb("GET", "/api/groups")] == ["All"]
+              [nb_account] = nb("GET", "/api/accounts")
+              nb_settings = nb_account["settings"]
+              assert nb_settings["extra"]["user_approval_required"] and not nb_settings.get("jwt_groups_enabled"), nb_settings
+              assert not nb_settings["peer_expose_enabled"] and not nb_settings.get("dns_domain"), nb_settings
+              # The owner's settings before any device joins: a week's login, no IPv6 in the mesh, and a version check
+              # for every policy.
+              nb_settings |= {"peer_login_expiration_enabled": True, "peer_login_expiration": 7 * 86400, "ipv6_enabled_groups": []}
+              nb("PUT", f"/api/accounts/{nb_account['id']}", {"settings": nb_settings})
+              [nb_account] = nb("GET", "/api/accounts")
+              assert nb_account["settings"]["peer_login_expiration"] == 7 * 86400, nb_account
+              assert not nb_account["settings"].get("ipv6_enabled_groups"), nb_account
+              nb_ids["floor"] = nb("POST", "/api/posture-checks", {
+                  "name": "floor", "description": "The oldest release a mesh takes",
+                  "checks": {"nb_version_check": {"min_version": "${netbird.floor}"}},
+              })["id"]
+
+              # Without a token: paths of NetBird's own it doesn't route and those it refuses get the dashboard's 404
+              # page, the API answers as management.
+              def unsigned(path, method="GET"):
+                  status = server.succeed(
+                      f"curl -sS {nb_reach} -o /tmp/shared/nb -w '%{{http_code}}' -X {method} https://{nb_host}{path}"
+                  )
+                  return int(status), (server.shared_dir / "nb").read_text()
+
+              page = unsigned("/404.html")
+              assert page[0] == 200 and "<html" in page[1], page
+              for path, method in [
+                  ("/management.ProxyService/", "POST"), ("/ws-proxy/management", "GET"), ("/oauth2/", "GET"),
+                  ("/api/setup", "POST"), ("/api/users/invites/nbi_x", "GET"), ("/api/reverse-proxy/callback", "GET"),
+                  # The dashboard's own pages that no file holds, which its 404 page renders.
+                  ("/nb-auth", "GET"), ("/team/users", "GET"),
+              ]:
+                  got = unsigned(path, method)
+                  assert got == (404, page[1]), (path, got)
+              got = unsigned("/api/setup-keys")
+              assert got[0] == 401 and got[1] != page[1], got
+              assert nb("GET", "/api/setup-keys") == []
+              # The dashboard's page runs no script of its own, under the policy nginx was given.
+              server.succeed(f"curl -fsS {nb_reach} -D /tmp/shared/nb-headers -o /tmp/shared/nb https://{nb_host}/")
+              index = (server.shared_dir / "nb").read_text()
+              assert not re.search(r"<script(?![^>]*\ssrc=)[^>]*>(?!\s*</script>)", index), "the dashboard's page runs an inline script"
+              conf = server.succeed(f"kubectl -n {nb_ns} get configmap netbird -o jsonpath='{{.data.nginx\\.conf}}'")
+              [wanted] = re.findall(r'add_header Content-Security-Policy "([^"]+)" always;', conf)
+              headers = [h.split(":", 1) for h in (server.shared_dir / "nb-headers").read_text().splitlines() if ":" in h]
+              assert [v.strip() for k, v in headers if k.lower() == "content-security-policy"] == [wanted], headers
+              assert server.succeed(
+                  f"{nb_db} \"select pg_encoding_to_char(encoding) from pg_database where datname = 'netbird'\""
+              ).strip() == "UTF8"
+              # Management asked no resolver for its makers' names: they lead nowhere in its pod.
+              queries = shown("journalctl -u unbound -o cat --no-pager").splitlines()
+              assert not [line for line in queries if re.search(r"\b(netbird\.io|api\.github\.com)\. ", line)]
+
+          with subtest("A member's device asks for a fresh sign-in and waits for approval, then joins its person's own group"):
+              # Kanidm applies the group's minimum as a person enrols: their reset offers no password.
+              as_idm_admin(first)
+              out = server.succeed(cli(first, "person credential create-reset-token alice"))
+              disable_idm_admin(first)
+              [reset] = re.findall(rf"This link: https://{re.escape(idm[first])}/ui/reset\?token=(\S+)", out)
+              exchanged = json.loads(server.succeed(
+                  f"curl -fsS {reach[first]} -H 'Content-Type: application/json' -d '\"{reset}\"'"
+                  f" https://{idm[first]}/v1/credential/_exchange_intent"
+              ))[1]
+              assert [exchanged[k] for k in ["primary_state", "passkeys_state"]] == ["PolicyDeny", "Modifiable"], exchanged
+              for node in [acme, forge]:
+                  node.succeed(
+                      f"mkdir -p ${meshFiles} && printf %s {shlex.quote(roots)} > ${meshFiles}/roots.pem"
+                      f" && printf '127.0.0.1 localhost\\n::1 localhost\\n${server} {nb_host} {idm[first]}\\n'"
+                      " > ${meshFiles}/hosts && echo 'hosts: files dns' > ${meshFiles}/nsswitch.conf"
+                  )
+              for name in nb_devices:
+                  nb_node(name).succeed(f"systemctl start netbird-{name}")
+                  nb_node(name).wait_until_succeeds(nb_cli(name, "status"), timeout=60)
+              # Two people's first devices, back to back: each is refused until its person is approved.
+              for name, who in [("laptop", "alice"), ("phone", "bob")]:
+                  authorize, joined, said = nb_sign_in(name, who)
+                  asked = parse_qs(urlsplit(authorize).query)
+                  assert (asked["prompt"], asked["scope"]) == (["login"], ["openid"]), authorize
+                  assert not joined and "pending approval" in said, said
+              nb_users = {u["id"]: u for u in nb("GET", "/api/users")}
+              assert all(nb_users[nb_people[who]["uuid"]]["pending_approval"] for who in ["alice", "bob"]), nb_users
+              # It keeps a person as their Kanidm ID alone.
+              assert server.succeed(
+                  f"{nb_db} 'select count(*) from users where coalesce(length(name), 0) + coalesce(length(email), 0) > 0'"
+              ).strip() == "0"
+              for who in ["alice", "bob"]:
+                  nb_onboard(who)
+              for name, who in [("laptop", "alice"), ("phone", "bob")]:
+                  _, joined, said = nb_sign_in(name, who)
+                  assert joined and "Connected" in said, said
+              nb_seen = nb_peers()
+              for name, who in [("laptop", "alice"), ("phone", "bob")]:
+                  assert nb_seen[name]["user_id"] == nb_people[who]["uuid"], nb_seen[name]
+                  assert sorted(g["name"] for g in nb_seen[name]["groups"]) == ["All", f"own-{nb_people[who]['tag']}"], nb_seen
+
+          with subtest("A box at home joins by a one-off key, reaches nobody, and routes to a camera that can't run NetBird"):
+              nb_alice = nb_people["alice"]
+              nb_key = nb("POST", "/api/setup-keys", {
+                  "name": f"home-{nb_alice['tag']}", "type": "one-off", "expires_in": 86400, "usage_limit": 1,
+                  "auto_groups": [nb_alice["home"]],
+              })
+              joined, said = nb_ended("home", nb_up("home", f"--setup-key {nb_key['key']} --disable-client-routes"))
+              assert joined and "Connected" in said, said
+              nb_seen = nb_peers()
+              nb_home, nb_laptop, nb_phone = nb_seen["home"], nb_seen["laptop"], nb_seen["phone"]
+              assert sorted(g["name"] for g in nb_home["groups"]) == ["All", f"home-{nb_alice['tag']}"], nb_home
+              assert not nb_home["user_id"] and not nb_home["login_expiration_enabled"], nb_home
+              # Its person reaches its desktop, on the port the policy names, and nothing else of it.
+              nb_box = {"id": nb_home["id"], "type": "peer"}
+              nb_ids["box"] = nb("POST", "/api/policies", nb_policy(
+                  f"box-{nb_alice['tag']}", nb_alice["own"], "tcp", ["3389"], resource=nb_box
+              ))["id"]
+              nb_network = nb("POST", "/api/networks", {"name": f"home-{nb_alice['tag']}"})
+              nb("POST", f"/api/networks/{nb_network['id']}/routers",
+                 {"peer": nb_home["id"], "metric": 9999, "masquerade": True, "enabled": True})
+              nb_ids["camera"] = nb("POST", f"/api/networks/{nb_network['id']}/resources", {
+                  "name": "camera", "address": f"{nb_camera}/32", "enabled": True, "groups": [],
+              })["id"]
+              nb("POST", "/api/policies", nb_policy(
+                  f"camera-{nb_alice['tag']}", nb_alice["own"], "tcp", ["8080"], resource={"id": nb_ids["camera"], "type": "host"}
+              ))
+              nb_reaches("laptop", f"{nb_camera}:8080", "camera:8080")
+              nb_reaches("laptop", f"{nb_home['ip']}:3389", "forge:3389")
+              nb_blocked("laptop", f"{nb_home['ip']}:5900")
+              # A rule both ways opens the way back from the box on that port, and one way closes it again.
+              nb_blocked("home", f"{nb_laptop['ip']}:3389")
+              for two_way in [True, False]:
+                  nb("PUT", f"/api/policies/{nb_ids['box']}", nb_policy(
+                      f"box-{nb_alice['tag']}", nb_alice["own"], "tcp", ["3389"], two_way=two_way, resource=nb_box
+                  ))
+                  if two_way:
+                      nb_reaches("home", f"{nb_laptop['ip']}:3389", "acme:3389")
+                  else:
+                      nb_refused("home", f"{nb_laptop['ip']}:3389")
+
+          with subtest("Two members' devices stay apart"):
+              view = nb_status("phone")
+              assert view and not view["peers"]["details"], view
+              for target in [f"{nb_camera}:8080", f"{nb_home['ip']}:3389", f"{nb_laptop['ip']}:8000"]:
+                  nb_blocked("phone", target)
+              nb_blocked("laptop", f"{nb_phone['ip']}:8000")
+
+          with subtest("An upgrade by a signed release keeps the mesh, and its devices come back to it by themselves"):
+              nb_kept = nb_state()
+              top = nb_history()[0]["version"]
+              since = {name: int(nb_node(name).succeed("date +%s")) for name in nb_devices}
+              release("netbird-upgrade", " && ".join(
+                  f"${asCgit} sed -i 's|{before}$|{now}|' {nb_release}" for now, before in zip(nb_now, nb_before)
+              ))
+              retry(nb_deployed(top + 1), timeout_seconds=1200)
+              # Helm upgraded it once, and neither rolled it back nor uninstalled it.
+              assert [(s["version"], s["status"]) for s in nb_history()[:2]] == [(top + 1, "deployed"), (top, "superseded")]
+              assert nb_running() == sorted(${builtins.toJSON (netbirdImages netbird)}), nb_running()
+              server.wait_until_succeeds(f"curl -fsS -o /dev/null {nb_reach} https://{nb_host}/api/instance", timeout=600)
+              assert nb_state() == nb_kept
+              for name in nb_devices:
+                  retry(nb_back(name), timeout_seconds=300)
+                  assert "connected to the Management Service stream" in nb_reconnects(name, since[name]), name
+              nb_reaches("laptop", f"{nb_camera}:8080", "camera:8080")
+
+          with subtest("A share gives one port one way, relayed, past the gateway's timeouts"):
+              nb_bob = nb_people["bob"]
+              nb("POST", "/api/policies", nb_policy(
+                  f"share-{nb_bob['tag']}-camera", nb_bob["own"], "tcp", ["8080"], resource={"id": nb_ids["camera"], "type": "host"}
+              ))
+              nb("POST", "/api/policies", nb_policy(
+                  f"share-{nb_bob['tag']}-box", nb_bob["own"], "tcp", ["3389"], resource={"id": nb_home["id"], "type": "peer"}
+              ))
+              nb_reaches("phone", f"{nb_camera}:8080", "camera:8080")
+              nb_reaches("phone", f"{nb_home['ip']}:3389", "forge:3389")
+              # The box routes no other port of the camera's, and nothing routes to its neighbour.
+              for target in [f"{nb_camera}:8081", f"{nb_other}:8080", f"{nb_home['ip']}:5900", f"{nb_laptop['ip']}:8000"]:
+                  nb_blocked("phone", target)
+              # Nor does the box get back to the phone: dropped, not answered.
+              status, out = nb_fetch("home", f"{nb_phone['ip']}:3389")
+              assert status == 28, (status, out)
+              [via] = [p for p in nb_status("phone")["peers"]["details"] if p["fqdn"].startswith("home.")]
+              assert (via["connectionType"], via["relayAddress"]) == ("Relayed", f"rels://{nb_host}:443"), via
+              # Longer than any request timeout on the way, joined once the next subtests are done.
+              since = {name: int(nb_node(name).succeed("date +%s")) for name in nb_devices}
+              acme.succeed(
+                  f"(curl -sS -m 300 --socks5 127.0.0.1:{nb_devices['phone']['socks']} http://{nb_camera}:8080/paced"
+                  " > /tmp/paced 2>&1; echo $? > /tmp/paced.status) < /dev/null > /dev/null 2>&1 &"
+              )
+
+          with subtest("The mesh keeps no member's address, names its peers under its own suffix, routes nothing but the camera, and calls nowhere"):
+              with open("${kubernetes}/apps/netbird/ks.yaml") as template:
+                  suffix = re.search(r"NETBIRD_DNS_DOMAIN:=([^}]+)\}", template.read())
+              assert suffix, "the template has no default suffix"
+              pods = [ipaddress.ip_network(setting(f"POD_CIDR_V{v}")) for v in [4, 6]]
+              for peer in nb("GET", "/api/peers"):
+                  assert any(ipaddress.ip_address(peer["connection_ip"]) in r for r in pods), peer
+                  assert peer["dns_label"].endswith(f".{suffix.group(1)}") and not peer.get("ipv6"), peer
+              for name in nb_devices:
+                  view = nb_status(name)
+                  assert view and not view.get("netbirdIpv6"), view
+                  routed = set(view.get("networks") or []) | {
+                      n for p in view["peers"]["details"] or [] for n in p.get("networks") or []
+                  }
+                  assert routed <= {f"{nb_camera}/32"}, (name, routed)
+              # What the mesh's pods logged names no device's own address: nginx dropped what a device could claim, and
+              # management trusts no one's word for theirs.
+              logs = shown(
+                  f"for pod in $(kubectl -n {nb_ns} get pods -o name); do kubectl -n {nb_ns} logs $pod --all-containers"
+                  " --prefix; done"
+              )
+              nb_addresses = [
+                  "${nodes.forge.networking.primaryIPAddress}",
+                  "${nodes.forge.networking.primaryIPv6Address}",
+                  "${nodes.acme.networking.primaryIPAddress}",
+                  "${nodes.acme.networking.primaryIPv6Address}",
+              ]
+              leaked = [a for a in nb_addresses if re.search(rf"\b{re.escape(a)}\b", logs)]
+              assert not leaked, [line for line in logs.splitlines() if any(a in line for a in leaked)][:20]
+              relayed = shown(f"kubectl -n {nb_ns} logs deploy/netbird -c relay")
+              assert "connected from" not in relayed, relayed
+              # Nor has management asked a resolver for its makers' names since it was upgraded.
+              queries = shown("journalctl -u unbound -o cat --no-pager").splitlines()
+              assert any(re.search(r"info: \S+ \S+\. A IN", line) for line in queries), "Unbound logged no query"
+              asked = [line for line in queries if re.search(r"\b(netbird\.io|api\.github\.com)\. ", line)]
+              assert not asked, asked
+
+          with subtest("A token from another tenant's Kanidm, for a client of the same name, gets nowhere in this tenant's mesh"):
+              as_idm_admin(second)
+              for args in [
+                  f"system oauth2 create-public netbird-oidc NetBird https://{nb_host}",
+                  f"system oauth2 add-redirect-url netbird-oidc https://{nb_host}/nb-auth",
+                  "system oauth2 update-scope-map netbird-oidc idm_all_persons openid",
+                  "person create mallory Mallory",
+              ]:
+                  server.succeed(cli(second, args))
+              disable_idm_admin(second)
+              nb_theirs = nb_token(second, "mallory", recovered(second, "mallory"))
+              assert nb_call("GET", "/api/users/current", token=nb_theirs)[0] == 401
+              assert nb_call("GET", "/api/users/current")[0] == 200
+              as_idm_admin(second)
+              server.succeed(cli(second, "system oauth2 delete netbird-oidc") + " && " + cli(second, "person delete mallory"))
+              disable_idm_admin(second)
+
+          with subtest("The shared camera's slow page came through whole, and no device lost management or signal meanwhile"):
+              acme.wait_until_succeeds("test -s /tmp/paced.status", timeout=300)
+              paced = acme.succeed("cat /tmp/paced")
+              assert acme.succeed("cat /tmp/paced.status").strip() == "0", paced
+              assert paced.splitlines() == [f"camera:8080 {i}" for i in range(100)], paced
+              for name in nb_devices:
+                  assert not nb_reconnects(name, since[name]).strip(), (name, nb_reconnects(name, since[name]))
+
           def psql(namespace, pod, query, **conn):
               # Connects as the app does, with the Secret its namespace holds unless told otherwise.
               target = " ".join(f"{k}={v}" for k, v in conn.items())
@@ -1840,23 +2530,6 @@ runTest {
                   # Not even the provider's own key removes a locked copy.
                   refused_at(n, root, f"s3api delete-object {version}")
 
-          def release(message, change):
-              forge.succeed(
-                  f"cd ${checkout} && {change}"
-                  " && ${asCgit} git -c user.name=test -c user.email=test@example.org -c gpg.format=ssh"
-                  f" -c user.signingkey=/srv/signer commit -q -a -S -m {message}"
-                  " && ${asCgit} git push -q /srv/git/suveraen.git main"
-              )
-              signed = forge.succeed("${asCgit} git -C /srv/git/suveraen.git rev-parse main").strip()
-              server.succeed(
-                  "kubectl -n flux-system annotate gitrepository suveraen --overwrite reconcile.fluxcd.io/requestedAt=$(date +%s)"
-              )
-              server.wait_until_succeeds(
-                  f"kubectl -n flux-system get gitrepository suveraen -o jsonpath='{{.status.artifact.revision}}' | grep -F {signed}",
-                  timeout=300,
-              )
-              return signed
-
           # Flux takes over what kubectl's own field managers set, so the object's next apply would drop the change.
           def merge(namespace, obj, change):
               server.succeed(
@@ -1960,13 +2633,24 @@ runTest {
 
           with subtest("When the cluster's object store has lost a tenant's backups, a release brings its PostgreSQL back from a provider's copy"):
               ns = f"{first}-postgres"
-              # The tenant's mesh, whose state is in that database.
+              # The tenant's mesh, whose state is in that database, with a device that stays on throughout.
               assert first in meshes, meshes
-              mesh_accounts = (
-                  f"kubectl -n {ns} exec $(kubectl -n {ns} get pod -l cnpg.io/instanceRole=primary -o name) -c postgres"
-                  " -- psql -tA -d netbird -c 'select id, network_serial from accounts'"
+              mesh_accounts = f"{nb_db} 'select id, network_serial from accounts'"
+              # Nothing goes off-site from here on, so what the mesh does next is lost with the cluster.
+              merge(ns, "cronjob offsite", {"spec": {"suspend": True}})
+              server.wait_until_succeeds(
+                  f"test -z \"$(kubectl -n {ns} get cronjob offsite -o jsonpath='{{.status.active}}')\"", timeout=600
               )
               mesh_serials = dict(line.split("|") for line in server.succeed(mesh_accounts).split())
+              nb_kept = nb_state()
+              # A port opened and closed again, which the device follows, takes its serial past the one restored.
+              nb_vnc = nb_policy(f"vnc-{nb_alice['tag']}", nb_alice["own"], "tcp", ["5900"], resource=nb_box)
+              nb_ids["vnc"] = nb("POST", "/api/policies", nb_vnc)["id"]
+              nb_reaches("laptop", f"{nb_home['ip']}:5900", "forge:5900")
+              nb("DELETE", f"/api/policies/{nb_ids['vnc']}")
+              nb_refused("laptop", f"{nb_home['ip']}:5900")
+              lost = dict(line.split("|") for line in server.succeed(mesh_accounts).split())
+              assert all(int(lost[a]) >= int(n) + 2 for a, n in mesh_serials.items()), (mesh_serials, lost)
               merge("flux-system", f"kustomization {first}-postgres-cluster", {"spec": {"suspend": True}})
               server.succeed(f"kubectl -n {ns} delete cluster postgres --timeout=300s")
               # Its instance archives WAL until it stops, which would land after the wipe.
@@ -2031,6 +2715,15 @@ runTest {
               )}
               assert raised == {a: (n, str(int(n) + 1000000)) for a, n in mesh_serials.items()}, (mesh_serials, out)
               server.succeed(f"kubectl -n {first}-netbird wait deployment netbird-management --for=condition=Available --timeout=0")
+              # The device that ran on takes the mesh as restored, and what changes after: the serial it holds from the
+              # lost moments is below the new ones.
+              retry(nb_back("laptop"), timeout_seconds=300)
+              nb_ids["vnc"] = nb("POST", "/api/policies", nb_vnc)["id"]
+              nb_reaches("laptop", f"{nb_home['ip']}:5900", "forge:5900")
+              nb("DELETE", f"/api/policies/{nb_ids['vnc']}")
+              nb_refused("laptop", f"{nb_home['ip']}:5900")
+              assert nb_state() == nb_kept
+              merge(ns, "cronjob offsite", {"spec": {"suspend": False}})
 
           with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied, Kanidm's with its people and keys"):
               hello_ns, idm_ns = f"{first}-hello", f"{first}-kanidm"
@@ -2354,6 +3047,21 @@ runTest {
                   assert m and moment(m.group(1)).timestamp() == stamp, (n, findings[f"etcd-offsite-{n}"], stamp)
               assert findings["Ceph status"][1].startswith("HEALTH_OK, "), findings["Ceph status"]
               assert checks_said() == [], checks_said()
+
+          with subtest("A person who leaves is cut off: once Kanidm has expired them and the owner blocks them, their device is out of the mesh"):
+              as_idm_admin(first)
+              server.succeed(cli(first, "person validity expire-at bob now"))
+              disable_idm_admin(first)
+              assert signing_in(first, "bob") == {"denied": "account expired"}
+              nb_bob = nb_people["bob"]
+              nb("PUT", f"/api/users/{nb_bob['uuid']}", {"role": "user", "auto_groups": [nb_bob["own"]], "is_blocked": True})
+              # Management ends the device's login, and refuses it as it comes back.
+              retry(lambda _: (nb_status("phone") or {}).get("daemonStatus") in ["NeedsLogin", "SessionExpired"],
+                    timeout_seconds=120)
+              assert nb_peers()["phone"]["login_expired"], nb_peers()["phone"]
+              status, out = nb_fetch("phone", f"{nb_camera}:8080")
+              assert status != 0, (status, out)
+              nb_reaches("laptop", f"{nb_camera}:8080", "camera:8080")
 
           with subtest("A pool past its quota's warning reaches the phone, one more pool still fits, and the alert clears"):
               apply({
@@ -2692,6 +3400,29 @@ runTest {
               forge_after = pseudonym(forge, here)
               print(f"forge is {forge_after} to {here} after the reboot, {forge_here} before")
               assert forge_after != forge_here, "the key outlived the reboot"
+
+          with subtest("Devices that ran on while the server rebooted come back to the mesh without a new sign-in, and take its changes"):
+              server.wait_until_succeeds(
+                  f"kubectl -n {nb_ns} wait deployment netbird-management --for=condition=Available --timeout=0", timeout=900
+              )
+
+              def nb_rejoined(name):
+                  def rejoined(_):
+                      view = nb_status(name)
+                      return bool(view) and view["daemonStatus"] == "Connected" and view["management"]["connected"] and (
+                          view["signal"]["connected"]
+                      ) and any(r["uri"] == f"rels://{nb_host}:443" and r["available"] for r in view["relays"]["details"] or [])
+
+                  return rejoined
+
+              # The phone's person left before.
+              for name in ["laptop", "home"]:
+                  retry(nb_rejoined(name), timeout_seconds=600)
+              nb_ids["vnc"] = nb("POST", "/api/policies", nb_vnc)["id"]
+              nb_reaches("laptop", f"{nb_home['ip']}:5900", "forge:5900")
+              nb("DELETE", f"/api/policies/{nb_ids['vnc']}")
+              nb_refused("laptop", f"{nb_home['ip']}:5900")
+              nb_reaches("laptop", f"{nb_camera}:8080", "camera:8080")
           memory()
       except Exception:
           diagnose()
