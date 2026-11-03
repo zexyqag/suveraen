@@ -2141,7 +2141,7 @@ pkgs.testers.runNixOSTest {
 
           # What the server's checks have alerted so far, as the phone got it.
           def checks_said():
-              ours = ("backups ", "Ceph ", "cluster status ", "Kanidm ", "still: ")
+              ours = ("backups ", "Ceph ", "cluster status ", "Kanidm ", "STUN ", "still: ")
               return [(a["title"], a.get("priority", 3)) for a in alerts() if a.get("title", "").removeprefix(
                   "${nodes.server.networking.hostName}: ").startswith(ours)]
 
@@ -2213,8 +2213,10 @@ pkgs.testers.runNixOSTest {
                   f"{t}-kanidm{part}"
                   for t in tenants for part in [" admin accounts", " migrations", " IDs", "/hello-oidc"]
               }
+              stun_findings = {f"STUN {a}" for a in ${builtins.toJSON nodes.server.suveraen.cluster.nodeIP}}
               assert findings.keys() == (
-                  before.keys() | archiving | offsite | identities | {"Ceph status", "cluster status", "etcd-snapshots"}
+                  before.keys() | archiving | offsite | identities | stun_findings
+                  | {"Ceph status", "cluster status", "etcd-snapshots"}
               ), findings
               assert all(state == "ok" for state, _ in findings.values()), findings
               # How each tenant's Kanidm ran its migrations as it started, which the checks go by once its log no longer

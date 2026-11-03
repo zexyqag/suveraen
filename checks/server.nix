@@ -49,6 +49,7 @@
       ];
       tokenFile = "/run/secrets/k3s-token";
       sopsAgeKeyFile = "/run/secrets/flux-age-key";
+      stun.port = 3478;
     };
     offsite = {
       # A recovery key's and a hardware key's.

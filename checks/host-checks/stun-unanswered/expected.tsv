@@ -1,0 +1,8 @@
+cluster	evaluated
+kanidm	answered
+kanidm	checked
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
+host	STUN 2001:db8::2	late	4	STUN unanswered	no answer on UDP 3478: STUN receive timeout after 5000 ms
+host	STUN 203.0.113.10	ok	4	STUN unanswered	answered on UDP 3478
+host	cluster status	ok	4	cluster status unreadable	read
+kanidm	judged	{}

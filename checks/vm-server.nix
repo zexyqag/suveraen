@@ -142,6 +142,7 @@ in
         config.networking.primaryIPAddress
         "fd00::2"
       ];
+      stun.port = 3478;
     };
   };
 }

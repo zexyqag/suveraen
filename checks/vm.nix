@@ -1,8 +1,8 @@
 # Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and pointed at the repository,
 # out of reach of namespace admins, pods held to the restricted Pod Security Standard, secrets encrypted at rest with
-# secretbox and only SSH and web ports open. Ceph's disks have stable names, their DB volumes lie on an array over both
-# system disks, the kernel maps and decrypts Ceph's volumes without loading modules, and k3s keeps no volumes of its
-# own. An app's charts reach only its own namespace and can neither widen who may act there nor publish ports, no
+# secretbox and only SSH, web and STUN ports open. Ceph's disks have stable names, their DB volumes lie on an array over
+# both system disks, the kernel maps and decrypts Ceph's volumes without loading modules, and k3s keeps no volumes of
+# its own. An app's charts reach only its own namespace and can neither widen who may act there nor publish ports, no
 # namespace but Ceph's leaves restricted Pod Security, and no Service takes external IPs. A tenant's namespaces, names
 # in flux-system and hosts are its own, Gateways stay in the gateway namespace, and so do certificates and ACME
 # orders unless an app terminates TLS for its one host itself, Issuers sign a namespace's own names only where
@@ -15,13 +15,15 @@
 # server falls back to a second channel when the watcher is gone. The server and its Flux only take commits signed by a
 # release signer, the server never goes back to an older one, and it alerts when its configuration gets old. The
 # server's checks read how old the backups the cluster records are and Ceph's health with an account that reads nothing
-# else, and alert once per change, also when the cluster can't be read. Its etcd snapshots reach both providers
-# encrypted to recovery keys, under a prefix its key can neither leave nor empty; with one provider down they still
-# reach the other, and the phone hears of it. Wiped, the server comes back from a provider's copy through its restore
-# command, with its token file alone; another token leaves a running server's own database in place.
+# else, ask the node's addresses for STUN, and alert once per change, also when the cluster can't be read. Its etcd
+# snapshots reach both providers encrypted to recovery keys, under a prefix its key can neither leave nor empty; with
+# one provider down they still reach the other, and the phone hears of it. Wiped, the server comes back from a
+# provider's copy through its restore command, with its token file alone; another token leaves a running server's own
+# database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
-# One address, or one IPv6 /64, opens only so many web connections a second, counted in memory alone; the operator can
-# block one there for a while, and the firewall keeps no record of the connections it refuses.
+# One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
+# counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
+# connections it refuses.
 # A poweroff waits, within logind's limit, while the kubelet stops pods by priority.
 { pkgs, module }:
 let
@@ -359,6 +361,7 @@ pkgs.testers.runNixOSTest {
     ''
       import ipaddress
       import json
+      import re
       import secrets
       import shlex
 
@@ -582,10 +585,34 @@ pkgs.testers.runNixOSTest {
           server.succeed("cd /srv/release && git -c user.signingkey=/root/other commit -q --allow-empty -S -m other")
           server.fail(f"nix eval --raw {release_flake}#release")
 
-      with subtest("Only SSH and web ports are open from outside, and the firewall keeps no record of what it refuses"):
+      stun_port = ${toString nodes.server.suveraen.cluster.stun.port}
+      stunclient = "${pkgs.coturn}/bin/turnutils_stunclient"
+
+      with subtest("Only SSH, web and STUN ports are open from outside, coturn holds STUN's alone, and the firewall keeps no record of what it refuses"):
           watcher.succeed("nc -z -w 5 server 22")
           watcher.fail("nc -z -w 5 server 6443")
           watcher.fail("nc -z -w 5 server 10250")
+          node_addresses = [ipaddress.ip_address(a) for a in ${builtins.toJSON nodes.server.suveraen.cluster.nodeIP}]
+          # coturn keeps trying an address it can't bind yet, as an IPv6 one still checked for duplicates.
+          for address in node_addresses:
+              server.wait_until_succeeds(f"{stunclient} -t 1000 -p {stun_port} {address}", timeout=90)
+          turnserver = set()
+          for line in server.succeed("ss -Htuwlnp").splitlines():
+              if '"turnserver"' in line:
+                  netid, _, _, _, local, *_ = line.split()
+                  turnserver.add((netid, local))
+          assert turnserver == {
+              ("udp", f"[{a}]:{stun_port}" if a.version == 6 else f"{a}:{stun_port}") for a in node_addresses
+          }, turnserver
+          # A binding request tells the watcher the address it came from, by either family.
+          watcher_at = {
+              4: "${nodes.watcher.networking.primaryIPAddress}",
+              6: "${nodes.watcher.networking.primaryIPv6Address}",
+          }
+          for address in node_addresses:
+              source = watcher_at[address.version]
+              out = watcher.succeed(f"{stunclient} -t 5000 -p {stun_port} -L {source} {address}")
+              assert f"UDP reflexive addr: {source}:" in out, out
           server.fail("journalctl -k -o cat | grep -F 'refused connection'")
           # NodePorts are forwarded before the host firewall sees them, so they only answer on loopback.
           server.succeed("kubectl -n kube-system rollout status deployment coredns --timeout=300s")
@@ -741,7 +768,7 @@ pkgs.testers.runNixOSTest {
           for version in [4, 6]:
               retry(lambda _: seen(version) == client[version], timeout_seconds=120)
 
-      with subtest("One address opens only so many web connections a second, and a blocked one opens none"):
+      with subtest("One address opens only so many web connections and sends only so many STUN requests a second, and a blocked one does neither"):
           edge = ${builtins.toJSON nodes.server.suveraen.cluster.edge}
           # Beside the watcher's own address, with a count of its own.
           other = "${s3Address 1}"
@@ -750,6 +777,9 @@ pkgs.testers.runNixOSTest {
           def connect(source, version=4):
               host = published[version]
               return f"nc -z -w 2 -s {source} {host} 443"
+
+          def ask_stun(source, version=4, flags="-t 2000"):
+              return f"{stunclient} {flags} -p {stun_port} -L {source} {published[version]}"
 
           flood = watcher.succeed(
               f"seq 40 | xargs -P 40 -I{{}} sh -c {shlex.quote(connect(client[4]) + ' && echo open || echo closed')}"
@@ -764,12 +794,25 @@ pkgs.testers.runNixOSTest {
           server.succeed(f"nft list set inet edge new6 | grep -wF {net6.network_address}")
           server.fail(f"nft list set inet edge new6 | grep -wF {client[6]}")
 
+          # Every STUN request counts, not a flow's first alone: these all come from one port. They wait 100 ms for
+          # an answer, so the answered ones go faster.
+          watcher.wait_until_succeeds(ask_stun(client[4]), timeout=30)
+          stats = watcher.succeed(f"timeout --preserve-status -s INT 4 {ask_stun(client[4], flags='-c -i 0 -t 100')}")
+          m = re.search(r"^(\d+) requests sent, (\d+) responses received", stats, re.MULTILINE)
+          assert m, stats
+          asked, answered = int(m[1]), int(m[2])
+          print(f"{answered} of {asked} STUN requests from one port answered, at {edge['rate']}/s after {edge['burst']}")
+          assert 0 < answered < asked, stats
+          watcher.succeed(ask_stun(other))
+
           # Once the watcher's count has come back.
           watcher.wait_until_succeeds(connect(client[4]), timeout=30)
           server.succeed(f"suveraen-block {client[4]} 1m")
           server.succeed(f"nft list set inet edge blocked4 | grep -wF {client[4]} | grep -F 'timeout 1m'")
           watcher.fail(connect(client[4]))
+          watcher.fail(ask_stun(client[4]))
           watcher.succeed(connect(other))
+          watcher.succeed(ask_stun(other))
           server.succeed(f"nc -z -w 2 {published[4]} 443")
           # Blocked again, it takes the new duration.
           server.succeed(f"suveraen-block {client[4]} 2h")
@@ -780,8 +823,10 @@ pkgs.testers.runNixOSTest {
           server.succeed(f"suveraen-block {client[6]} 1m")
           server.succeed(f"nft list set inet edge blocked6 | grep -F '{net6} '")
           watcher.fail(connect(client[6], 6))
+          watcher.fail(ask_stun(client[6], 6))
           server.succeed(f"suveraen-block --remove {net6}")
           watcher.succeed(connect(client[6], 6))
+          watcher.succeed(ask_stun(client[6], 6))
 
           server.succeed(f"suveraen-block 192.0.2.0/24 {edge['maxBlockHours']}h")
           server.succeed("suveraen-block --remove 192.0.2.0/24")
@@ -797,8 +842,10 @@ pkgs.testers.runNixOSTest {
               server.fail(f"suveraen-block {args}")
           for family in ["4", "6"]:
               server.fail(f"nft list set inet edge blocked{family} | grep -F 'expires'")
-          # Neither what the firewall dropped nor the blocks left the watcher's address in the kernel's log.
+          # Neither what the firewall dropped nor the blocks left the watcher's address in the kernel's log, nor did
+          # what coturn answered in its own.
           server.fail(f"journalctl -k -o cat | grep -wF -e {client[4]} -e {client[6]}")
+          server.fail(f"journalctl -u coturn -o cat | grep -wF -e {client[4]} -e {client[6]} -e {other}")
 
       with subtest("No namespace but Ceph's leaves the restricted Pod Security default, not even through Flux's own account"):
           # After the probes above, whose namespace the test labels privileged itself.
@@ -1426,6 +1473,20 @@ pkgs.testers.runNixOSTest {
           assert reported("HEALTH_OK", muted) == [("server: Ceph healthy again", 3)]
           assert reported("HEALTH_OK", muted, "-2 hours") == [("server: Ceph status not updated", 4)]
           server.succeed("kubectl -n rook-ceph delete cephclusters.ceph.rook.io rook-ceph")
+
+      with subtest("A node address that leaves STUN unanswered reaches the phone once, and so does its answer"):
+          server.succeed("systemctl stop coturn")
+          server.succeed("systemctl start host-checks")
+          [unanswered] = sent("STUN unanswered")
+          assert keys(unanswered["message"]) == {"New:"} | {f"STUN {a}" for a in node_addresses}, unanswered
+          server.succeed("systemctl start host-checks")
+          assert len(sent("STUN unanswered")) == 1
+          server.succeed("systemctl start coturn")
+          for address in node_addresses:
+              server.wait_until_succeeds(f"{stunclient} -t 1000 -p {stun_port} {address}", timeout=90)
+          server.succeed("systemctl start host-checks")
+          [answered] = sent("STUN answered again")
+          assert answered.get("priority", 3) == 3, answered
 
       with subtest("With the cluster down, the server says so"):
           server.succeed("systemctl stop k3s")

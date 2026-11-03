@@ -28,7 +28,7 @@ def cleared($late):
            "Kanidm migrations failed": "Kanidm migrations applied again",
            "Kanidm IDs invalid": "Kanidm IDs valid again",
            "Kanidm clients out of sync": "Kanidm clients in sync again",
-           "Kanidm unchecked": "Kanidm checked again"}[$t]
+           "Kanidm unchecked": "Kanidm checked again", "STUN unanswered": "STUN answered again"}[$t]
         end)
   | unique
   | join("; ");

@@ -1,8 +1,8 @@
 # Every server checks, from the status the controllers record and with an account that may read little else, how old
 # each tenant's WAL archiving, base backups, off-site copies, checks and volume copies are against what their templates
-# allow (suveraen/max-age), how old its own backup files are, and Ceph's health; and as root, with no Kanidm credential,
-# each tenant's Kanidm (suveraen-idm check, idm.nix). It alerts once when that changes, again while it lasts, and when
-# it can't read the cluster or check every tenant's Kanidm.
+# allow (suveraen/max-age), how old its own backup files are, and Ceph's health; whether its own addresses answer STUN;
+# and as root, with no Kanidm credential, each tenant's Kanidm (suveraen-idm check, idm.nix). It alerts once when that
+# changes, again while it lasts, and when it can't read the cluster or check every tenant's Kanidm.
 {
   config,
   lib,
@@ -12,6 +12,10 @@
 let
   cfg = config.suveraen.checks;
   alert = lib.getExe config.suveraen.alerts.command;
+  inherit (config.suveraen.cluster) nodeIP stun;
+  # How long a STUN binding request may wait for its answer.
+  stunSeconds = 5;
+  stunProbes = if stun.port == null then 0 else lib.length nodeIP;
 
   duration = lib.types.strMatching "[1-9][0-9]*[mhd]";
   seconds =
@@ -40,8 +44,39 @@ let
         inherit (f) path;
         maxAge = seconds f.maxAge;
       }) cfg.files;
+      stun =
+        if stun.port == null then
+          null
+        else
+          {
+            inherit (stun) port;
+            addresses = nodeIP;
+          };
     }
   );
+
+  # Run before the others, whether the cluster can be read or not: whether each of the node's addresses answers a STUN
+  # binding request from the node itself. turnutils_stunclient also exits 0 on an answer that isn't one.
+  stunProbe = pkgs.writeShellApplication {
+    name = "host-checks-stun";
+    runtimeInputs = [
+      pkgs.coturn
+      pkgs.coreutils
+      pkgs.gnugrep
+      pkgs.jq
+    ];
+    text = ''
+      for address in ${lib.escapeShellArgs nodeIP}; do
+        why=
+        if ! out=$(turnutils_stunclient -t ${toString (stunSeconds * 1000)} -p ${toString stun.port} "$address" 2>&1) \
+          || ! grep -q 'UDP reflexive addr: ' <<<"$out"; then
+          why=$(tail -n 1 <<<"$out")
+        fi
+        jq -n --arg address "$address" --arg why "$why" \
+          '{($address): (if $why == "" then {answered: true} else {answered: false, $why} end)}'
+      done | jq -s 'add' >"$RUNTIME_DIRECTORY/stun.json"
+    '';
+  };
 
   # Run by root before the check: a token for the account below, valid for 10 minutes, and the API server's CA. The
   # check itself runs without root, so it can't read the admin's kubeconfig.
@@ -178,11 +213,13 @@ let
 
       [ -e "$state/kanidm-checked" ] || echo "$now" >"$state/kanidm-checked"
       [ -e "$state/kanidm-judged.json" ] || echo '{}' >"$state/kanidm-judged.json"
+      [ -e "$run/stun.json" ] || echo '{}' >"$run/stun.json"
       findings=$(jq -n --argjson now "$now" --slurpfile spec ${spec} --argjson files "$files" \
+        --slurpfile stun "$run/stun.json" \
         --slurpfile seen "$state/first-seen.json" --argjson read "$(<"$state/last-read")" \
         --argjson kanidm "$(<"$state/kanidm-checked")" --slurpfile judged "$state/kanidm-judged.json" \
         --slurpfile cluster "$cluster" \
-        '{$now, spec: $spec[0], $files, cluster: $cluster[0],
+        '{$now, spec: $spec[0], $files, stun: $stun[0], cluster: $cluster[0],
           state: {lastRead: $read, firstSeen: $seen[0], kanidmChecked: $kanidm, kanidmJudged: $judged[0]}}' \
         | jq -r -f ${./host-checks.jq})
       if grep -qx $'kanidm\tchecked' <<<"$findings"; then echo "$now" >"$state/kanidm-checked"; fi
@@ -358,9 +395,9 @@ in
           "AF_INET6"
           "AF_UNIX"
         ];
-        # Room for suveraen-idm check, and for suveraen-alert to try both channels.
-        TimeoutStartSec = 2 * config.suveraen.alerts.retrySeconds + 420;
-        ExecStartPre = [
+        # Room for STUN's answers, suveraen-idm check, and suveraen-alert to try both channels.
+        TimeoutStartSec = stunSeconds * stunProbes + 2 * config.suveraen.alerts.retrySeconds + 420;
+        ExecStartPre = lib.optional (stun.port != null) (lib.getExe stunProbe) ++ [
           "+${lib.getExe prepare}"
           "+${lib.getExe idm}"
         ];

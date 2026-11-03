@@ -95,11 +95,15 @@ let
 
   inherit (cfg.nodeServices) resolver;
 
-  inherit (cfg) edge;
+  inherit (cfg) edge stun;
   webPorts = [
     80
     443
   ];
+  edgePorts = lib.concatStringsSep ", " (
+    map (port: "tcp . ${toString port}") webPorts
+    ++ lib.optional (stun.port != null) "udp . ${toString stun.port}"
+  );
   limit = "limit rate over ${toString edge.rate}/second burst ${toString edge.burst} packets";
 
   # Blocks live in the firewall's sets alone, so they end with their timeout, a reboot or a reload of the firewall.
@@ -282,24 +286,37 @@ in
         type = lib.types.ints.positive;
         default = 50;
         description = ''
-          New connections a second that one address, or one IPv6 /64, may open to the web ports. The firewall counts
-          them in memory alone, and forgets an address a minute after its last new connection.
+          New connections to the web ports and STUN requests that one address, or one IPv6 /64, may make a second,
+          counted together. The firewall counts them in memory alone, and forgets an address a minute after its last.
         '';
       };
 
       burst = lib.mkOption {
         type = lib.types.ints.positive;
         default = 200;
-        description = "New connections one address may open at once before its rate applies.";
+        description = "New connections and STUN requests one address may make at once before its rate applies.";
       };
 
       maxBlockHours = lib.mkOption {
         type = lib.types.ints.positive;
         default = 72;
         description = ''
-          The longest `suveraen-block ADDRESS[/LENGTH] DURATION` keeps an address or prefix from the web ports.
+          The longest `suveraen-block ADDRESS[/LENGTH] DURATION` keeps an address or prefix from the web ports and
+          STUN.
         '';
       };
+    };
+
+    stun.port = lib.mkOption {
+      type = lib.types.nullOr lib.types.port;
+      default = null;
+      example = 3478;
+      description = ''
+        The UDP port on which the node's addresses answer STUN binding requests, which tell a client the address and
+        port it is seen from, so that devices behind NAT can connect to each other directly; or none. They answer
+        nothing else, no TURN and nothing over TCP or TLS, and log no client's address. The host checks alert when one
+        goes unanswered.
+      '';
     };
 
     sopsAgeKeyFile = lib.mkOption {
@@ -587,8 +604,24 @@ in
         ip saddr ${set v4} ip daddr ${resolver} meta l4proto { tcp, udp } th dport 53 accept
       '';
     networking.firewall.allowedTCPPorts = webPorts;
+    networking.firewall.allowedUDPPorts = lib.optional (stun.port != null) stun.port;
 
-    # Ahead of kube-proxy's rules, while packets still carry the node's own address and port.
+    # The module's cli-ip and cli-port open nothing: coturn's CLI stays off without a password.
+    services.coturn = lib.mkIf (stun.port != null) {
+      enable = true;
+      listening-port = stun.port;
+      listening-ips = cfg.nodeIP;
+      no-tcp = true;
+      no-tls = true;
+      no-dtls = true;
+      extraConfig = ''
+        stun-only
+        log-file=stdout
+      '';
+    };
+
+    # Ahead of kube-proxy's rules, while packets still carry the node's own address and port. Each STUN request is
+    # counted, not a flow's first alone: each is answered, and a flood from one port is one flow.
     networking.nftables.tables.edge = {
       family = "inet";
       content = ''
@@ -598,12 +631,12 @@ in
         set new6 { type ipv6_addr; size 65536; flags dynamic, timeout; timeout 1m; }
         chain prerouting {
           type filter hook prerouting priority dstnat - 10; policy accept;
-          meta l4proto != tcp return
+          meta l4proto != { tcp, udp } return
           fib daddr type != local return
-          tcp dport != { ${lib.concatMapStringsSep ", " toString webPorts} } return
+          meta l4proto . th dport != { ${edgePorts} } return
           ip saddr @blocked4 drop
           ip6 saddr @blocked6 drop
-          ct state != new return
+          meta l4proto tcp ct state != new return
           update @new4 { ip saddr ${limit} } drop
           update @new6 { ip6 saddr & ffff:ffff:ffff:ffff:: ${limit} } drop
         }

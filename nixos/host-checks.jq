@@ -132,6 +132,15 @@ def unknown($key; $title; $detail): ["cluster", $key, "unknown", 4, $title, ($de
 
 def minor: split(".")[0:2];
 
+# Whether each of this server's addresses answered a STUN binding request, where it answers them.
+def stun($spec; $probes):
+  $spec.stun // empty
+  | .port as $port
+  | .addresses[]
+  | ($probes[.] // {answered: false, why: "not probed"}) as $probe
+  | finding("host"; "STUN \(.)"; $probe.answered | not; 4; "STUN unanswered";
+      if $probe.answered then "answered on UDP \($port)" else "no answer on UDP \($port): \($probe.why)" end);
+
 # How each tenant's Kanidm ran its migrations as its container started, where this run or one before here read it from
 # its log, and what its own upgrades left undone, by tenant: what the report keeps. A start that raised Kanidm's domain
 # level brought all of its own entries up to date anew, so what it left undone replaces what an earlier one did, which
@@ -225,6 +234,7 @@ def unchecked($idm; $rows):
 .now as $now
 | .spec as $spec
 | .files as $files
+| .stun as $probes
 | .state as $state
 | .cluster as $k
 | ($k.unreadable // null) as $unreadable
@@ -260,6 +270,7 @@ def unchecked($idm; $rows):
           | finding("host"; $name; $now - $seen > $max; 4; "backups late";
               "missing since \($seen | since($now)), limit \($max | span)")
         end),
+    stun($spec; $probes),
     (if $unreadable == null then finding("host"; "cluster status"; false; 4; "cluster status unreadable"; "read")
      else
        ($state.lastRead // $now) as $read
