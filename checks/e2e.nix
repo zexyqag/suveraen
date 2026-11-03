@@ -815,6 +815,12 @@ pkgs.testers.runNixOSTest {
               "kubectl get pods -A -o jsonpath='{.items[*].spec.containers[*].image}' | tr ' ' '\\n' | grep podinfo"
           ).split()[0]
 
+          # For a pod that only asks a service something, small enough to leave an app's quota room for its movers.
+          light = {
+              "requests": {"cpu": "10m", "memory": "32Mi", "ephemeral-storage": "1Mi"},
+              "limits": {"memory": "64Mi", "ephemeral-storage": "16Mi"},
+          }
+
           def restricted(namespace, name, command, labels={}, **spec):
               return {
                   "apiVersion": "v1",
@@ -833,6 +839,7 @@ pkgs.testers.runNixOSTest {
                           "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
                           "volumeMounts": spec.pop("mounts", []),
                           "envFrom": spec.pop("env", []),
+                          "resources": spec.pop("resources", {}),
                       }],
                       **spec,
                   },
@@ -1144,20 +1151,12 @@ pkgs.testers.runNixOSTest {
                   return f"http://{service}.{namespace}.svc:{port}/"
 
               def blocked(cmd):
-                  # Refused or dropped: not a name that doesn't resolve, nor a probe that didn't run.
-                  status, out = server.execute(f"{cmd} 2>&1")
-                  assert status in [7, 28], (cmd, status, out)
+                  # Refused, or dropped before curl connected: not a name that doesn't resolve, a probe that didn't run,
+                  # nor a server that took too long to answer.
+                  status, out = server.execute(f"{cmd} -w ' connects=%{{num_connects}}' 2>&1")
+                  assert status == 7 or (status == 28 and "connects=0" in out.split()), (cmd, status, out)
 
-              home, service, _ = backends(first)[0]
-              inside = f"kubectl -n {home} exec svc/{service} -- curl -fsS -m 5 -o /dev/null"
-              for backend in backends(first):
-                  if backend[0] == home:
-                      server.succeed(f"{inside} {url(*backend)}")
-              for other in tenants[1:]:
-                  assert backends(other), other
-                  for backend in backends(other):
-                      blocked(f"{inside} {url(*backend)}")
-              blocked(f"{inside} http://traefik.gateway.svc/")
+              home, service, port = backends(first)[0]
               # The app's image has curl, so the probes outside the tenants use it too.
               image = server.succeed(f"kubectl -n {home} get pods -o jsonpath='{{.items[0].spec.containers[0].image}}'").strip()
 
@@ -1188,6 +1187,25 @@ pkgs.testers.runNixOSTest {
                   f"kubectl create namespace probe && {create(probe('probe'))}"
                   " && kubectl -n probe wait pod probe --for=condition=Ready --timeout=300s"
               )
+              # Until k3s's policy controller has a pod's address, every policy that names its clients refuses the pod,
+              # right or wrong. Each sync rebuilds them all from the pods it knows, so once a pod started after the
+              # probe gets into its own namespace's service, what refuses the probes below is the policies.
+              apply(restricted(
+                  home, "admitted",
+                  f"curl -fsS -m 5 --retry 30 --retry-delay 1 --retry-connrefused -o /dev/null {url(home, service, port)}",
+                  resources=light,
+              ))
+              finished(home, "admitted")
+              server.succeed(f"kubectl -n {home} delete pod admitted")
+              inside = f"kubectl -n {home} exec svc/{service} -- curl -fsS -m 5 -o /dev/null"
+              for backend in backends(first):
+                  if backend[0] == home:
+                      server.succeed(f"{inside} {url(*backend)}")
+              for other in tenants[1:]:
+                  assert backends(other), other
+                  for backend in backends(other):
+                      blocked(f"{inside} {url(*backend)}")
+              blocked(f"{inside} http://traefik.gateway.svc/")
               outside = "kubectl -n probe exec probe -- curl -fsS -m 5 -o /dev/null"
               server.succeed(f"{outside} http://traefik.gateway.svc/")
               for tenant in tenants:
@@ -1568,11 +1586,8 @@ pkgs.testers.runNixOSTest {
           ).strip()
 
           def client(namespace, secret):
-              pod = restricted(namespace, "psql", "sleep 3600", env=[{"secretRef": {"name": secret}}])
-              pod["spec"]["containers"][0] |= {
-                  "image": postgres_image,
-                  "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"memory": "64Mi"}},
-              }
+              pod = restricted(namespace, "psql", "sleep 3600", env=[{"secretRef": {"name": secret}}], resources=light)
+              pod["spec"]["containers"][0]["image"] = postgres_image
               apply(pod)
               server.succeed(f"kubectl -n {namespace} wait pod psql --for=condition=Ready --timeout=300s")
 
@@ -1617,18 +1632,27 @@ pkgs.testers.runNixOSTest {
                      "stringData": {"host": f"postgres-rw.{first}-postgres.svc", "port": "5432", "dbname": "hello",
                                     "username": "hello", "password": "unknown", "sslmode": "require"}})
               client("probe", "db")
+              # A pod of the first tenant's app, which asks the object store below.
+              apply(restricted(f"{first}-hello", "store", "sleep 3600", resources=light))
+              server.succeed(f"kubectl -n {first}-hello wait pod store --for=condition=Ready --timeout=300s")
               client(f"{second}-hello", "db")
               # Until k3s's policy controller has a new pod's address, every policy that names its clients refuses the
               # pod, right or wrong. Each sync rebuilds them all from the pods it knows, so the one that lets the newest
-              # pod into its own database knows both.
+              # pod into its own database knows every older one.
               reached(f"{second}-hello", "select 1")
               status, out = psql(f"{second}-hello", "psql", "select 1", host=f"postgres-rw.{first}-postgres.svc")
               assert status != 0 and ("Connection refused" in out or "timeout expired" in out), out
               status, out = psql("probe", "psql", "select 1")
               assert status != 0 and ("Connection refused" in out or "timeout expired" in out), out
-              # Nor do apps reach the object store.
-              blocked(f"{inside} http://rook-ceph-rgw-objects.rook-ceph.svc/")
-              server.succeed(f"kubectl -n {first}-hello delete pod psql && kubectl -n {second}-hello delete pod psql")
+              # Nor do apps reach the object store. The pod that asks is older than the newest client; hello's, which
+              # the rotate subtest replaced without waiting, may not be.
+              blocked(
+                  f"kubectl -n {first}-hello exec store -- curl -fsS -m 5 -o /dev/null"
+                  " http://rook-ceph-rgw-objects.rook-ceph.svc/"
+              )
+              server.succeed(
+                  f"kubectl -n {first}-hello delete pod store psql && kubectl -n {second}-hello delete pod psql"
+              )
 
           with subtest("A tenant's PostgreSQL takes no restore or new generation while it runs"):
               patch = f"kubectl -n {first}-postgres patch cluster postgres --dry-run=server --type merge -p"
