@@ -75,8 +75,6 @@ in
     '';
   };
 
-  boot.initrd.network.enable = lib.mkForce false;
-
   # The test network has no IPv6 router; give the node an address and a route.
   networking.interfaces.eth1.ipv6 = {
     addresses = [
@@ -119,6 +117,9 @@ in
     })
   ];
 
+  # The tests run the upgrade's steps by hand; the timer would fire into a nightly run.
+  systemd.timers.nixos-upgrade.enable = false;
+
   networking.hostId = "0400bdef";
   system.stateVersion = "26.05";
 
@@ -128,6 +129,7 @@ in
         "/dev/disk/by-id/test-0"
         "/dev/disk/by-id/test-1"
       ];
+      encrypted = false;
       ceph = {
         disks = map disk hdds;
         dbSize = "3G";

@@ -57,7 +57,10 @@ pkgs.testers.runNixOSTest {
 
         suveraen = {
           adminKeys = [ keys.snakeOilEd25519PublicKey ];
-          storage.systemDisks = [ "/dev/disk/by-id/test-0" ];
+          storage = {
+            systemDisks = [ "/dev/disk/by-id/test-0" ];
+            secureBootKeys = pkgs.emptyDirectory;
+          };
           network.interface = "eth0";
           unlock.keys = [ (lib.fileContents (bootKeys + "/id_ed25519.pub")) ];
           alerts = {

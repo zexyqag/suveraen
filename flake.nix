@@ -7,6 +7,11 @@
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    lanzaboote = {
+      url = "github:nix-community/lanzaboote/v1.2.0";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.pre-commit.follows = "";
+    };
   };
 
   outputs =
@@ -14,6 +19,7 @@
       self,
       nixpkgs,
       disko,
+      lanzaboote,
     }:
     let
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
@@ -74,6 +80,7 @@
       nixosModules.default = {
         imports = [
           disko.nixosModules.disko
+          lanzaboote.nixosModules.lanzaboote
           ./nixos
         ];
       };
@@ -142,6 +149,12 @@
 
         # disko installs the layout onto blank disks in a VM and boots it.
         storage = (machine ./checks/storage.nix).installTest;
+        storage-encrypted = import ./checks/storage-encrypted.nix {
+          inherit pkgs;
+          inherit (nixpkgs.lib) nixosSystem;
+          inherit (disko.lib.testLib) makeDiskoTest;
+          module = self.nixosModules.default;
+        };
       }
       // import ./checks/render-cases.nix {
         inherit

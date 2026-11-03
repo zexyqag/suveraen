@@ -99,21 +99,25 @@ let
     inherit device;
     content = {
       type = "gpt";
-      partitions = lib.optionalAttrs withDb (if mirrored then dbShare else dbPartitions) // {
-        bios = {
-          size = "1M";
-          type = "EF02";
+      partitions =
+        lib.optionalAttrs withDb (if mirrored then dbShare else dbPartitions)
+        // lib.optionalAttrs (!cfg.encrypted) {
+          bios = {
+            size = "1M";
+            type = "EF02";
+          };
+        }
+        // {
+          esp = {
+            size = "1G";
+            type = "EF00";
+            content = esp;
+          };
+          system = {
+            size = "100%";
+            content = if cfg.encrypted then luks i else member;
+          };
         };
-        esp = {
-          size = "1G";
-          type = "EF00";
-          content = esp;
-        };
-        system = {
-          size = "100%";
-          content = if cfg.encrypted then luks i else member;
-        };
-      };
     };
   };
 
@@ -175,6 +179,15 @@ in
       description = ''
         Put the system pool on LUKS. The passphrase is typed over SSH at every boot, so such hosts never reboot by themselves.
         Hosts that must come back unattended, like the watcher, go without.
+      '';
+    };
+
+    secureBootKeys = lib.mkOption {
+      type = lib.types.path;
+      description = ''
+        Directory with PK.auth, KEK.auth, db.auth and dbx.auth: the firmware's Secure Boot variables as this host
+        enrolls them. They are copied to the boot partition, from where the boot menu enrolls them in setup mode: at
+        install, and again after a firmware reset. Public data. Encrypted hosts only.
       '';
     };
 
@@ -353,12 +366,40 @@ in
     ];
 
     # Both BIOS and UEFI boot; disko adds every disk with an EF02 partition to grub's devices.
-    boot.loader.grub = {
+    boot.loader.grub = lib.mkIf (!cfg.encrypted) {
       enable = true;
       efiSupport = true;
       efiInstallAsRemovable = true;
       # /boot is FAT; the ZFS module would otherwise switch grub to an uncached ZFS build.
       zfsSupport = lib.mkForce false;
+    };
+
+    # UEFI under Secure Boot with this host's own keys, so the firmware starts only boot files this host signed. The
+    # signing key stays on the encrypted pool.
+    boot.lanzaboote = lib.mkIf cfg.encrypted {
+      enable = true;
+      pkiBundle = lib.mkDefault "/var/lib/sbctl";
+      # Nightly upgrades keep a month of generations, whose kernels and initrds would outgrow the 1G boot partition.
+      configurationLimit = lib.mkDefault 10;
+      settings.editor = false;
+    };
+
+    # "auto": a VM enrolls this set by itself; real hardware only from the boot menu (systemd-boot's if-safe default).
+    # lanzaboote's autoEnrollKeys would need PK's and KEK's private keys on the host, and enrolls no dbx.
+    systemd.services.secure-boot-keys = lib.mkIf cfg.encrypted {
+      description = "Copy the Secure Boot keys to the boot partition for enrolling them";
+      wantedBy = [ "multi-user.target" ];
+      unitConfig.RequiresMountsFor = "/boot";
+      restartTriggers = [ cfg.secureBootKeys ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+      script = ''
+        rm -rf /boot/loader/keys/auto
+        mkdir -p /boot/loader/keys
+        cp -r ${cfg.secureBootKeys} /boot/loader/keys/auto
+      '';
     };
 
     boot.supportedFilesystems.zfs = true;

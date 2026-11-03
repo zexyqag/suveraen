@@ -1,4 +1,5 @@
 # Builds the node layer with stand-in values; nothing here points at a real machine.
+{ pkgs, ... }:
 {
   imports = [ ./dns-example.nix ];
 
@@ -27,6 +28,7 @@
         dbSlots = 8;
         dbSize = "150G";
       };
+      secureBootKeys = pkgs.emptyDirectory;
     };
     network = {
       ipv4 = "203.0.113.10/32";
