@@ -99,10 +99,6 @@
           inherit pkgs ranges kanidm;
           kubernetes = ./kubernetes;
         };
-        render-cases = import ./checks/render-cases.nix {
-          inherit pkgs ranges kanidm;
-          kubernetes = ./kubernetes;
-        };
         host-checks = import ./checks/host-checks.nix { inherit pkgs; };
         pseudonym = import ./checks/pseudonym.nix {
           inherit pkgs;
@@ -126,6 +122,11 @@
 
         # disko installs the layout onto blank disks in a VM and boots it.
         storage = (machine ./checks/storage.nix).installTest;
+      }
+      // import ./checks/render-cases.nix {
+        inherit pkgs ranges kanidm;
+        kubernetes = ./kubernetes;
+        shards = 4;
       };
     };
 }

@@ -1,17 +1,26 @@
 # Breaks copies of kubernetes/ in ways render.sh must refuse, and checks that it does, each for the intended reason.
 # Some variants must still render: encrypted values, a cluster that isn't a test one, a test cluster by another name.
-# Usage: render-cases.sh <render.sh> <kubernetes directory>
+# Usage: render-cases.sh <render.sh> <kubernetes directory> <shard> <shards>: runs every <shards>th case, from the
+# <shard>th on, so that the shards share the cases between them.
 set -euo pipefail
 render=$1
 src=$2
+shard=$3
+shards=$4
 cases=$(mktemp -d)
+count=0
 jobs=${NIX_BUILD_CORES:-1}
 [ "$jobs" -gt 0 ] || jobs=$(nproc)
+# Each case has a core to itself, and yq and flux start thousands of times for milliseconds each: threads to spread
+# over more cores only cost them.
+export GOMAXPROCS=1
 
 # Runs a case in the background: a copy of kubernetes/ changed by a shell snippet, then render.sh on it. The snippet
 # runs in a shell of its own, as a condition would turn off errexit for every step but the last.
 run() {
   local id=$1 expect=$2 change=$3 dir=$cases/$1
+  count=$((count + 1))
+  [ $(((count - 1) % shards + 1)) = "$shard" ] || return 0
   mkdir -p "$dir"
   cp -r --no-preserve=mode "$src" "$dir/kubernetes"
   while [ "$(jobs -rp | wc -l)" -ge "$jobs" ]; do wait -n || true; done
