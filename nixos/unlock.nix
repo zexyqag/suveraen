@@ -16,6 +16,34 @@ let
   bootDevice = config.fileSystems."/boot".device;
   mirrored = lib.hasPrefix "/dev/md" bootDevice;
 
+  # TPM2_ReadClock sent raw, so the initrd needs no TPM tools; the kernel takes a command only in one write, and printf
+  # alone splits this one at its 0x0a byte. Prints the boot count (resetCount), the restarts that hid boots from it
+  # (restartCount) and the start of PCR 0.
+  tpmClock = ''
+    tpm_clock() {
+      local r pcr0
+      r=$(exec 3<>/dev/tpmrm0 \
+        && printf '\x80\x01\x00\x00\x00\x0a\x00\x00\x01\x81' | dd iflag=fullblock bs=10 count=1 status=none >&3 \
+        && od -An -v -tx1 -N35 <&3 | tr -d ' \n') || return 1
+      [ "''${#r}" = 70 ] && [ "''${r:12:8}" = 00000000 ] || return 1
+      read -r pcr0 </sys/class/tpm/tpm0/pcr-sha256/0 || return 1
+      echo "$((16#''${r:52:8})) $((16#''${r:60:8})) ''${pcr0:0:12}"
+    }
+  '';
+
+  # Advice for the unlocker, who decides: it never blocks the prompt.
+  shell = pkgs.writeShellScript "suveraen-unlock-shell" ''
+    ${tpmClock}
+    if out=$(tpm_clock); then
+      read -r boot restarts firmware <<<"$out"
+      echo "TPM boot $boot, restarts $restarts, firmware $firmware"
+      [ "$restarts" = 0 ] || echo "STOP: a TPM restart can hide a boot from this count. Don't type before the cause is known."
+    else
+      echo "STOP: the TPM's boot count can't be read. Don't type before the cause is known."
+    fi
+    exec /bin/systemd-tty-ask-password-agent
+  '';
+
   # The boot menu's enrollment files must give back exactly the variables the key is sealed under; the firmware also
   # measures dbt, and maybe dbr, which the boot menu never writes.
   enrolled = ''
@@ -169,6 +197,15 @@ in
         the file, so it stays until the last generation that used it is gone. Never the system's own host key.
       '';
     };
+
+    bootsPerReboot = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 1;
+      description = ''
+        How much the TPM's boot count grows over one reboot of this machine, which depends on its firmware. A count
+        that grew by more since the last unlock alerts as boots in between that never unlocked.
+      '';
+    };
   };
 
   config = lib.mkIf config.suveraen.storage.encrypted (
@@ -199,8 +236,12 @@ in
           };
         };
 
-        # Logging in asks for the passphrase straight away.
-        boot.initrd.systemd.users.root.shell = "/bin/systemd-tty-ask-password-agent";
+        # Logging in shows the TPM's boot count and asks for the passphrase straight away.
+        boot.initrd.systemd.extraBin.suveraen-unlock-shell = shell;
+        boot.initrd.systemd.users.root.shell = "/bin/suveraen-unlock-shell";
+        # Ordering alone: tpm2.target is part of the boot where the firmware reports a TPM, so a box without one
+        # doesn't wait for it.
+        boot.initrd.systemd.services.sshd.after = [ "tpm2.target" ];
 
         environment.systemPackages = [ seal ];
 
@@ -219,7 +260,56 @@ in
             };
           }
         ];
-        suveraen.alerts.units = [ "unlock-key-check" ];
+
+        # The unlocker saw these values before typing; this posts them for everyone who reads the alerts, against the
+        # last unlock's.
+        systemd.services.boot-count = {
+          description = "Post the TPM's boot count once the disks are unlocked";
+          wantedBy = [ "multi-user.target" ];
+          after = [
+            "multi-user.target"
+            "tpm2.target"
+          ];
+          # Once per boot, as unlock-key-check.
+          restartIfChanged = false;
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            StateDirectory = "boot-count";
+          };
+          script = ''
+            ${tpmClock}
+            if ! out=$(tpm_clock); then
+              echo "The TPM's boot count can't be read."
+              exit 1
+            fi
+            read -r boot restarts firmware <<<"$out"
+            message="TPM boot $boot, restarts $restarts, firmware $firmware."
+            priority=2
+            note() {
+              message+=" $2"
+              if [ "$1" -gt "$priority" ]; then priority=$1; fi
+            }
+            if [ -e "$STATE_DIRECTORY/last" ]; then
+              read -r last_boot _ last_firmware <"$STATE_DIRECTORY/last"
+              if [ "$boot" -lt "$last_boot" ]; then
+                note 5 "The boot count went down since the last unlock, at boot $last_boot: the TPM was cleared, or its state rolled back."
+              elif [ "$boot" -gt $((last_boot + ${toString cfg.bootsPerReboot})) ]; then
+                note 5 "$((boot - last_boot)) boots since the last unlock, at boot $last_boot: the machine booted in between without unlocking."
+              fi
+              [ "$firmware" = "$last_firmware" ] \
+                || note 4 "The firmware changed since the last unlock, from $last_firmware."
+            fi
+            [ "$restarts" = 0 ] || note 5 "A TPM restart can hide a boot from this count."
+            ${alert} "disks unlocked" "$message" "$priority"
+            echo "$out" >"$STATE_DIRECTORY/last"
+          '';
+        };
+
+        suveraen.alerts.units = [
+          "unlock-key-check"
+          "boot-count"
+        ];
       }
 
       (lib.mkIf (cfg.transitionHostKey != null) {
@@ -234,7 +324,6 @@ in
         boot.initrd.systemd.contents.${sealed}.source = cfg.sealedHostKey;
         # A key that doesn't open fails sshd, which leaves nothing listening.
         boot.initrd.systemd.services.sshd = {
-          after = [ "tpm2.target" ];
           wants = [ "tpm2.target" ];
           serviceConfig.LoadCredentialEncrypted = "${name}:${sealed}";
         };

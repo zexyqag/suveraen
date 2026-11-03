@@ -4,9 +4,10 @@
 # host key is sealed in the booted system, after the seal refused boot menu keys that aren't the firmware's. On that
 # TPM, a genuine boot then opens the sealed key: an unlock-only key gets no port forwarding, answers the passphrase
 # prompt over SSH with the host key pinned, and can't log in afterwards; neither the boot's check nor the upgrade's
-# alerts. A firmware reset to its factory keys is undone from the boot menu, and the key opens again. With a credential
-# planted on the boot partition, or Secure Boot off, the key stays sealed and nothing listens. A volume with another key
-# doesn't open, even to the passphrase.
+# alerts. A firmware reset to its factory keys is undone from the boot menu, and the key opens again. Each unlock shows
+# the TPM's boot count before the passphrase, and the booted system posts it, at a higher priority when boots in between
+# never unlocked or a TPM restart could hide one. With a credential planted on the boot partition, or Secure Boot off,
+# the key stays sealed and nothing listens. A volume with another key doesn't open, even to the passphrase.
 { pkgs, module }:
 let
   keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
@@ -191,6 +192,32 @@ let
     };
   };
 
+  # The line the boot shows before the passphrase prompt, as an unlock's session has it, and the note the booted
+  # system posts for it after an unlock at boot `last`, where a reboot counts `step` boots. Starting these VMs counts
+  # a TPM restart a machine wouldn't (qemu-vm starts and shuts down the TPM itself before the firmware), so the tests
+  # hold the line and the note to each other rather than to fixed values.
+  boots = step: ''
+    def status_line(session):
+        found = re.search(r"TPM boot (\d+), restarts (\d+), firmware ([0-9A-F]{12})\r\n", session)
+        assert found, session
+        counted, restarts, firmware = int(found[1]), int(found[2]), found[3]
+        assert ("STOP: a TPM restart can hide a boot" in session) == (restarts != 0), session
+        return counted, restarts, firmware
+
+
+    def posted(line, last=None):
+        counted, restarts, firmware = line
+        notes = [f"TPM boot {counted}, restarts {restarts}, firmware {firmware}."]
+        if last is not None and counted > last + ${toString step}:
+            notes.append(
+                f"{counted - last} boots since the last unlock, at boot {last}:"
+                " the machine booted in between without unlocking."
+            )
+        if restarts:
+            notes.append("A TPM restart can hide a boot from this count.")
+        return {"title": "server: disks unlocked", "priority": "5" if len(notes) > 1 else "2", "message": " ".join(notes)}
+  '';
+
   answer = pkgs.writeText "unlock.exp" ''
     set timeout 60
     spawn ssh -tt -p 2222 -o StrictHostKeyChecking=yes -i /root/unlock server
@@ -220,6 +247,8 @@ let
         import shutil
         import subprocess
 
+        ${boots nodes.server.suveraen.unlock.bootsPerReboot}
+
         tpm = server.state_dir / "tpm"
         variables = server.state_dir / "efi-vars.fd"
         disk = server.state_dir / "disk.qcow2"
@@ -246,8 +275,9 @@ let
         with subtest("In setup mode the boot menu enrolls the host's keys, and the transition key unlocks the disks"):
             server.start(allow_reboot=True)
             client.wait_until_succeeds("nc -z -w 5 server 2222")
-            client.succeed("expect ${answer}")
+            session = client.succeed("expect ${answer}")
             server.wait_for_unit("unlock-key-check.service")
+            server.wait_for_unit("boot-count.service")
             sent = [json.loads(line) for line in client.succeed("cat /var/lib/alerts/sent").splitlines()]
             risks = [a for a in sent if a["title"] == "server: boot unlock at risk"]
             assert risks == [{
@@ -256,6 +286,10 @@ let
                 "message": "The boot-time SSH server answers with a plaintext key from the boot partition:"
                 " seal a key and switch to it.",
             }], sent
+
+        with subtest("The boot shows the TPM's boot count before the passphrase, and the booted system posts it"):
+            unlocked = [a for a in sent if a["title"] == "server: disks unlocked"]
+            assert unlocked == [posted(status_line(session))], sent
 
         with subtest("The seal refuses boot menu keys that aren't the firmware's"):
             server.succeed("cp /boot/loader/keys/auto/db.auth /boot/loader/keys/auto/dbx.auth")
@@ -296,8 +330,11 @@ pkgs.testers.runNixOSTest {
     ''
       import json
       import os
+      import re
       import shutil
       import subprocess
+
+      ${boots nodes.server.suveraen.unlock.bootsPerReboot}
 
       tpm = server.state_dir / "tpm"
       shutil.copytree("${sealing}/tpm", tpm)
@@ -323,15 +360,27 @@ pkgs.testers.runNixOSTest {
               ["${pkgs.mtools}/bin/" + command, "-i", esp, *args], check=True, env={**os.environ, "MTOOLS_SKIP_CHECK": "1"}
           )
 
-      # Neither check alerted, nor failed.
-      def quiet():
-          sent = [json.loads(line) for line in client.succeed("cat /var/lib/alerts/sent 2>/dev/null || true").splitlines()]
-          assert not [a for a in sent if "unlock" in a["title"]], sent
+      def alerts_sent():
+          return [json.loads(line) for line in client.succeed("cat /var/lib/alerts/sent 2>/dev/null || true").splitlines()]
 
-      # Once the passphrase is in: the boot goes on, and its check finds nothing.
+      def unlocked():
+          return [a for a in alerts_sent() if a["title"] == "server: disks unlocked"]
+
+      # Neither check alerted, nor did a check or the boot count fail.
+      def quiet():
+          risks = [
+              "server: boot unlock at risk",
+              "server: unlock-key-check.service failed",
+              "server: unlock-key-recheck.service failed",
+              "server: boot-count.service failed",
+          ]
+          assert not [a for a in alerts_sent() if a["title"] in risks], alerts_sent()
+
+      # Once the passphrase is in: the boot goes on, its check finds nothing, and it posts the boot count.
       def up():
           server.switch_root()
           server.wait_for_unit("unlock-key-check.service")
+          server.wait_for_unit("boot-count.service")
           server.succeed("test -b /dev/mapper/crypt-system0")
           quiet()
 
@@ -365,11 +414,15 @@ pkgs.testers.runNixOSTest {
           assert "remote port forwarding failed" in forward, forward
 
       with subtest("An unlock-only key answers the passphrase prompt, and the boot goes on"):
-          client.succeed("expect ${answer}")
+          session = client.succeed("expect ${answer}")
           up()
           server.succeed("grep -qw systemd.import_credentials=no /proc/cmdline")
           server.succeed("systemctl start unlock-key-recheck.service")
           quiet()
+
+      with subtest("The boot shows the TPM's boot count before the passphrase, and the booted system posts it"):
+          genuine = status_line(session)
+          assert unlocked() == [posted(genuine)], alerts_sent()
 
       with subtest("An unlock-only key can't log in to the running system"):
           login = "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
@@ -381,9 +434,16 @@ pkgs.testers.runNixOSTest {
           boot("${factory}", allow_reboot=True)
           server.wait_for_unit("sshd.service")
           client.wait_until_succeeds("nc -z -w 5 server 2222", timeout=120)
-          client.succeed("expect ${answer}")
+          session = client.succeed("expect ${answer}")
           up()
           server.shutdown()
+
+      # The boot in which the boot menu enrolled the keys again ended in its reset, without unlocking.
+      with subtest("The boot count shows the boots in between that never unlocked"):
+          after_reset = status_line(session)
+          assert after_reset[0] > genuine[0] + ${toString nodes.server.suveraen.unlock.bootsPerReboot}, session
+          assert after_reset[2] == genuine[2], session
+          assert unlocked()[1:] == [posted(after_reset, last=genuine[0])], alerts_sent()
 
       # Someone with the disk plants a credential on the ESP.
       planted = server.state_dir / "planted.cred"
