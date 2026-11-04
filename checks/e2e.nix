@@ -919,8 +919,13 @@ runTest {
           )
           print(out)
 
+      # Seconds from the first Flux object to each one Ready, which says where a slow run spent its first half hour.
+      readiness = []
+
       # QEMU's peak memory per running machine, and what the runner has left of memory and CPU.
       def memory():
+          if readiness:
+              print("ready after", readiness)
           for machine in machines_qemu:
               if machine.pid is not None:
                   with open(f"/proc/{machine.pid}/status") as status:
@@ -959,6 +964,13 @@ runTest {
 
               retry(ready, timeout_seconds=2700)
               server.succeed("kubectl wait helmrelease -A --all --for=condition=Ready --timeout=0")
+              flux_objects = parsed("kubectl get kustomizations,helmreleases -A -o json")["items"]
+              earliest = min(datetime.fromisoformat(o["metadata"]["creationTimestamp"]) for o in flux_objects)
+              readiness.extend(sorted(
+                  (round((datetime.fromisoformat(c["lastTransitionTime"]) - earliest).total_seconds()),
+                   o["metadata"]["name"])
+                  for o in flux_objects for c in o["status"]["conditions"] if c["type"] == "Ready"
+              ))
               images()
               memory()
 
@@ -995,8 +1007,13 @@ runTest {
                   if any(c["type"] == "Failed" and c["status"] == "True" for c in j.get("status", {}).get("conditions", []))
               ]
               assert not failed, failed
-              # No chart's claim waits for a class nobody gives it.
-              pending = [f"{c['metadata']['namespace']}/{c['metadata']['name']}" for c in items("pvc") if c["status"]["phase"] != "Bound"]
+              # No chart's claim waits for a class nobody gives it. VolSync makes the claim for a copy in progress from
+              # its snapshot, which takes a moment, and marks it for removal once the copy is done.
+              pending = [
+                  f"{c['metadata']['namespace']}/{c['metadata']['name']}" for c in items("pvc")
+                  if c["status"]["phase"] != "Bound"
+                  and "volsync.backube/cleanup" not in c["metadata"].get("labels", {})
+              ]
               assert not pending, pending
               classes = sorted(c["metadata"]["name"] for c in items("storageclasses"))
               assert classes == ["ceph-block", "ceph-bucket"], classes
