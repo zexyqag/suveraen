@@ -121,7 +121,7 @@ data:
           add_header X-Content-Type-Options "nosniff" always;
           add_header Cache-Control "no-store" always;
         }
-        # The dashboard is a static export: its callback pages and nested routes are rendered by its 404 page.
+        # The dashboard is a static export with no file for its sign-in callback pages, which its 404 page renders.
         error_page 404 /404.html;
       }
     }

@@ -2190,11 +2190,14 @@ runTest {
               for path, method in [
                   ("/management.ProxyService/", "POST"), ("/ws-proxy/management", "GET"), ("/oauth2/", "GET"),
                   ("/api/setup", "POST"), ("/api/users/invites/nbi_x", "GET"), ("/api/reverse-proxy/callback", "GET"),
-                  # The dashboard's own pages that no file holds, which its 404 page renders.
-                  ("/nb-auth", "GET"), ("/team/users", "GET"),
+                  # The dashboard's sign-in callback pages, which no file holds and its 404 page renders.
+                  ("/nb-auth", "GET"), ("/nb-silent-auth", "GET"),
               ]:
                   got = unsigned(path, method)
                   assert got == (404, page[1]), (path, got)
+              # Its other pages each have a file, so a link straight to one serves that page.
+              got = unsigned("/team/users")
+              assert got[0] == 200 and got[1] != page[1] and "<title>Users - Team" in got[1], got
               got = unsigned("/api/setup-keys")
               assert got[0] == 401 and got[1] != page[1], got
               assert nb("GET", "/api/setup-keys") == []
