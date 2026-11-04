@@ -2313,12 +2313,12 @@ runTest {
                   assert peer["hostname"] and peer["version"] and not peer["serial_number"], peer
                   assert not peer.get("network_addresses"), peer
               # The laptop reports what the scrub blanks: with the trigger in, its report each time it comes back
-              # differs from its row, so management saves it again, which steps the network serial.
-              nb_serial = f"{nb_db} 'select network_serial from accounts'"
-              nb_stepped = int(server.succeed(nb_serial))
+              # differs from its row, so management saves it again, just before it marks the device's new session.
+              nb_session = f"{nb_db} \"select peer_status_session_started_at from peers where name = 'laptop'\""
+              nb_stepped = int(server.succeed(nb_session))
               acme.succeed("systemctl restart netbird-laptop")
               retry(nb_back("laptop"), timeout_seconds=300)
-              server.wait_until_succeeds(f"test $({nb_serial}) -gt {nb_stepped}", timeout=120)
+              server.wait_until_succeeds(f"test $({nb_session}) -gt {nb_stepped}", timeout=120)
               # The same rows hold the laptop's key, which it sent with them.
               key = server.succeed(f"{nb_db} \"select key from peers where name = 'laptop'\"").strip()
               assert nb_dumped(inventory | {key}) == {key}, nb_dumped(inventory)
