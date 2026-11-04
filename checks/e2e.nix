@@ -1424,8 +1424,9 @@ runTest {
 
               def blocked(cmd):
                   # Refused, or dropped before curl connected: not a name that doesn't resolve, a probe that didn't run,
-                  # nor a server that took too long to answer.
-                  status, out = server.execute(f"{cmd} -w ' connects=%{{num_connects}}' 2>&1")
+                  # nor a server that took too long to answer. The count ends its line, as kubectl exec writes its own
+                  # straight after it.
+                  status, out = server.execute(f"{cmd} -w ' connects=%{{num_connects}}\\n' 2>&1")
                   assert status == 7 or (status == 28 and "connects=0" in out.split()), (cmd, status, out)
 
               home, service, port = backends(first)[0]
@@ -1623,7 +1624,7 @@ runTest {
                           server.wait_until_succeeds(f"{inside_mesh} -f {mesh_kanidm}", timeout=120)
                           # PostgreSQL waits for a sign-in that never comes, so the connection is made and times out.
                           status, out = server.execute(
-                              f"{inside_mesh} -w ' connects=%{{num_connects}}' {mesh_postgres} 2>&1"
+                              f"{inside_mesh} -w ' connects=%{{num_connects}}\\n' {mesh_postgres} 2>&1"
                           )
                           assert "connects=1" in out.split(), (status, out)
                       else:
