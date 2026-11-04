@@ -46,6 +46,12 @@
           url = "https://idm.example.org/status";
         }
       ];
+      unlockPorts = [
+        {
+          name = "example";
+          address = "203.0.113.10";
+        }
+      ];
     };
     dns = {
       self = "example-watcher";

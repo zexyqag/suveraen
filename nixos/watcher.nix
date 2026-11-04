@@ -85,6 +85,32 @@ in
       default = [ ];
       description = "Public HTTPS endpoints checked from outside; each must answer 200 with a certificate valid for 10 more days.";
     };
+
+    unlockPorts = lib.mkOption {
+      type = lib.types.listOf (
+        lib.types.submodule {
+          options = {
+            name = lib.mkOption { type = lib.types.strMatching "[a-z0-9-]+"; };
+            address = lib.mkOption {
+              type = lib.types.str;
+              example = "[2001:db8::2]";
+              description = "Host name or IP address, IPv6 in brackets.";
+            };
+            port = lib.mkOption {
+              type = lib.types.port;
+              default = 2222;
+              description = "The server's suveraen.unlock.port.";
+            };
+          };
+        }
+      );
+      default = [ ];
+      description = ''
+        Encrypted servers' boot-time SSH ports, tried once a minute. The port is open only while a server waits for its
+        passphrase, so one alert says when that started and another when it ended; with the last heartbeat they give
+        the outage's length. A wait shorter than a minute can pass unseen.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -178,7 +204,21 @@ in
             "[CERTIFICATE_EXPIRATION] > 240h"
           ];
           alerts = [ (ntfyAlert "${check.name} is failing" { }) ];
-        }) cfg.checks;
+        }) cfg.checks
+        ++ map (server: {
+          inherit (server) name;
+          group = "unlock";
+          url = "tcp://${server.address}:${toString server.port}";
+          interval = "1m";
+          # Passes while nothing answers: Gatus records a refused or unanswered connection as not connected, not an error.
+          conditions = [ "[CONNECTED] == false" ];
+          alerts = [
+            (ntfyAlert "${server.name} is waiting for its disk passphrase" {
+              failure-threshold = 1;
+              success-threshold = 1;
+            })
+          ];
+        }) cfg.unlockPorts;
       };
     };
 

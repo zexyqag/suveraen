@@ -11,15 +11,15 @@
 # tenant's namespace, and its apps' charts can change neither what they run nor the keys their copies go with,
 # nor make or delete a volume copied off-site. Hosts and pods resolve names through the node's own resolver, and
 # clocks use NTS. The watcher's ntfy only takes known publishers and keeps its account API, stats and attachments
-# closed; the server's alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops; and the
-# server falls back to a second channel when the watcher is gone. The server and its Flux only take commits signed by a
-# release signer, the server never goes back to an older one, and it alerts when its configuration gets old. The
-# server's checks read how old the backups the cluster records are and Ceph's health with an account that reads nothing
-# else, ask the node's addresses for STUN, and alert once per change, also when the cluster can't be read. Its etcd
-# snapshots reach both providers encrypted to recovery keys, under a prefix its key can neither leave nor empty; with
-# one provider down they still reach the other, and the phone hears of it. Wiped, the server comes back from a
-# provider's copy through its restore command, with its token file alone; another token leaves a running server's own
-# database in place.
+# closed; the server's alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops and while
+# its boot-time SSH port is open, and says when each ends; and the server falls back to a second channel when the
+# watcher is gone. The server and its Flux only take commits signed by a release signer, the server never goes back to
+# an older one, and it alerts when its configuration gets old. The server's checks read how old the backups the cluster
+# records are and Ceph's health with an account that reads nothing else, ask the node's addresses for STUN, and alert
+# once per change, also when the cluster can't be read. Its etcd snapshots reach both providers encrypted to recovery
+# keys, under a prefix its key can neither leave nor empty; with one provider down they still reach the other, and the
+# phone hears of it. Wiped, the server comes back from a provider's copy through its restore command, with its token
+# file alone; another token leaves a running server's own database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -241,6 +241,12 @@ pkgs.testers.runNixOSTest {
             gatusEnvironmentFile = "${secrets}/gatus.env";
             servers = [ "server" ];
             heartbeatTimeout = "30s";
+            unlockPorts = [
+              {
+                name = "server";
+                address = nodes.server.networking.primaryIPAddress;
+              }
+            ];
           };
           alerts = {
             urlFile = toString (pkgs.writeText "alerts-url" "http://127.0.0.1:2586/ops");
@@ -357,6 +363,7 @@ pkgs.testers.runNixOSTest {
       resolve = inVM nodes.server.systemd.services.nixos-upgrade.preStart;
       inherit (nodes.server.systemd.services.nixos-upgrade) postStart;
       staleDays = toString (nodes.server.suveraen.upgrade.staleAfterDays + 1);
+      unlock = pkgs.lib.head nodes.watcher.suveraen.watcher.unlockPorts;
     in
     ''
       import ipaddress
@@ -1612,6 +1619,32 @@ pkgs.testers.runNixOSTest {
           resolved = int(server.succeed(count.format("resolved")).strip())
           server.succeed("systemctl start heartbeat.timer")
           server.wait_until_succeeds(f"test $({count.format('resolved')}) -gt {resolved}", timeout=300)
+
+      # Gatus's own words, with the alert's description.
+      unlock_said = (
+          "${ops} | jq -r 'select(.title == \"Gatus: unlock/${unlock.name}\") | .message'"
+          " | grep -xF 'An alert has been {}: ${unlock.name} is waiting for its disk passphrase'"
+      )
+
+      with subtest("The watcher raises an alert while the server waits for its disk passphrase"):
+          # The running server's firewall keeps the boot-time port closed, which Gatus reads as not waiting.
+          watcher.succeed(
+              "curl -fsS http://127.0.0.1:8080/api/v1/endpoints/statuses"
+              " | jq -e '.[] | select(.key == \"unlock_${unlock.name}\") | .results | length > 0 and all(.success)'"
+          )
+          triggered = "triggered due to having failed 1 time(s) in a row with the following description"
+          server.fail(unlock_said.format(triggered))
+          # Stands in for the boot-time SSH server, which runs before any firewall.
+          server.succeed("nixos-firewall-tool open tcp ${toString unlock.port}")
+          server.succeed("systemd-run --unit=unlock-port nc -lk ${unlock.address} ${toString unlock.port}")
+          server.wait_until_succeeds(unlock_said.format(triggered), timeout=180)
+
+      with subtest("The watcher says so when the server no longer waits"):
+          server.succeed("systemctl stop unlock-port && nixos-firewall-tool reset")
+          server.wait_until_succeeds(
+              unlock_said.format("resolved after passing successfully 1 time(s) in a row with the following description"),
+              timeout=180,
+          )
 
       with subtest("The server falls back to its second channel when the watcher is gone"):
           watcher.succeed("systemctl stop nginx")
