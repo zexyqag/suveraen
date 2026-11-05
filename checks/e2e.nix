@@ -689,8 +689,38 @@ runTest {
       import re
       import shlex
       import time
+      from collections.abc import Iterator
+      from contextlib import contextmanager
       from datetime import datetime
       from urllib.parse import parse_qs, quote, urlsplit
+
+      from test_driver.logger import AbstractLogger
+
+      # How long each subtest took, which memory() prints at the end of every run: of a run's log, only its tail can be
+      # read back.
+      class Timings(AbstractLogger):
+          def __init__(self) -> None:
+              self.took: list[tuple[int, str]] = []
+
+          @contextmanager
+          def subtest(self, name: str, attributes: dict[str, str] = {}) -> Iterator[None]:
+              start = time.monotonic()
+              try:
+                  yield
+              finally:
+                  self.took.append((round(time.monotonic() - start), name[:60]))
+
+          @contextmanager
+          def nested(self, message: str, attributes: dict[str, str] = {}) -> Iterator[None]:
+              yield
+
+          def ignore(self, *args: object, **kwargs: object) -> None:
+              pass
+
+          log = debug = info = warning = error = log_test_error = log_serial = print_serial_logs = set_log_level = ignore
+
+      timings = Timings()
+      log.add_logger(timings)
 
       def read(path, key):
           with open(path) as f:
@@ -926,6 +956,7 @@ runTest {
       def memory():
           if readiness:
               print("ready after", readiness)
+          print("subtests took", sorted(timings.took, reverse=True))
           for machine in machines_qemu:
               if machine.pid is not None:
                   with open(f"/proc/{machine.pid}/status") as status:
