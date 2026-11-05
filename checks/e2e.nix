@@ -2127,13 +2127,16 @@ runTest {
           def nb_grep(strings):
               return "grep -a -r -o -h -F" + "".join(f" -e {shlex.quote(s)}" for s in sorted(strings))
 
-          # Which of these strings the primary's WAL holds, as written.
+          # Which of these strings the primary's WAL holds, as written. PostgreSQL renames and removes files in pg_wal as
+          # it runs, and grep exits 2 when one it listed is gone before it opens it; any other error fails.
           def nb_wal(strings):
               status, out = server.execute(
                   f"kubectl -n {first}-postgres exec {nb_pod} -c postgres -- {nb_grep(strings)}"
-                  " /var/lib/postgresql/data/pgdata/pg_wal | sort -u"
+                  " /var/lib/postgresql/data/pgdata/pg_wal 2>&1 | sort -u"
               )
-              assert status in [0, 1], out
+              said = set(out.splitlines()) - set(strings)
+              gone = {line for line in said if re.fullmatch(r"grep: .*: No such file or directory|command terminated with exit code [12]", line)}
+              assert status in [0, 1, 2] and said == gone and (status == 2) == any(line.startswith("grep: ") for line in gone), out
               return set(out.splitlines()) & set(strings)
 
           # Which of these strings a dump of the mesh's database holds.
@@ -2327,13 +2330,15 @@ runTest {
               assert nb_dumped(inventory | {key}) == {key}, nb_dumped(inventory)
               assert nb_wal(inventory | {key}) == {key}, nb_wal(inventory)
               # Dropped by hand, the trigger lets a write keep a MAC; the scrub puts it back and passes the rows
-              # through it, so that one is blank again with no device writing it.
+              # through it, so that one is blank again with no device writing it. It is written twice: a header of the
+              # WAL's pages can split one copy.
               scrub_log = f"kubectl -n {nb_ns} logs deployment/netbird-management -c scrub"
               installs = server.succeed(scrub_log).count("scrub: trigger installed")
               mac = "02:00:5e:10:00:01"
               server.succeed(f"{nb_db} " + shlex.quote(
                   "drop trigger scrub on peers; update peers set meta_network_addresses"
-                  f" = '[{{\"NetIP\": \"192.0.2.1/24\", \"Mac\": \"{mac}\"}}]' where name = 'home'"
+                  f" = '[{{\"NetIP\": \"192.0.2.1/24\", \"Mac\": \"{mac}\"}}, {{\"NetIP\": \"192.0.2.2/24\", \"Mac\": \"{mac}\"}}]'"
+                  " where name = 'home'"
               ))
               assert nb_wal({mac}) == {mac}
               server.wait_until_succeeds(
