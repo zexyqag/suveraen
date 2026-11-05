@@ -51,6 +51,11 @@ jobs:
           LOCK: ${{ inputs.lock }}
         run: base64 -d <<< "$LOCK" > flake.lock
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      # The unlock check's disk image is made by systemd-repart under unshare --map-root-user, which Ubuntu's
+      # AppArmor refuses to an unprivileged process unless this is off.
+      - run: |
+          sysctl kernel.apparmor_restrict_unprivileged_userns
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - env:
           CHECK: ${{ matrix.name }}
         run: nix build -L --no-link ".#checks.x86_64-linux.$CHECK"
