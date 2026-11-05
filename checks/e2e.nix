@@ -2029,8 +2029,10 @@ runTest {
                   f" --wireguard-port {d['wireguard']} --interface-name {d['interface']} {flags}",
               )
               # Run from a desktop session, the client signs in through a browser and a listener of its own (PKCE).
+              # After &&, the & would put the whole list in the background, whose shell holds the driver's output
+              # open until up ends.
               node.succeed(
-                  f"rm -f {log} {log}.status && (DESKTOP_SESSION=e2e {up} > {log} 2>&1; echo $? > {log}.status)"
+                  f"rm -f {log} {log}.status; (DESKTOP_SESSION=e2e {up} > {log} 2>&1; echo $? > {log}.status)"
                   " < /dev/null > /dev/null 2>&1 &"
               )
               return log
