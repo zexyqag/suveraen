@@ -179,9 +179,11 @@ in
         Host key of the boot-time SSH server as `suveraen-unlock-seal` prints it on this host (its public key goes to
         standard error): sealed to the host's TPM, so only a boot chain signed with this host's key opens it, while
         Secure Boot holds the keys it was sealed under. The system that chain boots opens it too, and it boots only
-        from this host's own volumes (suveraen.storage.volumeKeyIds). Root on the running system can take it, and so
-        can whoever gets the TPM's secrets out of it, and a copy of all the host's disks put back whole boots as the
-        host did when it was taken, with the key it held then. It is ciphertext and may be committed.
+        from this host's own volumes (suveraen.storage.volumeKeyIds), on a mirror from either one when the other
+        doesn't open. Root on the running system can take it, and so can whoever gets the TPM's secrets out of it, and
+        an earlier copy of the host's disks put back boots as the host did when it was taken, with the key it held
+        then, as does a copy of either disk of a mirror once the other doesn't open. It is ciphertext and may be
+        committed.
       '';
     };
 

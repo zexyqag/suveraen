@@ -258,9 +258,14 @@ in
         Ids of the system disks' volume keys, one per disk in the order of systemDisks. disko prints them at install
         once it made the volumes, before anything is built for the host, and `suveraen-volume-key-ids` prints them for
         the volumes open now, from their headers and the passphrase. The boot opens a system disk only if its volume
-        has that key, which nobody without the passphrase can give a volume of their own, so a disk replaced in place
-        needs its new id here before the next boot: a boot whose ids its disks don't have stops, and only a fix from
-        outside it, such as from rescue, brings the host back. Public data. Required on encrypted hosts.
+        has that key, which nobody without the passphrase can give a volume of their own. A mirror boots on without a
+        disk that is missing or whose volume has another key, such as one replaced in place before its new id is here:
+        degraded, on what the other disk last held, which the unlock doesn't show. The pool's hourly health check
+        reports it, and mdadm at boot when the whole disk is missing. A disk back after a boot without it catches up
+        on rpool, but its halves of the md arrays that boot wrote to, /boot always, stay out until `mdadm --add`
+        puts them back. A volume the passphrase doesn't open keeps the boot asking until its disk is taken out, and
+        with no disk open the boot stops, which only a fix from outside it, such as from rescue, undoes. Public data.
+        Required on encrypted hosts.
       '';
     };
 
@@ -486,20 +491,29 @@ in
     boot.supportedFilesystems.zfs = true;
     boot.kernelParams = [ "zfs.zfs_arc_max=${toString cfg.arcMax}" ];
     boot.zfs.forceImportRoot = false;
-    # rpool is imported only once every system disk opened as this host's own volume, and from those alone: the signed
-    # boot chain takes no pool of that name from anywhere else. Unlocking over SSH also takes longer than the import's
+    # rpool is imported once every system disk's volume has opened as this host's own or failed to, and only from those
+    # that opened: the signed boot chain takes no pool of that name from anywhere else, and a mirror comes up degraded
+    # without a disk that is missing or holds another volume. Unlocking over SSH also takes longer than the import's
     # own wait for its devices.
     boot.zfs.pools.rpool = lib.mkIf cfg.encrypted { devNodes = "/dev/disk/rpool"; };
     boot.initrd.systemd.services.zfs-import-rpool = lib.mkIf cfg.encrypted (
       let
-        opened = map (name: "systemd-cryptsetup@${utils.escapeSystemdPath name}.service") volumes;
-        links = map (name: "/dev/disk/rpool/${name}") volumes;
+        units = map (name: "systemd-cryptsetup@${utils.escapeSystemdPath name}.service") volumes;
       in
       {
-        requires = opened;
-        after = opened;
-        # systemd-cryptsetup passes over a volume whose name a device already has, which then gets no link.
-        preStart = "udevadm wait --timeout=60 ${toString links}";
+        wants = units;
+        after = units;
+        # Every volume whose unit is active must get its link: one that systemd-cryptsetup passed over, as a device
+        # already had its name, never does. With no volume open, udevadm refuses the empty list.
+        preStart = ''
+          links=()
+          ${lib.concatStrings (
+            lib.zipListsWith (unit: name: ''
+              if systemctl is-active --quiet ${lib.escapeShellArg unit}; then links+=(/dev/disk/rpool/${name}); fi
+            '') units volumes
+          )}
+          udevadm wait --timeout=60 "''${links[@]}"
+        '';
       }
     );
 
