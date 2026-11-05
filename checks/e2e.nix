@@ -2030,9 +2030,9 @@ runTest {
               )
               # Run from a desktop session, the client signs in through a browser and a listener of its own (PKCE).
               # After &&, the & would put the whole list in the background, whose shell holds the driver's output
-              # open until up ends.
+              # open until up ends. The driver's errexit would end the group before a refused up's status is written.
               node.succeed(
-                  f"rm -f {log} {log}.status; (DESKTOP_SESSION=e2e {up} > {log} 2>&1; echo $? > {log}.status)"
+                  f"rm -f {log} {log}.status; (set +e; DESKTOP_SESSION=e2e {up} > {log} 2>&1; echo $? > {log}.status)"
                   " < /dev/null > /dev/null 2>&1 &"
               )
               return log
@@ -2389,7 +2389,7 @@ runTest {
               # Longer than any request timeout on the way, joined once the next subtests are done.
               since = {name: int(nb_node(name).succeed("date +%s")) for name in nb_devices}
               acme.succeed(
-                  f"(curl -sS -m 300 --socks5 127.0.0.1:{nb_devices['phone']['socks']} http://{nb_camera}:8080/paced"
+                  f"(set +e; curl -sS -m 300 --socks5 127.0.0.1:{nb_devices['phone']['socks']} http://{nb_camera}:8080/paced"
                   " > /tmp/paced 2>&1; echo $? > /tmp/paced.status) < /dev/null > /dev/null 2>&1 &"
               )
 
