@@ -2058,7 +2058,8 @@ runTest {
 
           # A device's own view of the mesh, or None while its daemon doesn't answer.
           def nb_status(name):
-              status, out = nb_node(name).execute(f"{nb_cli(name, 'status --json')} > /tmp/shared/nb-{name} 2>&1")
+              # What it logs, such as while its daemon starts again, goes to stderr and stays out of the JSON.
+              status, out = nb_node(name).execute(f"{nb_cli(name, 'status --json')} > /tmp/shared/nb-{name}")
               text = (nb_node(name).shared_dir / f"nb-{name}").read_text()
               return json.loads(text) if status == 0 else None
 
