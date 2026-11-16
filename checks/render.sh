@@ -481,7 +481,7 @@ clientkeys = {"state", "id", "class", "name", "displayname", "description", "oau
 policykeys = {"credential_type_minimum", "authsession_expiry", "privilege_expiry", "entry_managed_by"}
 # Nested in idm_admins, a group takes members only from its manager, so idm_admins manages platform-admins. tenant-admins
 # manage every other group the files declare, which lets them change its members alone, never rename or delete it.
-managers = {"platform-admins": ["idm_admins"], "tenant-admins": ["tenant-admins"]}
+managers = {"platform-admins": ["idm_admins"]}
 # What no migration can set on a client: a confidential one that sends no PKCE, a public one that redirects to the
 # device it runs on.
 flags = {"suveraen/disable-pkce": basic, "suveraen/localhost-redirects": public}
@@ -561,29 +561,22 @@ for line in sys.stdin:
                 claim(names.setdefault(tenant, {}), name, own + "#" + str(a.get("id")), where, "name")
             if "member" in a:
                 bad(where, f"groups get their members from admins, not from files: {name}")
-            if classes == ["group"]:
-                extra = set(a) - {"state", "id", "class", "name", "description", "entry_managed_by"}
-                if a.get("entry_managed_by") != ["tenant-admins"]:
-                    bad(where, f"tenant-admins manage the members of every group but the admin groups, as a list in"
+            if classes in (["group"], ["account_policy", "group"]):
+                if a.get("entry_managed_by") != managers.get(name, ["tenant-admins"]):
+                    bad(where, f"idm_admins manages platform-admins, and tenant-admins every other group, as a list in"
                         f" Kanidm 1.11: {name}")
                 groups.add(name)
+            if classes == ["group"]:
+                extra = set(a) - {"state", "id", "class", "name", "description", "entry_managed_by"}
             elif classes == ["account_policy", "group"] and source == "kanidm-migrations":
                 extra = set(a) - {"state", "id", "class", "name", "description"} - policykeys
-                if a.get("entry_managed_by") != managers.get(name):
-                    bad(where, f"idm_admins manages platform-admins, and tenant-admins their own, as a list in Kanidm"
-                        f" 1.11: {name}")
-                groups.add(name)
             elif classes == ["account_policy", "group"]:
                 # Kanidm holds a person to the strictest policy of all their groups, so the group of an app only
                 # tightens what its members may enrol, which Kanidm checks as one is enrolled.
                 extra = set(a) - {"state", "id", "class", "name", "description", "entry_managed_by",
                                   "credential_type_minimum"}
-                if a.get("entry_managed_by") != ["tenant-admins"]:
-                    bad(where, f"tenant-admins manage the members of every group but the admin groups, as a list in"
-                        f" Kanidm 1.11: {name}")
                 if a.get("credential_type_minimum") != "passkey":
                     bad(where, f"an app group that is an account policy has its members enrol passkeys alone: {name}")
-                groups.add(name)
             elif classes in (sorted(basic), sorted(public)) and source != "kanidm-migrations":
                 extra = set(a) - clientkeys
                 # Kanidm holds every account to one, and fails the whole file without it.

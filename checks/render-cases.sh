@@ -427,9 +427,10 @@ refuses migration-platform-map-named "./kubernetes/apps/kanidm/app holds its mig
 refuses migration-name-without-dash "every name but members holds a -, which no login suveraen-idm admin makes does:" \
   "sed -i 's/\"hello-users\"/\"hellousers\"/g' $S"
 refuses migration-other-app-group "an app names its groups hello-<name>" "sed -i 's/\"hello-users\"/\"other-users\"/g' $S"
-refuses migration-group-unmanaged "tenant-admins manage the members of every group but the admin groups, as a list in" \
+managed="idm_admins manages platform-admins, and tenant-admins every other group, as a list in Kanidm 1.11"
+refuses migration-group-unmanaged "$managed: hello-users" \
   "sed -i '/\"entry_managed_by\": \\[\"tenant-admins\"\\]/d; s/\"name\": \"hello-users\",/\"name\": \"hello-users\"/' $S"
-refuses migration-members-managed-elsewhere "tenant-admins manage the members of every group but the admin groups, as a list in Kanidm 1.11: members" \
+refuses migration-members-managed-elsewhere "$managed: members" \
   "sed -i '0,/\"entry_managed_by\": \\[\"tenant-admins\"\\]/s//\"entry_managed_by\": [\"idm_admins\"]/' $M"
 refuses migration-member "groups get their members from admins, not from files: hello-users" \
   "sed -i 's|          \"name\": \"hello-users\"|&,\n          \"member\": [\"admin\"]|' $S"
@@ -444,30 +445,35 @@ refuses migration-other-scope-group "a client maps members or its own app groups
   "sed -i 's/{ \"group\": \"hello-users\", \"scopes\"/{ \"group\": \"tenant-admins\", \"scopes\"/' $S"
 refuses migration-app-removes "only the platform files remove entries" \
   "sed -i '0,/\"state\": \"present\"/s//\"state\": \"absent\"/' $S"
-removed() { # a file of removals in the platform's migrations, from JSON on stdin
-  cat >removed.json
-  yq -i '.data."90-removed.json" = load_str("removed.json")' apps/kanidm/app/migrations.yaml
-  rm removed.json
+platform() { # a file of the platform's migrations, by name, from JSON on stdin
+  cat >platform.json
+  yq -i ".data.\"$1\" = load_str(\"platform.json\")" apps/kanidm/app/migrations.yaml
+  rm platform.json
 }
-export -f removed
+export -f platform
 refuses migration-removed-returns "a removed entry never comes back, as Kanidm refuses its ID for good: b11099d7-" \
   "for t in alpha bravo; do
      ids \$t KANIDM_REMOVED_ID
      append $T/\$t/secrets.yaml \"  KANIDM_OLD_ID: \$(yq .stringData.HELLO_OIDC_ID $T/\$t/secrets.yaml)\n\"
    done
    echo '{\"id\": \"\${KANIDM_REMOVED_ID}\",
-   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_OLD_ID}\"}]}' | removed"
+   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_OLD_ID}\"}]}' | platform 90-removed.json"
 refuses migration-empty "a migration has an id and assertions, at least one" \
   "ids alpha KANIDM_REMOVED_ID; ids bravo KANIDM_REMOVED_ID
-   echo '{\"id\": \"\${KANIDM_REMOVED_ID}\", \"assertions\": []}' | removed"
+   echo '{\"id\": \"\${KANIDM_REMOVED_ID}\", \"assertions\": []}' | platform 90-removed.json"
 refuses migration-platform-literal-id "$secret \${KANIDM_<NAME>_ID} alone" \
   "ids alpha KANIDM_RETIRED_ID; ids bravo KANIDM_RETIRED_ID
    echo '{\"id\": \"e0000000-0000-4000-8000-000000000090\",
-   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | removed"
+   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | platform 90-removed.json"
 refuses migration-admins-by-name "as a list in Kanidm 1.11: tenant-admins" \
   "sed -i 's/\"entry_managed_by\": \[\"tenant-admins\"\]/\"entry_managed_by\": \"tenant-admins\"/' $M"
-refuses migration-platform-admins-own "idm_admins manages platform-admins, and tenant-admins their own" \
+refuses migration-platform-admins-own "$managed: platform-admins" \
   "sed -i 's/\"entry_managed_by\": \[\"idm_admins\"\]/\"entry_managed_by\": [\"platform-admins\"]/' $M"
+refuses migration-platform-group-unmanaged "$managed: platform-staff" \
+  "ids alpha KANIDM_STAFF_ID KANIDM_STAFF_GROUP_ID; ids bravo KANIDM_STAFF_ID KANIDM_STAFF_GROUP_ID
+   echo '{\"id\": \"\${KANIDM_STAFF_ID}\", \"assertions\": [{\"state\": \"present\",
+   \"id\": \"\${KANIDM_STAFF_GROUP_ID}\", \"class\": [\"account_policy\", \"group\"], \"name\": \"platform-staff\",
+   \"credential_type_minimum\": \"passkey\"}]}' | platform 20-staff.json"
 refuses migration-policy-typo "platform-admins sets ['auth_session_expiry']" \
   "sed -i '0,/\"authsession_expiry\"/s//\"auth_session_expiry\"/' $M"
 refuses migration-admins-any-passkey "platform-admins sign in with passkeys of an approved make and model alone" \
@@ -910,7 +916,7 @@ renders sso-public "sed -i 's/oauth2_resource_server_basic/oauth2_resource_serve
 renders sso-without-pkce "yq -i '.metadata.annotations.\"suveraen/disable-pkce\" = \"true\"' $S"
 renders migration-removed "ids alpha KANIDM_REMOVED_ID KANIDM_RETIRED_ID; ids bravo KANIDM_REMOVED_ID KANIDM_RETIRED_ID
   echo '{\"id\": \"\${KANIDM_REMOVED_ID}\",
-  \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | removed"
+  \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | platform 90-removed.json"
 renders real-cluster "$real"
 renders recovery "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery"
 renders recovery-offsite "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery; knob POSTGRES_RESTORE_FROM offsite-2"
