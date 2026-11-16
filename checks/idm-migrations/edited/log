@@ -1,0 +1,38 @@
+2026-11-16T05:15:29.353459802Z Logging filter initialized: "kanidmd_core::https::middleware=info,h2::proto::streams::prioritize=warn,kanidmd_core::https::trace=info,tonic=warn,hyper=warn,h2=warn,info"
+2026-11-16T05:15:29.353504396Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Starting Kanidmd | version: 1.12.1
+2026-11-16T05:15:29.353596057Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Running in server mode ...
+2026-11-16T05:15:29.353599783Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Starting kanidm with configuration: address: 0.0.0.0:8443, domain: idm.alpha.test, ldap address: disabled, origin: https://idm.alpha.test/ admin bind path: /run/kanidmd/sock, thread count: 2, dbpath: /data/kanidm.db, arcsize: AUTO, max request size: 262144b, http server versions: http/2 + http/1, http client address info: none, ldap client address info: none, with TLS: true, online_backup: enabled: true - schedule: 23 2 * * * versions: 7 path: /data, integration mode: false, log_level: inforole: write replica, replication: disabled, otel_grpc_endpoint: None
+2026-11-16T05:15:29.376518933Z 4dd26a3a-83fc-4d0d-996f-b7fcec97cba7 INFO     system_initialisation [ 7.53ms | 100.00% ]
+2026-11-16T05:15:29.380117287Z 7af163ac-c5e4-4328-b21d-198716effc18 INFO     migration_apply [ 2.26ms | 19.37% / 100.00% ]
+2026-11-16T05:15:29.380152443Z 7af163ac-c5e4-4328-b21d-198716effc18 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/10-groups.json
+2026-11-16T05:15:29.380155743Z 7af163ac-c5e4-4328-b21d-198716effc18 INFO     ┝━ ｉ [info]: examining migration | path: /migrations/50-hello.json
+2026-11-16T05:15:29.380158104Z 7af163ac-c5e4-4328-b21d-198716effc18 INFO     ┝━ handle_scim_migration_apply [ 1.07ms | 47.12% ]
+2026-11-16T05:15:29.380160138Z 7af163ac-c5e4-4328-b21d-198716effc18 ERROR    │  ┝━ 🚨 [error]: requested_rem_classes is not a subset of allowed | event_tag_id: 12
+2026-11-16T05:15:29.380161638Z 7af163ac-c5e4-4328-b21d-198716effc18 ERROR    │  ┝━ 🚨 [error]: requested_classes: {"object"} !⊆ allowed: {"account_policy", "group", "posixgroup"} | event_tag_id: 12
+2026-11-16T05:15:29.380163711Z 7af163ac-c5e4-4328-b21d-198716effc18 INFO     │  ┕━ ｉ [info]: denied ❌ - modifications may not proceed | event_tag_id: 11
+2026-11-16T05:15:29.380165304Z 7af163ac-c5e4-4328-b21d-198716effc18 ERROR    ┝━ 🚨 [error]: Failed to apply migration | err: AccessDenied | path: /migrations/10-groups.json
+2026-11-16T05:15:29.380166614Z 7af163ac-c5e4-4328-b21d-198716effc18 INFO     ┕━ handle_scim_migration_apply [ 758µs | 33.51% ]
+2026-11-16T05:15:29.38016797Z 7af163ac-c5e4-4328-b21d-198716effc18 INFO        ┕━ ｉ [info]: Assertion already applied, skipping. | id: ef74f062-31c2-4dec-b752-03a5b986a88d
+2026-11-16T05:15:29.380169377Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Provided online backup schedule is: 23 2 * * *, now being transformed to: 0 23 2 * * * *
+2026-11-16T05:15:29.380217097Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Online backup schedule parsed as: 0 23 2 * * * *
+2026-11-16T05:15:29.380270028Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Online backup next run on 2026-11-17 02:23:00 UTC, wait_time = 76051s
+2026-11-16T05:15:29.381273567Z 9ab870a4-b424-4161-8316-5ba6c70e53c9 INFO     handle_purgetombstoneevent [ 895µs | 100.00% ]
+2026-11-16T05:15:29.381285207Z 9ab870a4-b424-4161-8316-5ba6c70e53c9 INFO     ┕━ ｉ [info]: Tombstone purge operation success | event_tag_id: 3
+2026-11-16T05:15:29.38168207Z db95f4d6-2a33-48a9-b9ee-fb4d41b28226 INFO     handle_purgerecycledevent [ 240µs | 100.00% ]
+2026-11-16T05:15:29.381821491Z b01830ee-1a49-4582-8e8c-acf607d8bbdf INFO     handle_purge_delete_after_event [ 193µs | 100.00% ]
+2026-11-16T05:15:29.382425908Z 527c073e-051b-4e66-a5d0-74c68e21c9de INFO     handle_purgetombstoneevent [ 433µs | 100.00% ]
+2026-11-16T05:15:29.38243314Z 527c073e-051b-4e66-a5d0-74c68e21c9de INFO     ┕━ ｉ [info]: Tombstone purge operation success | event_tag_id: 3
+2026-11-16T05:15:29.382586952Z 4adfe9ec-c724-4730-9b2a-33b62c42c49a INFO     handle_purgerecycledevent [ 135µs | 100.00% ]
+2026-11-16T05:15:29.382851324Z 97acfd93-b7ca-4618-b26b-e8593df9d4fe INFO     handle_purge_delete_after_event [ 303µs | 100.00% ]
+2026-11-16T05:15:29.387086298Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Starting the web server...
+2026-11-16T05:15:29.387098329Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Ready to rock! 🪨  UI available at: https://idm.alpha.test/ | event_tag_id: 3
+2026-11-16T05:15:33.01647229Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Signal received, shutting down
+2026-11-16T05:15:33.01653968Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Delayed Action Actor
+2026-11-16T05:15:33.016543573Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Auditd Actor
+2026-11-16T05:15:33.01654567Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Migration Reload Monitor
+2026-11-16T05:15:33.01654744Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Backup Actor
+2026-11-16T05:15:33.016602793Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Admin Socket
+2026-11-16T05:15:33.016604539Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped Interval Actor
+2026-11-16T05:15:33.01660626Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped TlsAcceptor Reload Monitor
+2026-11-16T05:15:33.016615665Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped HTTPS Server
+2026-11-16T05:15:33.019087266Z 00000000-0000-0000-0000-000000000000 INFO     ｉ [info]: Stopped 🛑 
