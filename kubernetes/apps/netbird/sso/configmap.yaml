@@ -21,7 +21,7 @@ data:
           "class": ["account_policy", "group"],
           "name": "netbird-users",
           "credential_type_minimum": "passkey",
-          "entry_managed_by": ["tenant-admins"]
+          "entry_managed_by": "tenant-admins"
         },
         {
           "state": "present",

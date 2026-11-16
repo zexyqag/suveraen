@@ -18,7 +18,7 @@ data:
           "id": "${HELLO_USERS_ID}",
           "class": ["group"],
           "name": "hello-users",
-          "entry_managed_by": ["tenant-admins"]
+          "entry_managed_by": "tenant-admins"
         },
         {
           "state": "present",

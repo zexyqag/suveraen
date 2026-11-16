@@ -1772,7 +1772,7 @@ runTest {
               for name in ["idm_people_admins", "idm_group_admins"]:
                   assert group(name)["member"] == [f"idm_admins@{domain}"], (name, group(name))
               for name in ["members", "hello-users"]:
-                  assert group(name)["entry_managed_by"] == [f"tenant-admins@{domain}"], (name, group(name))
+                  assert group(name)["entry_managed_by"] == org["uuid"], (name, group(name))
               client = kanidm(first, "system oauth2 get hello-oidc")["attrs"]
               assert client["oauth2_rs_scope_map"] == [f'hello-users@{domain}: {{"openid", "profile"}}'], client
               disable_idm_admin(first)

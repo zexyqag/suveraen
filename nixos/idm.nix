@@ -47,7 +47,7 @@ in
       type = lib.types.package;
       readOnly = true;
       internal = true;
-      default = pkgs.kanidm_1_11;
+      default = pkgs.kanidm_1_12;
       description = ''
         The Kanidm client suveraen-idm runs. A client must match its server's version, so every tenant's Kanidm runs
         this one's (checks/render.sh).

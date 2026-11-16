@@ -26,7 +26,7 @@ data:
           "id": "b9573391-723b-42d6-aaa9-2b674ebb1078",
           "class": ["group"],
           "name": "members",
-          "entry_managed_by": ["tenant-admins"]
+          "entry_managed_by": "tenant-admins"
         },
         {
           "state": "present",
@@ -36,7 +36,7 @@ data:
           "credential_type_minimum": "attested_passkey",
           "authsession_expiry": 3600,
           "privilege_expiry": 300,
-          "entry_managed_by": ["idm_admins"]
+          "entry_managed_by": "idm_admins"
         },
         {
           "state": "present",
@@ -46,7 +46,7 @@ data:
           "credential_type_minimum": "passkey",
           "authsession_expiry": 3600,
           "privilege_expiry": 600,
-          "entry_managed_by": ["tenant-admins"]
+          "entry_managed_by": "tenant-admins"
         }
       ]
     }

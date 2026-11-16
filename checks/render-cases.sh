@@ -359,7 +359,7 @@ S=apps/hello/sso/configmap.yaml
 M=apps/kanidm/app/migrations.yaml
 I=apps/kanidm/app/helmrelease.yaml
 refuses kanidm-image-version "Kanidm runs docker.io/kanidm/server at the version of the Kanidm client the platform" \
-  "sed -i 's|tag: 1.11.2@|tag: 1.11.1@|' $I"
+  "sed -i -E 's|tag: [0-9.]+@|tag: 0.0.0@|' $I"
 config="Kanidm serves the host passed through to it, as its domain and origin"
 refuses kanidm-address-info "$config" \
   "sed -i 's|    thread_count = 2|&\n    http_client_address_info.x-forward-for = [\"10.42.0.0/16\"]|' apps/kanidm/app/configmap.yaml"
@@ -427,11 +427,13 @@ refuses migration-platform-map-named "./kubernetes/apps/kanidm/app holds its mig
 refuses migration-name-without-dash "every name but members holds a -, which no login suveraen-idm admin makes does:" \
   "sed -i 's/\"hello-users\"/\"hellousers\"/g' $S"
 refuses migration-other-app-group "an app names its groups hello-<name>" "sed -i 's/\"hello-users\"/\"other-users\"/g' $S"
-managed="idm_admins manages platform-admins, and tenant-admins every other group, as a list in Kanidm 1.11"
-refuses migration-group-unmanaged "$managed: hello-users" \
-  "sed -i '/\"entry_managed_by\": \\[\"tenant-admins\"\\]/d; s/\"name\": \"hello-users\",/\"name\": \"hello-users\"/' $S"
-refuses migration-members-managed-elsewhere "$managed: members" \
-  "sed -i '0,/\"entry_managed_by\": \\[\"tenant-admins\"\\]/s//\"entry_managed_by\": [\"idm_admins\"]/' $M"
+managed="idm_admins manages platform-admins, and tenant-admins every other group"
+refuses migration-group-unmanaged "$managed: hello-users, not null" \
+  "sed -i '/\"entry_managed_by\": \"tenant-admins\"/d; s/\"name\": \"hello-users\",/\"name\": \"hello-users\"/' $S"
+refuses migration-group-as-list "$managed: hello-users, not [\"tenant-admins\"]" \
+  "sed -i 's/\"entry_managed_by\": \"tenant-admins\"/\"entry_managed_by\": [\"tenant-admins\"]/' $S"
+refuses migration-members-managed-elsewhere "$managed: members, not \"idm_admins\"" \
+  "sed -i '0,/\"entry_managed_by\": \"tenant-admins\"/s//\"entry_managed_by\": \"idm_admins\"/' $M"
 refuses migration-member "groups get their members from admins, not from files: hello-users" \
   "sed -i 's|          \"name\": \"hello-users\"|&,\n          \"member\": [\"admin\"]|' $S"
 refuses migration-client-name "an app has one OAuth2 client, hello-oidc" "sed -i 's/\"hello-oidc\"/\"hello-web\"/' $S"
@@ -465,11 +467,11 @@ refuses migration-platform-literal-id "$secret \${KANIDM_<NAME>_ID} alone" \
   "ids alpha KANIDM_RETIRED_ID; ids bravo KANIDM_RETIRED_ID
    echo '{\"id\": \"e0000000-0000-4000-8000-000000000090\",
    \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | platform 90-removed.json"
-refuses migration-admins-by-name "as a list in Kanidm 1.11: tenant-admins" \
-  "sed -i 's/\"entry_managed_by\": \[\"tenant-admins\"\]/\"entry_managed_by\": \"tenant-admins\"/' $M"
-refuses migration-platform-admins-own "$managed: platform-admins" \
-  "sed -i 's/\"entry_managed_by\": \[\"idm_admins\"\]/\"entry_managed_by\": [\"platform-admins\"]/' $M"
-refuses migration-platform-group-unmanaged "$managed: platform-staff" \
+refuses migration-admins-as-list "$managed: tenant-admins, not [\"tenant-admins\"]" \
+  "sed -i 's/\"entry_managed_by\": \"tenant-admins\"/\"entry_managed_by\": [\"tenant-admins\"]/' $M"
+refuses migration-platform-admins-own "$managed: platform-admins, not \"platform-admins\"" \
+  "sed -i 's/\"entry_managed_by\": \"idm_admins\"/\"entry_managed_by\": \"platform-admins\"/' $M"
+refuses migration-platform-group-unmanaged "$managed: platform-staff, not null" \
   "ids alpha KANIDM_STAFF_ID KANIDM_STAFF_GROUP_ID; ids bravo KANIDM_STAFF_ID KANIDM_STAFF_GROUP_ID
    echo '{\"id\": \"\${KANIDM_STAFF_ID}\", \"assertions\": [{\"state\": \"present\",
    \"id\": \"\${KANIDM_STAFF_GROUP_ID}\", \"class\": [\"account_policy\", \"group\"], \"name\": \"platform-staff\",
@@ -895,8 +897,11 @@ refuses mesh-group-session "netbird-users sets ['authsession_expiry']" \
 refuses mesh-group-any-credential "an app group that is an account policy has its members enrol passkeys alone" \
   "sed -i 's/\"credential_type_minimum\": \"passkey\"/\"credential_type_minimum\": \"any\"/' \
   apps/netbird/sso/configmap.yaml"
-refuses mesh-group-unmanaged "as a list in Kanidm 1.11: netbird-users" \
-  "sed -i '/\"entry_managed_by\": \[\"tenant-admins\"\]\$/d; s/\"credential_type_minimum\": \"passkey\",/\"credential_type_minimum\": \"passkey\"/' \
+refuses mesh-group-unmanaged "$managed: netbird-users, not null" \
+  "sed -i '/\"entry_managed_by\": \"tenant-admins\"\$/d; s/\"credential_type_minimum\": \"passkey\",/\"credential_type_minimum\": \"passkey\"/' \
+  apps/netbird/sso/configmap.yaml"
+refuses mesh-group-as-list "$managed: netbird-users, not [\"tenant-admins\"]" \
+  "sed -i 's/\"entry_managed_by\": \"tenant-admins\"/\"entry_managed_by\": [\"tenant-admins\"]/' \
   apps/netbird/sso/configmap.yaml"
 refuses mesh-scrub-image "scrub image ghcr.io/cloudnative-pg/postgresql:18.6-202610190957-standard-trixie@" \
   "sed -i 's/minimal-trixie@sha256:/standard-trixie@sha256:/' $H"

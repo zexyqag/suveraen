@@ -183,7 +183,7 @@ account() {
   echo "${state:-unknown}"
 }
 
-# kanidmd exits 0 whatever happened, so an account counts as disabled once Kanidm takes it for expired.
+# An account counts as disabled once Kanidm takes it for expired, whatever disable-account answered.
 disable() {
   local name left=()
   for name in idm_admin admin anonymous; do

@@ -1,5 +1,5 @@
 """Signs a person in with a password at Kanidm's own pages, as a browser that holds no session does, for an OAuth2
-authorize URL: the sign-in, the consent the first time for each client, and the redirect Kanidm ends at.
+authorize URL: the sign-in, the consent page whenever Kanidm shows one, and the redirect Kanidm ends at.
 
 usage: signin deliver URL PERSON PASSWORD [--resolve HOST:ADDRESS]... --cacert FILE
            URL is the one a device's client printed; its loopback listener gets the redirect, as from a browser

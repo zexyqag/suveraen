@@ -481,7 +481,7 @@ clientkeys = {"state", "id", "class", "name", "displayname", "description", "oau
 policykeys = {"credential_type_minimum", "authsession_expiry", "privilege_expiry", "entry_managed_by"}
 # Nested in idm_admins, a group takes members only from its manager, so idm_admins manages platform-admins. tenant-admins
 # manage every other group the files declare, which lets them change its members alone, never rename or delete it.
-managers = {"platform-admins": ["idm_admins"]}
+managers = {"platform-admins": "idm_admins"}
 # What no migration can set on a client: a confidential one that sends no PKCE, a public one that redirects to the
 # device it runs on.
 flags = {"suveraen/disable-pkce": basic, "suveraen/localhost-redirects": public}
@@ -562,9 +562,10 @@ for line in sys.stdin:
             if "member" in a:
                 bad(where, f"groups get their members from admins, not from files: {name}")
             if classes in (["group"], ["account_policy", "group"]):
-                if a.get("entry_managed_by") != managers.get(name, ["tenant-admins"]):
-                    bad(where, f"idm_admins manages platform-admins, and tenant-admins every other group, as a list in"
-                        f" Kanidm 1.11: {name}")
+                manager = a.get("entry_managed_by")
+                if manager != managers.get(name, "tenant-admins"):
+                    bad(where, f"idm_admins manages platform-admins, and tenant-admins every other group: {name}, not"
+                        f" {json.dumps(manager)}")
                 groups.add(name)
             if classes == ["group"]:
                 extra = set(a) - {"state", "id", "class", "name", "description", "entry_managed_by"}
