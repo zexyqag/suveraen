@@ -99,9 +99,9 @@ configmaps() {
 }
 
 # One line for each client in the tenant's attachments (configmaps on stdin), each as all the files of its attachment
-# declare it, in their order, with tabs between its app, name, kind, the redirect the probe names, the flags it asks
-# for, those last applied, and what is wrong with it, "-" for none. They come from the tenant's Kanidm namespace, so
-# none names another tenant's app.
+# declare it, in their order, with tabs between its app, name, ID, kind, the redirect the probe names, the flags it asks
+# for, those last applied to it, and what is wrong with it, "-" for none. They come from the tenant's Kanidm namespace,
+# so none names another tenant's app.
 clients() {
   jq -r '.items[]
     | select(.metadata.name | test("^sso-[a-z][a-z0-9]*$"))
@@ -111,13 +111,15 @@ clients() {
     | [[.data // {} | to_entries | sort_by(.key)[] | .value | fromjson? | .assertions[]? | select(.state == "present")]
       | group_by(.id)[] | add | select(.name == $name)] as $found
     | ($found[0].class // []) as $class
+    | ($found[0].id | strings // "") as $id
     | [("basic", "public") as $k | select($class | index("oauth2_resource_server_\($k)")) | $k] as $kinds
     | ($found[0].oauth2_rs_origin // [] | first // null | if type == "string" then . else "" end) as $redirect
+    | ($a["suveraen/flags-applied"] // "" | split(" ")) as $mark
     | [("disable-pkce", "localhost-redirects") as $f | select($a | has("suveraen/\($f)")) | $f] as $set
     | [$set[] | select($a["suveraen/\(.)"] == "true")] as $flags
-    | [$app, $name, ($kinds[0] // ""), $redirect,
+    | [$app, $name, $id, ($kinds[0] // ""), $redirect,
        (if $flags == [] then "none" else $flags | join(",") end),
-       ($a["suveraen/flags-applied"] // ""),
+       (if $id != "" and $mark[0] == $id then $mark[1] // "" else "" end),
        (if ($found | length) != 1 then "no single client \($name)"
         elif ($kinds | length) != 1 then "\($name) is not either confidential or public"
         elif ($redirect | test("^https://[a-z0-9.-]+(:[0-9]{1,5})?/[!-~]*$") | not) then "\($name) has no redirect"
@@ -251,16 +253,17 @@ sign_out() {
   echo "$1: idm_admin, admin and anonymous disabled"
 }
 
-# Marks on a client's attachment the flags it has in Kanidm, which reads no annotation.
+# Marks on a client's attachment the flags it has in Kanidm, which reads no annotation, after its ID: a client made
+# again under its name has none.
 mark() {
   kubectl --request-timeout=30s -n "$1-kanidm" annotate configmap "sso-$2" --overwrite --field-manager=suveraen-idm \
-    "suveraen/flags-applied=$3" >/dev/null
+    "suveraen/flags-applied=$3 $4" >/dev/null
 }
 
 # As idm_admin: sets a client's flags in Kanidm, and copies a confidential one's secret, a new one with reset, into
 # its app's Secret sso, which then has to pass the probe.
 repair() {
-  local tenant=$1 origin=$2 app=$3 client=$4 kind=$5 redirect=$6 flags=$7 how=$8 secret code
+  local tenant=$1 origin=$2 app=$3 client=$4 id=$5 kind=$6 redirect=$7 flags=$8 how=$9 secret code
   if [ "$kind" = basic ]; then
     if ! app_namespace "$tenant" "$app"; then
       fail "$tenant: $client: no namespace $tenant-$app of the tenant's."
@@ -303,7 +306,7 @@ repair() {
     fi
     echo "$tenant: $client: $([ "$how" = reset ] && echo "a new secret" || echo "its secret") in $tenant-$app/sso"
   fi
-  if ! mark "$tenant" "$app" "$flags"; then
+  if ! mark "$tenant" "$app" "$id" "$flags"; then
     fail "$tenant: $client: sso-$app could not be marked."
     return 1
   fi
@@ -314,7 +317,7 @@ repair() {
 # secret, and rotate-all every confidential client one and every client its flags again. idm_admin is recovered only
 # when something needs it.
 tenant() {
-  local t=$1 mode=$2 only=${3:-} origin list app client kind redirect flags applied error why code how todo=() each
+  local t=$1 mode=$2 only=${3:-} origin list app client id kind redirect flags applied error why code how todo=() each
   if ! origin=$(origin "$t"); then
     fail "$t: ConfigMap kanidm in $t-kanidm names no single origin."
     return 1
@@ -324,13 +327,13 @@ tenant() {
     fail "$t: its attachments could not be read."
     return 1
   fi
-  while IFS=$'\t' read -r app client kind redirect flags applied error; do
+  while IFS=$'\t' read -r app client id kind redirect flags applied error; do
     [ -n "$app" ] || continue
     if [ "$error" != - ]; then
       fail "$t: sso-$app: $error"
       continue
     fi
-    each="$app"$'\t'"$client"$'\t'"$kind"$'\t'"$redirect"$'\t'"$flags"
+    each="$app"$'\t'"$client"$'\t'"$id"$'\t'"$kind"$'\t'"$redirect"$'\t'"$flags"
     case $mode in
       rotate)
         if [ "$client" = "$only" ]; then
@@ -380,7 +383,7 @@ tenant() {
     fi
     if [ -z "$why" ] && [ "$applied" = - ] && [ "$flags" = none ]; then
       # A new client has Kanidm's defaults, which are no flags.
-      if ! mark "$t" "$app" none; then
+      if ! mark "$t" "$app" "$id" none; then
         fail "$t: $client: sso-$app could not be marked."
         continue
       fi
@@ -404,8 +407,8 @@ tenant() {
   how=reset
   [ "$mode" != sync ] || how=copy
   for each in "${todo[@]}"; do
-    IFS=$'\t' read -r app client kind redirect flags <<<"$each"
-    repair "$t" "$origin" "$app" "$client" "$kind" "$redirect" "$flags" "$how" || true
+    IFS=$'\t' read -r app client id kind redirect flags <<<"$each"
+    repair "$t" "$origin" "$app" "$client" "$id" "$kind" "$redirect" "$flags" "$how" || true
   done
   sign_out "$t" "$origin"
 }
@@ -420,8 +423,8 @@ unchecked() {
 }
 
 check() {
-  local list t origin maps attached ids app client kind redirect flags applied error state applied_all accounts started
-  local migrations clients
+  local list t origin maps attached ids app client id kind redirect flags applied error state applied_all accounts
+  local started migrations clients
   list=$(tenants) || exit 1
   for t in $list; do
     if ! origin=$(origin "$t"); then
@@ -443,7 +446,7 @@ check() {
     # may be all a client had it log.
     migrations=$(kubectl --request-timeout=60s -n "$t-kanidm" logs kanidm-0 -c app --timestamps \
       --limit-bytes=1048576 2>/dev/null | jq -Rsc --arg started "$started" -f "$logscan") || migrations=null
-    clients=$(while IFS=$'\t' read -r app client kind redirect flags applied error; do
+    clients=$(while IFS=$'\t' read -r app client id kind redirect flags applied error; do
       [ -n "$app" ] || continue
       if [ "$error" != - ]; then
         state=unusable

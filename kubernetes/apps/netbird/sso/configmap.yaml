@@ -1,8 +1,10 @@
 ---
 # NetBird's group, whose members tenant-admins manage and who may enrol only passkeys (Kanidm checks that only as a
-# credential is enrolled, so a person joins before they have any), and its public client in its tenant's Kanidm
-# (components/sso). Each ID comes from the tenant's Secret. Desktop and phone apps send members back to a port on their
-# own device, which suveraen-idm sync allows; the dashboard returns to its own two pages.
+# credential is enrolled, so a person joins before they have any, and the file that makes the group asks for them
+# already), and its public client in its tenant's Kanidm (components/sso), each made once by its own 10-<name>.json,
+# which never changes, and changed by 50-netbird.json. Each ID comes from the tenant's Secret, NETBIRD_<NAME>_ID for the
+# entry and NETBIRD_<NAME>_CREATE_ID for the file that makes it. Desktop and phone apps send members back to a port on
+# their own device, which suveraen-idm sync allows; the dashboard returns to its own two pages.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -11,6 +13,10 @@ metadata:
   annotations:
     suveraen/localhost-redirects: "true"
 data:
+  10-netbird-users.json: |
+    {"id":"${NETBIRD_USERS_CREATE_ID}","assertions":[{"state":"present","id":"${NETBIRD_USERS_ID}","class":["account_policy","group"],"name":"netbird-users","credential_type_minimum":"passkey"}]}
+  10-netbird-oidc.json: |
+    {"id":"${NETBIRD_OIDC_CREATE_ID}","assertions":[{"state":"present","id":"${NETBIRD_OIDC_ID}","class":["account","oauth2_resource_server","oauth2_resource_server_public"],"name":"netbird-oidc","displayname":"netbird-oidc","oauth2_rs_origin_landing":"https://pending.invalid/"}]}
   50-netbird.json: |
     {
       "id": "${NETBIRD_SSO_ID}",
@@ -18,16 +24,12 @@ data:
         {
           "state": "present",
           "id": "${NETBIRD_USERS_ID}",
-          "class": ["account_policy", "group"],
-          "name": "netbird-users",
           "credential_type_minimum": "passkey",
           "entry_managed_by": "tenant-admins"
         },
         {
           "state": "present",
           "id": "${NETBIRD_OIDC_ID}",
-          "class": ["account", "oauth2_resource_server", "oauth2_resource_server_public"],
-          "name": "netbird-oidc",
           "displayname": "NetBird",
           "oauth2_rs_origin": ["https://netbird.${TENANT_APP_DOMAIN}/nb-auth", "https://netbird.${TENANT_APP_DOMAIN}/nb-silent-auth"],
           "oauth2_rs_origin_landing": "https://netbird.${TENANT_APP_DOMAIN}/",

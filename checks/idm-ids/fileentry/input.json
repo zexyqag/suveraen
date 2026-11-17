@@ -1,0 +1,47 @@
+{
+ "apiVersion": "v1",
+ "kind": "List",
+ "items": [
+  {
+   "metadata": {
+    "name": "kube-root-ca.crt",
+    "namespace": "alpha-kanidm"
+   },
+   "data": {
+    "ca.crt": "-----BEGIN CERTIFICATE-----"
+   }
+  },
+  {
+   "metadata": {
+    "name": "kanidm",
+    "namespace": "alpha-kanidm"
+   },
+   "data": {
+    "server.toml": "version = \"2\"\n"
+   }
+  },
+  {
+   "metadata": {
+    "name": "kanidm-migrations",
+    "namespace": "alpha-kanidm"
+   },
+   "data": {
+    "10-members.json": "{\"id\":\"d316d16d-658a-46c1-aafa-e0794d82a012\",\"assertions\":[{\"state\":\"present\",\"id\":\"b9573391-723b-42d6-aaa9-2b674ebb1078\",\"class\":[\"group\"],\"name\":\"members\"}]}\n",
+    "10-platform-admins.json": "{\"id\":\"4a2451ec-b70c-47d9-ab05-d847882944a2\",\"assertions\":[{\"state\":\"present\",\"id\":\"dcffad28-d6d0-4257-af76-c9f7052c6eec\",\"class\":[\"account_policy\",\"group\"],\"name\":\"platform-admins\",\"credential_type_minimum\":\"attested_passkey\"}]}\n",
+    "10-tenant-admins.json": "{\"id\":\"52996d61-deef-4ab8-b7fa-dd8026765dd6\",\"assertions\":[{\"state\":\"present\",\"id\":\"7c563c30-e4c6-4ccb-afb4-f97936d8946e\",\"class\":[\"account_policy\",\"group\"],\"name\":\"tenant-admins\",\"credential_type_minimum\":\"passkey\"}]}\n",
+    "20-groups.json": "{\n  \"id\": \"6e7b8e96-f50a-4540-87a0-ddceb7a9d63f\",\n  \"assertions\": [\n    {\n      \"state\": \"present\",\n      \"id\": \"b9573391-723b-42d6-aaa9-2b674ebb1078\",\n      \"entry_managed_by\": \"tenant-admins\"\n    },\n    {\n      \"state\": \"present\",\n      \"id\": \"dcffad28-d6d0-4257-af76-c9f7052c6eec\",\n      \"credential_type_minimum\": \"attested_passkey\",\n      \"authsession_expiry\": 3600,\n      \"privilege_expiry\": 300,\n      \"entry_managed_by\": \"idm_admins\"\n    },\n    {\n      \"state\": \"present\",\n      \"id\": \"7c563c30-e4c6-4ccb-afb4-f97936d8946e\",\n      \"credential_type_minimum\": \"passkey\",\n      \"authsession_expiry\": 3600,\n      \"privilege_expiry\": 600,\n      \"entry_managed_by\": \"tenant-admins\"\n    }\n  ]\n}\n"
+   }
+  },
+  {
+   "metadata": {
+    "name": "sso-hello",
+    "namespace": "alpha-kanidm"
+   },
+   "data": {
+    "10-hello-users.json": "{\"id\":\"db77698c-7809-482b-bb76-4537c5fc2b83\",\"assertions\":[{\"state\":\"present\",\"id\":\"db77698c-7809-482b-bb76-4537c5fc2b83\",\"class\":[\"group\"],\"name\":\"hello-users\"}]}\n",
+    "10-hello-oidc.json": "{\"id\":\"b5ee6277-03a8-4281-b151-5043d8750b25\",\"assertions\":[{\"state\":\"present\",\"id\":\"b11099d7-e41d-4119-93ff-51833b74f7d5\",\"class\":[\"account\",\"oauth2_resource_server\",\"oauth2_resource_server_basic\"],\"name\":\"hello-oidc\",\"displayname\":\"hello-oidc\",\"oauth2_rs_origin_landing\":\"https://pending.invalid/\"}]}\n",
+    "50-hello.json": "{\n  \"id\": \"ef74f062-31c2-4dec-b752-03a5b986a88d\",\n  \"assertions\": [\n    {\n      \"state\": \"present\",\n      \"id\": \"db77698c-7809-482b-bb76-4537c5fc2b83\",\n      \"entry_managed_by\": \"tenant-admins\"\n    },\n    {\n      \"state\": \"present\",\n      \"id\": \"b11099d7-e41d-4119-93ff-51833b74f7d5\",\n      \"displayname\": \"hello\",\n      \"oauth2_rs_origin\": [\"https://hello.example.test/oauth2/callback\"],\n      \"oauth2_rs_origin_landing\": \"https://hello.example.test/\",\n      \"oauth2_rs_scope_map\": [{ \"group\": \"hello-users\", \"scopes\": [\"openid\", \"profile\"] }]\n    }\n  ]\n}\n"
+   }
+  }
+ ]
+}

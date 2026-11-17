@@ -1,38 +1,47 @@
 ---
-# The platform's groups in every tenant's Kanidm. Kanidm applies its files in the order of their names, once for each
-# change to one, so these come before the apps' (components/sso), which may name members, the group for apps every
-# member may use. platform-admins sign in only with a passkey of an approved make and model, tenant-admins with any
-# passkey, and both are asked for it again a few minutes into an admin's session. Kanidm checks the kind of
-# credential only as one is enrolled, never as one signs in, so a person joins such a group only before they have
-# any. idm_admins, which holds idm_admin, manages platform-admins, and tenant-admins manage their own group, members
-# and each app's groups, of which they change the members alone: Kanidm keeps a deleted entry's ID, and fails every
-# later file that names it. IDs are fixed for good: Kanidm finds an entry by its ID, and never takes one back once a
-# removal named it. These IDs alone are written here, the same in every tenant: Kanidm applies this file as it first
-# starts, before it takes a sign-in, so no person a tenant admin makes can hold one first, and render holds it to these
-# groups. Every other file takes its IDs from the tenant's Secret, KANIDM_<NAME>_ID for the platform's, which no one in
-# the tenant knows before Kanidm makes the entry. Kanidm's builtin groups are out of a migration's reach, so
-# suveraen-idm admin sets their members (nixos/idm.nix).
+# The platform's groups in every tenant's Kanidm. Kanidm applies its files in the order of their names, again whenever
+# one's bytes change, and refuses one that names the classes of an entry it holds. So each 10-<name>.json makes one
+# entry, its ID, classes and name, and never changes, and 20-<name>.json states what else the platform sets on them,
+# every key their kind holds here, naming each by its ID alone: Kanidm leaves alone what such a file leaves out. The
+# files that make these groups come before every file that changes entries, the platform's and each app's 50-<app>.json
+# (components/sso), which may name members, the group for apps every member may use. platform-admins sign in only with a
+# passkey of an approved make and model, tenant-admins with any passkey, and both are asked for it again a few minutes
+# into an admin's session. Kanidm checks the kind of credential only as one is enrolled, never as one signs in, so a
+# person joins such a group only before they have any, and the file that makes the group asks for the least it takes
+# already, which 20-groups.json may raise. idm_admins, which holds idm_admin, manages platform-admins, and tenant-admins
+# manage their own group, members and each app's groups, of which they change the members alone: Kanidm keeps a deleted
+# entry's ID, and fails every later file that names it. IDs, names and kinds are fixed for good: an entry goes as its
+# 10-<name>.json and its part of 20-<name>.json are deleted and 04-<name>.json removes its ID, which stays there for
+# good. Kanidm applies that before the files that make entries, so an entry renamed, of another kind or made again is a
+# new one, under IDs of its own, in the same release. The IDs of the four files here alone are written in them, the same
+# in every tenant: Kanidm applies these as it first starts, before it takes a sign-in, so no person a tenant admin makes
+# can hold one first, and render holds them to these groups. Every other file takes its IDs from the tenant's Secret,
+# KANIDM_<NAME>_ID and KANIDM_<NAME>_CREATE_ID for the platform's, which no one in the tenant knows before Kanidm makes
+# the entry. Kanidm's builtin groups are out of a migration's reach, so suveraen-idm admin sets their members
+# (nixos/idm.nix).
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: kanidm-migrations
 data:
-  10-groups.json: |
+  10-members.json: |
+    {"id":"d316d16d-658a-46c1-aafa-e0794d82a012","assertions":[{"state":"present","id":"b9573391-723b-42d6-aaa9-2b674ebb1078","class":["group"],"name":"members"}]}
+  10-platform-admins.json: |
+    {"id":"4a2451ec-b70c-47d9-ab05-d847882944a2","assertions":[{"state":"present","id":"dcffad28-d6d0-4257-af76-c9f7052c6eec","class":["account_policy","group"],"name":"platform-admins","credential_type_minimum":"attested_passkey"}]}
+  10-tenant-admins.json: |
+    {"id":"52996d61-deef-4ab8-b7fa-dd8026765dd6","assertions":[{"state":"present","id":"7c563c30-e4c6-4ccb-afb4-f97936d8946e","class":["account_policy","group"],"name":"tenant-admins","credential_type_minimum":"passkey"}]}
+  20-groups.json: |
     {
       "id": "6e7b8e96-f50a-4540-87a0-ddceb7a9d63f",
       "assertions": [
         {
           "state": "present",
           "id": "b9573391-723b-42d6-aaa9-2b674ebb1078",
-          "class": ["group"],
-          "name": "members",
           "entry_managed_by": "tenant-admins"
         },
         {
           "state": "present",
           "id": "dcffad28-d6d0-4257-af76-c9f7052c6eec",
-          "class": ["group", "account_policy"],
-          "name": "platform-admins",
           "credential_type_minimum": "attested_passkey",
           "authsession_expiry": 3600,
           "privilege_expiry": 300,
@@ -41,8 +50,6 @@ data:
         {
           "state": "present",
           "id": "7c563c30-e4c6-4ccb-afb4-f97936d8946e",
-          "class": ["group", "account_policy"],
-          "name": "tenant-admins",
           "credential_type_minimum": "passkey",
           "authsession_expiry": 3600,
           "privilege_expiry": 600,

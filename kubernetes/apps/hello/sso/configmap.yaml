@@ -1,14 +1,20 @@
 ---
 # hello's group, whose members tenant-admins manage, and its confidential client in its tenant's Kanidm
-# (components/sso). Each ID comes from the tenant's Secret, so no one there knows it before Kanidm makes the entry: a
-# tenant admin may give a person any ID, and the file would then change that person or fail on them. IDs are fixed for
-# good: Kanidm finds an entry by its ID, and never takes one back once a removal named it.
+# (components/sso), each made once by its own 10-<name>.json, which never changes, and changed by 50-hello.json. Each ID
+# comes from the tenant's Secret, HELLO_<NAME>_ID for the entry and HELLO_<NAME>_CREATE_ID for the file that makes it,
+# so no one there knows it before Kanidm makes the entry: a tenant admin may give a person any ID, and the file would
+# then change that person or fail on them. IDs are fixed for good: Kanidm finds an entry by its ID, so an entry renamed
+# or of another kind is a new one, and the old one's removal goes in 05-hello.json for good.
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: sso-hello
   namespace: ${TENANT}-kanidm
 data:
+  10-hello-users.json: |
+    {"id":"${HELLO_USERS_CREATE_ID}","assertions":[{"state":"present","id":"${HELLO_USERS_ID}","class":["group"],"name":"hello-users"}]}
+  10-hello-oidc.json: |
+    {"id":"${HELLO_OIDC_CREATE_ID}","assertions":[{"state":"present","id":"${HELLO_OIDC_ID}","class":["account","oauth2_resource_server","oauth2_resource_server_basic"],"name":"hello-oidc","displayname":"hello-oidc","oauth2_rs_origin_landing":"https://pending.invalid/"}]}
   50-hello.json: |
     {
       "id": "${HELLO_SSO_ID}",
@@ -16,15 +22,11 @@ data:
         {
           "state": "present",
           "id": "${HELLO_USERS_ID}",
-          "class": ["group"],
-          "name": "hello-users",
           "entry_managed_by": "tenant-admins"
         },
         {
           "state": "present",
           "id": "${HELLO_OIDC_ID}",
-          "class": ["account", "oauth2_resource_server", "oauth2_resource_server_basic"],
-          "name": "hello-oidc",
           "displayname": "hello",
           "oauth2_rs_origin": ["https://hello.${TENANT_APP_DOMAIN}/oauth2/callback"],
           "oauth2_rs_origin_landing": "https://hello.${TENANT_APP_DOMAIN}/",

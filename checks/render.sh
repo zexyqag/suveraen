@@ -440,18 +440,24 @@ print(json.dumps({"cluster": cluster, "tenant": tenant, "source": source, "app":
                   "annotations": (cm.get("metadata") or {}).get("annotations") or {},
                   "hosts": json.load(open(hosts)), "secrets": json.load(open(secrets))}))
 '
+# The platform's files that are the same in every tenant, with their IDs written in them (apps/kanidm/app).
+founding="10-members.json 10-platform-admins.json 10-tenant-admins.json 20-groups.json"
 # Prints each ID of the migrations in a ConfigMap as Flux builds it before it substitutes anything (JSON on stdin) that
-# isn't ${<APP>_<NAME>_ID} alone, for the app's prefix given, but in the founding file, which a tenant's Kanidm applies
-# as it first starts, before it takes a sign-in, after "bad "; and after "key " each key the others take. A tenant
-# admin may make a person with any ID, so every other ID comes from the tenant's Secret, which no one there reads, and
-# has no default, which would be the same in every tenant.
+# isn't ${<APP>_<NAME>_ID} alone, for the app's prefix given, but in the founding files given, which a tenant's Kanidm
+# applies as it first starts, before it takes a sign-in, after "bad "; after "founding " each of those that takes
+# anything from its tenant; after "make " each file that makes an entry from anything but its entry's ID and its own,
+# ${<APP>_<NAME>_CREATE_ID}; after "entry " each entry named by such a file's ID; and after "key " each key the others
+# take. A tenant admin may make a person with any ID, so every other ID comes from the tenant's Secret, which no one
+# there reads, and has no default, which would be the same in every tenant.
 sourceids='
 import json, re, sys
-cm, prefix = json.load(sys.stdin), sys.argv[1]
+cm, prefix, founding = json.load(sys.stdin), sys.argv[1], sys.argv[2].split()
 key = re.compile(r"[$][{](" + prefix + r"_[A-Z0-9_]+_ID)[}]")
 for name, text in sorted((cm.get("data") or {}).items()):
     where = cm["metadata"]["name"] + "/" + name
-    if where == "kanidm-migrations/10-groups.json":
+    if cm["metadata"]["name"] == "kanidm-migrations" and name in founding:
+        if "$" in text:
+            print(f"founding {where}")
         continue
     try:
         m = json.loads(text)
@@ -464,9 +470,20 @@ for name, text in sorted((cm.get("data") or {}).items()):
         i = a.get("id")
         k = key.fullmatch(i) if isinstance(i, str) else None
         print(f"key {k.group(1)}" if k else f"bad {where}: {i}")
+        if a is not m and k and k.group(1).endswith("_CREATE_ID"):
+            print(f"entry {where}: {i}")
+    # A file that makes an entry never changes, so its bytes hang on its two IDs alone: its own, named for the entry.
+    if len(assertions) == 1 and isinstance(assertions[0], dict) and "class" in assertions[0]:
+        made = key.fullmatch(str(assertions[0].get("id")))
+        fid = m.get("id")
+        if made and fid != "${" + made.group(1)[:-3] + "_CREATE_ID}":
+            print(f"make {where}: {made.group(1)[:-3]}_CREATE_ID, not {fid}")
+        if text.count("$") != 2:
+            print(f"make {where}: nothing but its IDs from the Secret")
 '
-# Prints what is wrong with the migrations every tenant's Kanidm applies (JSON lines from migrationsource on stdin).
-# Kanidm applies each file in its own transaction and only logs what fails, so render refuses what it would skip.
+# Prints what is wrong with the migrations every tenant's Kanidm applies (JSON lines from migrationsource on stdin),
+# given the platform's founding files. Kanidm applies each file in its own transaction and only logs what fails, so
+# render refuses what it would skip.
 migrations='
 import json, re, sys
 from urllib.parse import urlsplit
@@ -475,19 +492,29 @@ uuid = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 dynamic = "00000000-0000-0000-0001-000000000000"
 basic = ["account", "oauth2_resource_server", "oauth2_resource_server_basic"]
 public = ["account", "oauth2_resource_server", "oauth2_resource_server_public"]
-clientkeys = {"state", "id", "class", "name", "displayname", "oauth2_rs_origin", "oauth2_rs_origin_landing",
-              "oauth2_rs_scope_map"}
-policykeys = {"credential_type_minimum", "authsession_expiry", "privilege_expiry", "entry_managed_by"}
+founding = set(sys.argv[1].split())
+# Kanidm makes an account only with a display name and a client only with a page to land on, both of which the file
+# that changes it then sets: until then, a name and an address no one can reach.
+pending = "https://pending.invalid/"
+# What a file that changes an entry states, every key of its kind and nothing more: Kanidm leaves alone what such a
+# file leaves out, so a value dropped from it would stay in every tenant that held it.
+owned = {
+    "group": {"entry_managed_by"},
+    "app policy": {"entry_managed_by", "credential_type_minimum"},
+    "policy": {"entry_managed_by", "credential_type_minimum", "authsession_expiry", "privilege_expiry"},
+    "basic": {"displayname", "oauth2_rs_origin", "oauth2_rs_origin_landing", "oauth2_rs_scope_map"},
+}
+owned["public"] = owned["basic"]
 # Nested in idm_admins, a group takes members only from its manager, so idm_admins manages platform-admins. tenant-admins
 # manage every other group the files declare, which lets them change its members alone, never rename or delete it.
 managers = {"platform-admins": "idm_admins"}
 # What no migration can set on a client: a confidential one that sends no PKCE, a public one that redirects to the
 # device it runs on.
-flags = {"suveraen/disable-pkce": basic, "suveraen/localhost-redirects": public}
-kinds = {"suveraen/disable-pkce": "confidential", "suveraen/localhost-redirects": "public"}
+flags = {"suveraen/disable-pkce": "basic", "suveraen/localhost-redirects": "public"}
+kinds = {"basic": "confidential", "public": "public"}
 placeholder = {"annotations": {"kustomize.toolkit.fluxcd.io/ssa": "IfNotPresent"},
                "stringData": {"client-secret": "pending"}}
-problems, ids, names, present, absent = [], {}, {}, set(), {}
+problems, ids, names, changed, made, removed = [], {}, {}, {}, set(), {}
 
 def bad(where, what):
     if f"{where}: {what}" not in problems:
@@ -503,23 +530,36 @@ def url(where, value, hosts):
             or parts.username:
         bad(where, f"a client sends members only to https on its own app hosts, not {value}")
 
+def kind_of(classes, platform):
+    if classes == ["group"]:
+        return "group"
+    if classes == ["account_policy", "group"]:
+        return "policy" if platform else "app policy"
+    if classes in (basic, public) and not platform:
+        return "basic" if classes == basic else "public"
+    return None
+
+def floor(where, name, kind, value):
+    # Kanidm holds a person to the strictest policy of all their groups, so the group of an app only tightens what its
+    # members may enrol.
+    if kind == "app policy" and value != "passkey":
+        bad(where, f"an app group that is an account policy has its members enrol passkeys alone: {name}")
+    if name == "platform-admins" and value != "attested_passkey":
+        bad(where, "platform-admins sign in with passkeys of an approved make and model alone")
+    elif kind == "policy" and value not in ("passkey", "attested_passkey"):
+        bad(where, f"{name} sign in with passkeys alone")
+
 for line in sys.stdin:
     s = json.loads(line)
     app, source, tenant = s["app"], s["source"], s["cluster"] + "/" + s["tenant"]
-    # A file names, besides its own entries, only members and tenant-admins, which every tenant holds from the start,
-    # and the builtin idm_admins: Kanidm looks a name up among its entries before those of the file, so a name the
-    # platform holds nowhere yet could be held by a person a tenant admin made, who would then manage the group or get
-    # the scopes of the client.
-    groups = {"members"} if source != "kanidm-migrations" else set()
-    clients = []
+    platform = source == "kanidm-migrations"
+    # Kanidm applies the files of every source in the order of their names, so removals come before the files that
+    # make entries and those before the files that change them, and no two sources hold a file of the same name.
+    who, remover, changer = ("the platform", "04-<name>.json", "20-<name>.json") if platform \
+        else ("an app", f"05-{app}.json", f"50-{app}.json")
+    creates, changes = {}, {}
     for key, text in sorted(s["files"].items()):
-        where = f"{tenant} {source}/{key}"
-        own = f"{source}/{key}"
-        if source == "kanidm-migrations":
-            if not re.fullmatch(r"[0-9]{2}-[a-z0-9-]+[.]json", key):
-                bad(where, "files are named NN-<name>.json")
-        elif key != f"50-{app}.json":
-            bad(where, f"an app adds one file, 50-{app}.json")
+        where, own = f"{tenant} {source}/{key}", f"{source}/{key}"
         try:
             m = json.loads(text)
         except ValueError as e:
@@ -529,98 +569,141 @@ for line in sys.stdin:
                 or not m["assertions"] or not all(isinstance(a, dict) for a in m["assertions"]):
             bad(where, "a migration has an id and assertions, at least one, as Kanidm refuses an empty one")
             continue
-        # The IDs of the founding file are the same in every tenant, all others differ from tenant to tenant.
-        founding = source == "kanidm-migrations" and key == "10-groups.json"
+        # The IDs of the founding files are the same in every tenant, all others differ from tenant to tenant. Kanidm
+        # records each file under an ID of its own, so no ID names two things, but the entry one file makes and one
+        # changes.
+        first = platform and key in founding
         for n, a in enumerate([m] + m["assertions"]):
             i = a.get("id")
             if not isinstance(i, str) or not uuid.fullmatch(i) or i < dynamic:
                 bad(where, f"IDs are UUIDs in lowercase from {dynamic} on, not {i}")
-            else:
-                claim(ids, i, f"{own}#{n}" if founding else f"{tenant} {own}#{n}", where, "ID")
-        states = {a.get("state") for a in m["assertions"]}
-        if "absent" in states:
-            if source != "kanidm-migrations" or states != {"absent"}:
-                bad(where, "only the platform files remove entries, in files of removals alone")
-            for a in m["assertions"]:
-                if sorted(a) != ["id", "state"]:
-                    bad(where, "a removal names an ID alone")
-                absent.setdefault((tenant, a.get("id")), where)
+            elif n == 0 or "class" in a or a.get("state") == "absent":
+                claim(ids, i, f"{own}#{n}" if first else f"{tenant} {own}#{n}", where, "ID")
+        with_class = ["class" in a for a in m["assertions"]]
+        if any(with_class) and (not all(with_class) or len(with_class) != 1):
+            bad(where, "a file makes one entry, with its classes, or changes or removes entries without them")
             continue
-        if states != {"present"}:
-            bad(where, f"an assertion is present or absent, not {sorted(map(str, states))}")
-            continue
-        for a in m["assertions"]:
+        if all(with_class):
+            # Kanidm applies a file again whenever its bytes change, and refuses classes for an entry it holds, so
+            # a file that makes an entry holds nothing that could change, laid out one way alone.
+            a = m["assertions"][0]
             name, classes = a.get("name"), a.get("class")
             classes = sorted(classes) if isinstance(classes, list) else classes
-            present.add((tenant, a.get("id")))
-            if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)+", name) \
-                    and not (name == "members" and source == "kanidm-migrations"):
-                bad(where, f"every name but members holds a -, which no login suveraen-idm admin makes does: {name}")
-            else:
-                claim(names.setdefault(tenant, {}), name, own + "#" + str(a.get("id")), where, "name")
-            if "member" in a:
-                bad(where, f"groups get their members from admins, not from files: {name}")
-            if classes in (["group"], ["account_policy", "group"]):
-                manager = a.get("entry_managed_by")
-                if manager != managers.get(name, "tenant-admins"):
-                    bad(where, f"idm_admins manages platform-admins, and tenant-admins every other group: {name}, not"
-                        f" {json.dumps(manager)}")
-                groups.add(name)
-            if classes == ["group"]:
-                extra = set(a) - {"state", "id", "class", "name", "entry_managed_by"}
-            elif classes == ["account_policy", "group"] and source == "kanidm-migrations":
-                extra = set(a) - {"state", "id", "class", "name"} - policykeys
-            elif classes == ["account_policy", "group"]:
-                # Kanidm holds a person to the strictest policy of all their groups, so the group of an app only
-                # tightens what its members may enrol, which Kanidm checks as one is enrolled.
-                extra = set(a) - {"state", "id", "class", "name", "entry_managed_by", "credential_type_minimum"}
-                if a.get("credential_type_minimum") != "passkey":
-                    bad(where, f"an app group that is an account policy has its members enrol passkeys alone: {name}")
-            elif classes in (sorted(basic), sorted(public)) and source != "kanidm-migrations":
-                extra = set(a) - clientkeys
-                # Kanidm holds every account to one, and fails the whole file without it.
-                if not isinstance(a.get("displayname"), str) or not a["displayname"].strip():
-                    bad(where, f"a client has a display name: {name}")
-                clients.append((where, a))
-            else:
-                bad(where, f"the platform declares groups, and an app groups and an OAuth2 client, never people,"
+            kind = kind_of(classes, platform)
+            if kind is None:
+                bad(where, f"the platform makes groups, and an app groups and an OAuth2 client, never people,"
                     f" accounts of another kind or classes Kanidm sets itself: {name} {classes}")
                 continue
-            if extra:
-                bad(where, f"{name} sets {sorted(extra)}, which no migration of its kind sets here")
-        if source == "kanidm-migrations" and key == "10-groups.json":
-            declared = {a.get("name"): a for a in m["assertions"]}
-            if sorted(declared) != ["members", "platform-admins", "tenant-admins"]:
-                bad(where, "the platform groups are members, platform-admins and tenant-admins")
-            p, t = declared.get("platform-admins", {}), declared.get("tenant-admins", {})
-            def within(a, most):
-                e = a.get("privilege_expiry")
-                return isinstance(e, int) and 0 < e <= most and isinstance(a.get("authsession_expiry"), int)
-            if p.get("credential_type_minimum") != "attested_passkey" or not within(p, 300):
-                bad(where, "platform-admins sign in with passkeys of an approved make and model alone, and are asked"
-                    " again within 5 minutes before an admin action")
-            if t.get("credential_type_minimum") not in ("passkey", "attested_passkey") or not within(t, 600):
-                bad(where, "tenant-admins sign in with passkeys alone, and are asked again within 10 minutes before an"
-                    " admin action")
-    if source == "kanidm-migrations":
-        if "10-groups.json" not in s["files"]:
-            bad(f"{tenant} {source}", "the platform groups are in 10-groups.json")
+            if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)+", name) \
+                    and not (name == "members" and platform):
+                bad(where, f"every name but members holds a -, which no login suveraen-idm admin makes does: {name}")
+                continue
+            claim(names.setdefault(tenant, {}), name, own, where, "name")
+            want = {"state": "present", "id": a.get("id"), "class": classes, "name": name}
+            if kind in ("policy", "app policy"):
+                # Kanidm holds a person to the kind of credential their groups ask for only as one is enrolled, so a
+                # group asks for it as it is made: the least its kind takes, which the file that changes it may raise.
+                want["credential_type_minimum"] = "attested_passkey" if name == "platform-admins" else "passkey"
+            if kind in ("basic", "public"):
+                want |= {"displayname": name, "oauth2_rs_origin_landing": pending}
+            canonical = json.dumps({"id": m["id"], "assertions": [want]}, separators=(",", ":")) + "\n"
+            if key != f"10-{name}.json" or text != canonical:
+                bad(where, f"the file that makes an entry never changes, as Kanidm denies it once applied, and is"
+                    f" 10-{name}.json: {canonical.strip()}")
+            made.add((tenant, a["id"]))
+            creates[a["id"]] = (where, kind, a)
+            continue
+        states = {a.get("state") for a in m["assertions"]}
+        if not states <= {"present", "absent"}:
+            bad(where, f"an assertion is present or absent, not {sorted(map(str, states))}")
+            continue
+        if "absent" in states and (states != {"absent"} or not (re.fullmatch(r"04-[a-z0-9-]+[.]json", key)
+                                                                if platform else key == remover)):
+            bad(where, f"{who} removes its entries in {remover}, which holds removals alone, as Kanidm applies it"
+                f" before the files that make entries")
+        if "present" in states and not (re.fullmatch(r"20-[a-z0-9-]+[.]json", key) if platform else key == changer):
+            bad(where, f"{who} changes its entries in {changer}")
+        for n, a in enumerate(m["assertions"], 1):
+            i = a.get("id")
+            if a["state"] == "absent":
+                if sorted(a) != ["id", "state"]:
+                    bad(where, "a removal names an ID alone")
+                removed.setdefault((tenant, i), where)
+            else:
+                claim(changed.setdefault(tenant, {}), i, f"{tenant} {own}#{n}", where, "the change of")
+                changes[i] = (where, a)
+    # Each entry as Kanidm holds it once both its files have applied.
+    entries = []
+    for i, (where, kind, a) in creates.items():
+        name = a["name"]
+        if i not in changes:
+            bad(where, f"{name} is changed in {changer}, which states all it holds past its name")
+            continue
+        here, c = changes.pop(i)
+        if "name" in c:
+            bad(here, f"an entry takes its name from the file that makes it alone, so a change that reaches another"
+                f" by a wrong ID renames none: {name}")
+        keys = set(c) - {"state", "id", "name"}
+        nulls = sorted(k for k in keys if c[k] is None)
+        if keys != owned[kind] or nulls:
+            bad(here, f"{name} states each of {sorted(owned[kind])}, none null, and nothing more:"
+                f" {sorted(keys ^ owned[kind]) + nulls}")
+        entries.append((here, kind, a | c))
+    for i, (here, _) in changes.items():
+        bad(here, f"a file changes the entries its own source makes, with its own file of classes: {i}")
+    # A file names, besides its own entries, only members and tenant-admins, which every tenant holds from the start,
+    # and the builtin idm_admins: Kanidm looks a name up among its entries before those of the file, so a name the
+    # platform holds nowhere yet could be held by a person a tenant admin made, who would then manage the group or get
+    # the scopes of the client.
+    groups = set() if platform else {"members"}
+    clients = []
+    for here, kind, e in entries:
+        name = e["name"]
+        if "member" in e:
+            bad(here, f"groups get their members from admins, not from files: {name}")
+        if kind in ("group", "policy", "app policy"):
+            manager = e.get("entry_managed_by")
+            if manager != managers.get(name, "tenant-admins"):
+                bad(here, f"idm_admins manages platform-admins, and tenant-admins every other group: {name}, not"
+                    f" {json.dumps(manager)}")
+            groups.add(name)
+        if kind in ("policy", "app policy"):
+            floor(here, name, kind, e.get("credential_type_minimum"))
+        expiries = [e.get("authsession_expiry"), e.get("privilege_expiry")]
+        if kind == "policy" and not all(type(v) is int and v > 0 for v in expiries):
+            bad(here, f"{name} keeps a session and its admin actions for a whole number of seconds each, above 0")
+        if kind in ("basic", "public"):
+            # Kanidm holds every account to one, and fails the whole file without it.
+            if not isinstance(e.get("displayname"), str) or not e["displayname"].strip():
+                bad(here, f"a client has a display name: {name}")
+            clients.append((here, kind, e))
+    if platform:
+        declared = {e["name"]: e for _, _, e in entries}
+        where = f"{tenant} {source}"
+        if not founding <= set(s["files"]) or not {"members", "platform-admins", "tenant-admins"} <= set(declared):
+            bad(where, f"the platform groups are members, platform-admins and tenant-admins, in {sorted(founding)}")
+        def within(a, most):
+            e = a.get("privilege_expiry")
+            return type(e) is int and 0 < e <= most
+        if not within(declared.get("platform-admins", {}), 300):
+            bad(where, "platform-admins are asked again within 5 minutes before an admin action")
+        if not within(declared.get("tenant-admins", {}), 600):
+            bad(where, "tenant-admins are asked again within 10 minutes before an admin action")
         continue
     where = f"{tenant} {source}"
-    if [a.get("name") for _, a in clients] != [f"{app}-oidc"]:
+    if [e["name"] for _, _, e in clients] != [f"{app}-oidc"]:
         bad(where, f"an app has one OAuth2 client, {app}-oidc")
     if any(not n.startswith(f"{app}-") or n == f"{app}-oidc" for n in groups - {"members"}):
         bad(where, f"an app names its groups {app}-<name>")
     secret = None
-    for here, a in clients:
-        kind = basic if sorted(a["class"]) == sorted(basic) else public
-        origins = a.get("oauth2_rs_origin")
+    for here, kind, e in clients:
+        origins = e.get("oauth2_rs_origin")
         if not isinstance(origins, list) or not origins:
             bad(here, "a client names the addresses it may send members back to")
             origins = []
-        for value in origins + [a.get("oauth2_rs_origin_landing")]:
+        for value in origins + [e.get("oauth2_rs_origin_landing")]:
             url(here, value, s["hosts"])
-        values = a.get("oauth2_rs_scope_map")
+        values = e.get("oauth2_rs_scope_map")
         if not isinstance(values, list) or not values:
             bad(here, "a client maps at least one group to its scopes, in a list")
             values = []
@@ -631,8 +714,8 @@ for line in sys.stdin:
             if flag not in flags or value != "true":
                 bad(where, f"sso-{app} carries no annotation but {sorted(flags)}, set to true: {flag}")
             elif flags[flag] != kind:
-                bad(where, f"{flag} is for a {kinds[flag]} client")
-        secret = kind == basic
+                bad(where, f"{flag} is for a {kinds[flags[flag]]} client")
+        secret = kind == "basic"
     shape = [{k: v for k, v in x.items() if k in ("apiVersion", "kind", "type", "data", "stringData", "immutable")}
              | {"annotations": (x.get("metadata") or {}).get("annotations") or {}} for x in s["secrets"]]
     want = [{"apiVersion": "v1", "kind": "Secret"} | placeholder] if secret else []
@@ -640,9 +723,11 @@ for line in sys.stdin:
         bad(where, f"an app with a confidential client holds Secret sso, which Flux makes once with client-secret"
             f" pending alone (components/sso-secret), and one with a public client none: {shape}")
 
-for (tenant, i), where in absent.items():
-    if (tenant, i) in present:
-        bad(where, f"a removed entry never comes back, as Kanidm refuses its ID for good: {i}")
+for (tenant, i), where in removed.items():
+    if (tenant, i) in made:
+        bad(where, f"a removed entry is made by no file, as Kanidm would make it again once it forgets the ID: {i}")
+    if i in changed.get(tenant, {}):
+        bad(where, f"a removed entry is changed by no file, as Kanidm fails the file that changes it: {i}")
 print("\n".join(problems))
 '
 
@@ -860,11 +945,19 @@ source_ids() { # Kustomization, path, condition, app
     maps=$(yq ea -o=json -I=0 "[select(.kind == \"ConfigMap\" and $condition)]" "$w/$name.source")
     [ "$(yq 'length' <<<"$maps")" = 1 ] \
       || fail "$path holds its migrations in one ConfigMap, also as Flux builds it before it substitutes anything"
-    yq -o=json -I=0 '.[0]' <<<"$maps" | python3 -I -c "$sourceids" "$knob" >"$found"
+    yq -o=json -I=0 '.[0]' <<<"$maps" | python3 -I -c "$sourceids" "$knob" "$founding" >"$found"
+    bad=$(sed -n 's/^founding //p' "$found" | paste -sd' ' -)
+    [ -z "$bad" ] || fail "$path: the founding files are the same in every tenant, and take nothing from it: $bad"
     bad=$(sed -n 's/^bad //p' "$found" | paste -sd';' -)
-    [ -z "$bad" ] || fail "$path: an ID past the founding file comes from the tenant's Secret, as" \
+    [ -z "$bad" ] || fail "$path: an ID past the founding files comes from the tenant's Secret, as" \
       "\${${knob}_<NAME>_ID} alone, without a default, so no one in the tenant knows it before Kanidm makes its entry:" \
       "${bad//;/; }"
+    bad=$(sed -n 's/^make //p' "$found" | paste -sd';' -)
+    [ -z "$bad" ] || fail "$path: a file that makes an entry never changes, so it takes nothing from the tenant's" \
+      "Secret but the entry's ID and its own, \${${knob}_<NAME>_CREATE_ID} for \${${knob}_<NAME>_ID}: ${bad//;/; }"
+    bad=$(sed -n 's/^entry //p' "$found" | paste -sd';' -)
+    [ -z "$bad" ] || fail "$path: an entry's ID is never that of the file that makes it, \${${knob}_<NAME>_CREATE_ID}," \
+      "which Kanidm keeps for good as its record of the file, and fails a file that removes it: ${bad//;/; }"
   fi
   sed -n 's/^key //p' "$found" >"$w/$name.idkeys"
 }
@@ -1955,7 +2048,7 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     | (.[0].stringData // .[0].data // {}) | keys | .[]' "$rendered/cluster.yaml" >>"$w/keys"
 done
 
-bad=$(python3 -I -c "$migrations" <"$work/migrations.jsonl")
+bad=$(python3 -I -c "$migrations" "$founding" <"$work/migrations.jsonl")
 [ -z "$bad" ] || fail "Kanidm's migrations: $bad"
 # Every cluster sets the same settings and secrets, so none is forgotten in one of them.
 [ "$(for keys in "$work"/*/keys; do sort "$keys" | sha256sum; done | sort -u | wc -l)" = 1 ] \

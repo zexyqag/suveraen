@@ -85,7 +85,7 @@ other() { # a second app like hello, which bravo also runs, with IDs of its own 
   cp -r apps/hello apps/other
   rm apps/other/edge-apex.yaml
   sed -i 's/hello/other/g; s/HELLO/OTHER/g' apps/other/ks.yaml apps/other/*/*.yaml
-  ids bravo OTHER_SSO_ID OTHER_USERS_ID OTHER_OIDC_ID
+  ids bravo OTHER_SSO_ID OTHER_USERS_ID OTHER_OIDC_ID OTHER_USERS_CREATE_ID OTHER_OIDC_CREATE_ID
   yq -i '.spec.values.persistence.migrations.sources += [{"configMap": {"name": "sso-other", "optional": true}}]' \
     apps/kanidm/app/helmrelease.yaml
   sed -i 's|  - ../../../../../apps/hello/ks.yaml|&\n  - ../../../../../apps/other/ks.yaml|' \
@@ -96,7 +96,12 @@ other() { # a second app like hello, which bravo also runs, with IDs of its own 
   done
 }
 knob() { yq -i ".spec.postBuild.substitute.$1 = \"$2\"" "$T/bravo/tenant.yaml"; }
-export -f append np encsecret encmap prod ids other knob
+hellofile() { # a file of hello's migrations, by name, from JSON on stdin
+  cat >hello.json
+  yq -i ".data.\"$1\" = load_str(\"hello.json\")" apps/hello/sso/configmap.yaml
+  rm hello.json
+}
+export -f append np encsecret encmap prod ids other knob hellofile
 export T sops encrypted
 keymap='---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: key\ndata:\n  KEY: '
 
@@ -393,93 +398,216 @@ refuses sso-flag-unknown "sso-hello carries no annotation but" \
   "yq -i '.metadata.annotations.\"suveraen/consent\" = \"true\"' $S"
 refuses sso-flag-public "suveraen/localhost-redirects is for a public client" \
   "yq -i '.metadata.annotations.\"suveraen/localhost-redirects\" = \"true\"' $S"
-refuses migration-file-name "sso-hello/60-hello.json: an app adds one file, 50-hello.json" \
+refuses migration-file-name "sso-hello/60-hello.json: an app changes its entries in 50-hello.json" \
   "sed -i 's/  50-hello.json: |/  60-hello.json: |/' $S"
 refuses migration-not-json "sso-hello/50-hello.json: not JSON" "sed -i 's/\"assertions\": \[/\"assertions\": [,/' $S"
 refuses migration-person "never people, accounts of another kind or classes Kanidm sets itself: eve-x" \
-  "ids alpha HELLO_EVE_ID; ids bravo HELLO_EVE_ID
-   sed -i 's|      \"assertions\": \[|&\n        { \"state\": \"present\", \"id\": \"\${HELLO_EVE_ID}\", \
-\"class\": [\"account\", \"person\"], \"name\": \"eve-x\", \"displayname\": \"Eve\" },|' $S"
+  "ids alpha HELLO_EVE_ID HELLO_EVE_CREATE_ID; ids bravo HELLO_EVE_ID HELLO_EVE_CREATE_ID
+   echo '{\"id\":\"\${HELLO_EVE_CREATE_ID}\",\"assertions\":[{\"state\":\"present\",\"id\":\"\${HELLO_EVE_ID}\",\
+\"class\":[\"account\",\"person\"],\"name\":\"eve-x\",\"displayname\":\"Eve\"}]}' | hellofile 10-eve-x.json"
 refuses migration-object-class "classes Kanidm sets itself: hello-users" \
-  "sed -i 's|\"class\": \[\"group\"\],|\"class\": [\"group\", \"object\"],|' $S"
+  "sed -i 's|\"class\":\[\"group\"\]|\"class\":[\"group\",\"object\"]|' $S"
 uuids="IDs are UUIDs in lowercase from 00000000-0000-0000-0001-000000000000 on, not"
 refuses migration-builtin "$uuids 00000000-" \
   "sed -i 's/HELLO_USERS_ID: .*/HELLO_USERS_ID: 00000000-0000-0000-0000-000000000035/' $T/alpha/secrets.yaml"
 refuses migration-id-uppercase "$uuids DB77698C-" \
   "sed -i 's/HELLO_USERS_ID: .*/HELLO_USERS_ID: DB77698C-7809-482B-BB76-4537C5FC2B83/' $T/alpha/secrets.yaml"
-refuses migration-same-id "ID b9573391-723b-42d6-aaa9-2b674ebb1078 is also kanidm-migrations/10-groups.json" \
+refuses migration-same-id "ID b9573391-723b-42d6-aaa9-2b674ebb1078 is also kanidm-migrations/10-members.json#1" \
   "sed -i 's/HELLO_USERS_ID: .*/HELLO_USERS_ID: b9573391-723b-42d6-aaa9-2b674ebb1078/' $T/alpha/secrets.yaml"
-refuses migration-id-twice "ID db77698c-7809-482b-bb76-4537c5fc2b83 is also test/alpha sso-hello/50-hello.json#1" \
+refuses migration-id-twice "ID db77698c-7809-482b-bb76-4537c5fc2b83 is also test/alpha sso-hello/10-hello-oidc.json#1" \
   "sed -i 's/HELLO_OIDC_ID: .*/HELLO_OIDC_ID: db77698c-7809-482b-bb76-4537c5fc2b83/' $T/alpha/secrets.yaml"
-refuses migration-id-shared "ID db77698c-7809-482b-bb76-4537c5fc2b83 is also test/alpha sso-hello/50-hello.json#1" \
+refuses migration-id-shared \
+  "ID db77698c-7809-482b-bb76-4537c5fc2b83 is also test/alpha sso-hello/10-hello-users.json#1" \
   "sed -i 's/HELLO_USERS_ID: .*/HELLO_USERS_ID: db77698c-7809-482b-bb76-4537c5fc2b83/' $T/bravo/secrets.yaml"
+refuses migration-file-is-entry \
+  "ID db77698c-7809-482b-bb76-4537c5fc2b83 is also test/alpha sso-hello/10-hello-users.json#0" \
+  "sed -i 's/HELLO_USERS_CREATE_ID: .*/HELLO_USERS_CREATE_ID: db77698c-7809-482b-bb76-4537c5fc2b83/' \
+   $T/alpha/secrets.yaml"
 refuses migration-id-missing "test/bravo-hello-sso doesn't render" "sed -i '/HELLO_USERS_ID/d' $T/bravo/secrets.yaml"
-secret="an ID past the founding file comes from the tenant's Secret, as"
+secret="an ID past the founding files comes from the tenant's Secret, as"
 refuses migration-literal-id "$secret \${HELLO_<NAME>_ID} alone, without a default, so no one in the tenant knows it" \
   "sed -i 's/\${HELLO_USERS_ID}/db77698c-7809-482b-bb76-4537c5fc2b83/' $S"
-refuses migration-id-default "Kanidm makes its entry: sso-hello/50-hello.json: \${HELLO_USERS_ID:=db77698c-" \
+refuses migration-id-default "Kanidm makes its entry: sso-hello/10-hello-users.json: \${HELLO_USERS_ID:=db77698c-" \
   "sed -i 's/\${HELLO_USERS_ID}/\${HELLO_USERS_ID:=db77698c-7809-482b-bb76-4537c5fc2b83}/' $S"
-refuses migration-id-default-named "Kanidm makes its entry: sso-\${APP}/50-hello.json: \${HELLO_USERS_ID:=db77698c-" \
+refuses migration-id-default-named \
+  "Kanidm makes its entry: sso-\${APP}/10-hello-users.json: \${HELLO_USERS_ID:=db77698c-" \
   "sed -i 's/name: sso-hello/name: sso-\${APP}/' $S
    sed -i 's/\${HELLO_USERS_ID}/\${HELLO_USERS_ID:=db77698c-7809-482b-bb76-4537c5fc2b83}/' $S"
 refuses migration-platform-map-named "./kubernetes/apps/kanidm/app holds its migrations in one ConfigMap" \
   "sed -i 's/name: kanidm-migrations/name: \${APP}-migrations/' $M"
+refuses migration-founding-from-secret \
+  "the founding files are the same in every tenant, and take nothing from it: kanidm-migrations/10-members.json" \
+  "ids alpha KANIDM_MEMBERS_CREATE_ID; ids bravo KANIDM_MEMBERS_CREATE_ID
+   sed -i 's/{\"id\":\"d316d16d-658a-46c1-aafa-e0794d82a012\"/{\"id\":\"\${KANIDM_MEMBERS_CREATE_ID}\"/' $M"
 refuses migration-name-without-dash "every name but members holds a -, which no login suveraen-idm admin makes does:" \
   "sed -i 's/\"hello-users\"/\"hellousers\"/g' $S"
 refuses migration-other-app-group "an app names its groups hello-<name>" "sed -i 's/\"hello-users\"/\"other-users\"/g' $S"
 managed="idm_admins manages platform-admins, and tenant-admins every other group"
 refuses migration-group-unmanaged "$managed: hello-users, not null" \
-  "sed -i '/\"entry_managed_by\": \"tenant-admins\"/d; s/\"name\": \"hello-users\",/\"name\": \"hello-users\"/' $S"
+  "sed -i '/\"entry_managed_by\": \"tenant-admins\"/d
+   s/\"id\": \"\${HELLO_USERS_ID}\",/\"id\": \"\${HELLO_USERS_ID}\"/' $S"
 refuses migration-group-as-list "$managed: hello-users, not [\"tenant-admins\"]" \
   "sed -i 's/\"entry_managed_by\": \"tenant-admins\"/\"entry_managed_by\": [\"tenant-admins\"]/' $S"
 refuses migration-members-managed-elsewhere "$managed: members, not \"idm_admins\"" \
   "sed -i '0,/\"entry_managed_by\": \"tenant-admins\"/s//\"entry_managed_by\": \"idm_admins\"/' $M"
 refuses migration-member "groups get their members from admins, not from files: hello-users" \
-  "sed -i 's|          \"name\": \"hello-users\"|&,\n          \"member\": [\"admin\"]|' $S"
+  "sed -i 's|          \"id\": \"\${HELLO_USERS_ID}\",|&\n          \"member\": [\"admin\"],|' $S"
 refuses migration-client-name "an app has one OAuth2 client, hello-oidc" "sed -i 's/\"hello-oidc\"/\"hello-web\"/' $S"
-refuses migration-client-displayname "a client has a display name: hello-oidc" \
+refuses migration-client-displayname "hello-oidc states each of ['displayname'" \
   "sed -i '/\"displayname\": \"hello\",/d' $S"
-refuses migration-legacy-crypto "hello-oidc sets ['oauth2_jwt_legacy_crypto_enable']" \
+refuses migration-legacy-crypto "hello-oidc states each of" \
   "sed -i 's|          \"displayname\": \"hello\",|&\n          \"oauth2_jwt_legacy_crypto_enable\": true,|' $S"
 refuses migration-foreign-redirect "a client sends members only to https on its own app hosts, not https://evil." \
   "sed -i 's|https://hello[.]|https://evil.|' $S"
 refuses migration-other-scope-group "a client maps members or its own app groups alone" \
   "sed -i 's/{ \"group\": \"hello-users\", \"scopes\"/{ \"group\": \"tenant-admins\", \"scopes\"/' $S"
-refuses migration-app-removes "only the platform files remove entries" \
-  "sed -i '0,/\"state\": \"present\"/s//\"state\": \"absent\"/' $S"
+never="the file that makes an entry never changes"
+refuses migration-create-reformatted "$never" \
+  "yq '.data.\"10-hello-users.json\"' $S | python3 -I -c 'import json, sys; print(json.dumps(json.load(sys.stdin)))' \
+   | hellofile 10-hello-users.json"
+refuses migration-create-edited "$never" "sed -i 's/\"displayname\":\"hello-oidc\"/\"displayname\":\"hello\"/' $S"
+refuses migration-create-holds-more "$never" \
+  "sed -i 's/\"name\":\"hello-users\"}/\"name\":\"hello-users\",\"entry_managed_by\":\"tenant-admins\"}/' $S"
+refuses migration-create-tenant-value \
+  "a file that makes an entry never changes, so it takes nothing from the tenant's Secret but the entry's ID" \
+  "sed -i 's|\"oauth2_rs_origin_landing\":\"https://pending.invalid/\"|\
+\"oauth2_rs_origin_landing\":\"https://hello.\${TENANT_APP_DOMAIN}/\"|' $S"
+refuses migration-create-unpaired "HELLO_USERS_CREATE_ID, not \${HELLO_OIDC_CREATE_ID}" \
+  "sed -i 's/{\"id\":\"\${HELLO_USERS_CREATE_ID}\"/{\"id\":\"\${HELLO_OIDC_CREATE_ID}\"/' $S"
+refuses migration-create-two "a file makes one entry, with its classes" \
+  "ids alpha HELLO_EVE_ID; ids bravo HELLO_EVE_ID
+   echo '{\"id\":\"\${HELLO_USERS_CREATE_ID}\",\"assertions\":[{\"state\":\"present\",\"id\":\"\${HELLO_USERS_ID}\",\
+\"class\":[\"group\"],\"name\":\"hello-users\"},{\"state\":\"present\",\"id\":\"\${HELLO_EVE_ID}\",\
+\"class\":[\"group\"],\"name\":\"hello-eve\"}]}' | hellofile 10-hello-users.json"
+refuses migration-create-misnamed "and is 10-hello-users.json" \
+  "sed -i 's/  10-hello-users.json: |/  10-hello-group.json: |/' $S"
+refuses migration-floor-at-create "\"name\":\"netbird-users\",\"credential_type_minimum\":\"passkey\"}]}" \
+  "sed -i 's/,\"credential_type_minimum\":\"passkey\"}/}/' apps/netbird/sso/configmap.yaml"
+refuses migration-change-with-class "a file makes one entry, with its classes" \
+  "sed -i 's|          \"id\": \"\${HELLO_USERS_ID}\",|&\n          \"class\": [\"group\"],|' $S"
+refuses migration-change-null "none null" "sed -i 's/\"displayname\": \"hello\",/\"displayname\": null,/' $S"
+named="an entry takes its name from the file that makes it alone, so a change that reaches another by a wrong ID"
+refuses migration-change-named "$named renames none: hello-users" \
+  "sed -i 's|          \"id\": \"\${HELLO_USERS_ID}\",|&\n          \"name\": \"hello-users\",|' $S"
+refuses migration-change-renames "$named renames none: hello-users" \
+  "sed -i 's|          \"id\": \"\${HELLO_USERS_ID}\",|&\n          \"name\": \"hello-people\",|' $S"
+refuses migration-change-unmade "a file changes the entries its own source makes" \
+  "yq -i 'del(.data.\"10-hello-users.json\")' $S"
+refuses migration-made-unchanged "hello-users is changed in 50-hello.json" \
+  "yq '.data.\"50-hello.json\"' $S | python3 -I -c 'import json, sys; m = json.load(sys.stdin)
+m[\"assertions\"] = m[\"assertions\"][1:]; print(json.dumps(m, indent=2))' | hellofile 50-hello.json"
+refuses migration-change-twice \
+  "the change of db77698c-7809-482b-bb76-4537c5fc2b83 is also test/alpha sso-hello/50-hello.json#1" \
+  "sed -i 's|      \"assertions\": \[|&\n        { \"state\": \"present\", \"id\": \"\${HELLO_USERS_ID}\", \
+\"entry_managed_by\": \"tenant-admins\" },|' $S"
+refuses migration-second-change-file "sso-hello/51-hello.json: an app changes its entries in 50-hello.json" \
+  "ids alpha HELLO_MORE_ID; ids bravo HELLO_MORE_ID
+   yq '.data.\"50-hello.json\"' $S | sed 's/HELLO_SSO_ID/HELLO_MORE_ID/' | hellofile 51-hello.json"
+removes="an app removes its entries in 05-hello.json, which holds removals alone, as Kanidm applies it before the files"
+refuses migration-removal-named "a removal names an ID alone" \
+  "ids alpha HELLO_REMOVED_ID HELLO_STAFF_ID; ids bravo HELLO_REMOVED_ID HELLO_STAFF_ID
+   echo '{\"id\":\"\${HELLO_REMOVED_ID}\",\"assertions\":[{\"state\":\"absent\",\"id\":\"\${HELLO_STAFF_ID}\",\
+\"name\":\"hello-staff\"}]}' | hellofile 05-hello.json"
+refuses migration-change-removes "sso-hello/50-hello.json: $removes" \
+  "ids alpha HELLO_STAFF_ID; ids bravo HELLO_STAFF_ID
+   sed -i 's|      \"assertions\": \[|&\n        { \"state\": \"absent\", \"id\": \"\${HELLO_STAFF_ID}\" },|' $S"
+refuses migration-removal-changes "sso-hello/05-hello.json: $removes" \
+  "ids alpha HELLO_REMOVED_ID HELLO_STAFF_ID; ids bravo HELLO_REMOVED_ID HELLO_STAFF_ID
+   echo '{\"id\":\"\${HELLO_REMOVED_ID}\",\"assertions\":[{\"state\":\"absent\",\"id\":\"\${HELLO_STAFF_ID}\"},\
+{\"state\":\"present\",\"id\":\"\${HELLO_USERS_ID}\",\"entry_managed_by\":\"tenant-admins\"}]}' \
+   | hellofile 05-hello.json"
+refuses migration-removal-misnamed "sso-hello/06-hello.json: $removes" \
+  "ids alpha HELLO_REMOVED_ID HELLO_STAFF_ID; ids bravo HELLO_REMOVED_ID HELLO_STAFF_ID
+   echo '{\"id\":\"\${HELLO_REMOVED_ID}\",\"assertions\":[{\"state\":\"absent\",\"id\":\"\${HELLO_STAFF_ID}\"}]}' \
+   | hellofile 06-hello.json"
+refuses migration-removal-other-app "sso-hello/05-netbird.json: $removes" \
+  "ids alpha HELLO_REMOVED_ID HELLO_STAFF_ID; ids bravo HELLO_REMOVED_ID HELLO_STAFF_ID
+   echo '{\"id\":\"\${HELLO_REMOVED_ID}\",\"assertions\":[{\"state\":\"absent\",\"id\":\"\${HELLO_STAFF_ID}\"}]}' \
+   | hellofile 05-netbird.json"
+refuses migration-removal-of-file \
+  "an entry's ID is never that of the file that makes it, \${HELLO_<NAME>_CREATE_ID}" \
+  "ids alpha HELLO_REMOVED_ID HELLO_STAFF_CREATE_ID; ids bravo HELLO_REMOVED_ID HELLO_STAFF_CREATE_ID
+   echo '{\"id\":\"\${HELLO_REMOVED_ID}\",\"assertions\":[{\"state\":\"absent\",\
+\"id\":\"\${HELLO_STAFF_CREATE_ID}\"}]}' | hellofile 05-hello.json"
+refuses migration-removed-made \
+  "a removed entry is made by no file, as Kanidm would make it again once it forgets the ID: db77698c-" \
+  "ids alpha HELLO_REMOVED_ID; ids bravo HELLO_REMOVED_ID
+   echo '{\"id\":\"\${HELLO_REMOVED_ID}\",\"assertions\":[{\"state\":\"absent\",\"id\":\"\${HELLO_USERS_ID}\"}]}' \
+   | hellofile 05-hello.json"
+refuses migration-removed-changed \
+  "a removed entry is changed by no file, as Kanidm fails the file that changes it: db77698c-" \
+  "ids alpha HELLO_REMOVED_ID; ids bravo HELLO_REMOVED_ID
+   sed -i '/HELLO_USERS_CREATE_ID/d' $T/alpha/secrets.yaml $T/bravo/secrets.yaml
+   yq -i 'del(.data.\"10-hello-users.json\")' $S
+   echo '{\"id\":\"\${HELLO_REMOVED_ID}\",\"assertions\":[{\"state\":\"absent\",\"id\":\"\${HELLO_USERS_ID}\"}]}' \
+   | hellofile 05-hello.json"
 platform() { # a file of the platform's migrations, by name, from JSON on stdin
   cat >platform.json
   yq -i ".data.\"$1\" = load_str(\"platform.json\")" apps/kanidm/app/migrations.yaml
   rm platform.json
 }
 export -f platform
-refuses migration-removed-returns "a removed entry never comes back, as Kanidm refuses its ID for good: b11099d7-" \
+refuses migration-removed-returns \
+  "a removed entry is made by no file, as Kanidm would make it again once it forgets the ID: b11099d7-" \
   "for t in alpha bravo; do
      ids \$t KANIDM_REMOVED_ID
      append $T/\$t/secrets.yaml \"  KANIDM_OLD_ID: \$(yq .stringData.HELLO_OIDC_ID $T/\$t/secrets.yaml)\n\"
    done
    echo '{\"id\": \"\${KANIDM_REMOVED_ID}\",
-   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_OLD_ID}\"}]}' | platform 90-removed.json"
+   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_OLD_ID}\"}]}' | platform 04-removed.json"
 refuses migration-empty "a migration has an id and assertions, at least one" \
   "ids alpha KANIDM_REMOVED_ID; ids bravo KANIDM_REMOVED_ID
-   echo '{\"id\": \"\${KANIDM_REMOVED_ID}\", \"assertions\": []}' | platform 90-removed.json"
+   echo '{\"id\": \"\${KANIDM_REMOVED_ID}\", \"assertions\": []}' | platform 04-removed.json"
 refuses migration-platform-literal-id "$secret \${KANIDM_<NAME>_ID} alone" \
   "ids alpha KANIDM_RETIRED_ID; ids bravo KANIDM_RETIRED_ID
    echo '{\"id\": \"e0000000-0000-4000-8000-000000000090\",
-   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | platform 90-removed.json"
+   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | platform 04-removed.json"
+refuses migration-platform-change-removes "kanidm-migrations/20-removed.json: the platform removes its entries in 04-" \
+  "ids alpha KANIDM_REMOVED_ID KANIDM_RETIRED_ID; ids bravo KANIDM_REMOVED_ID KANIDM_RETIRED_ID
+   echo '{\"id\": \"\${KANIDM_REMOVED_ID}\",
+   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | platform 20-removed.json"
+refuses migration-platform-removal-changes \
+  "kanidm-migrations/04-removed.json: the platform changes its entries in 20-<name>.json" \
+  "ids alpha KANIDM_REMOVED_ID KANIDM_RETIRED_ID; ids bravo KANIDM_REMOVED_ID KANIDM_RETIRED_ID
+   echo '{\"id\": \"\${KANIDM_REMOVED_ID}\", \"assertions\": [{\"state\": \"present\",
+   \"id\": \"\${KANIDM_RETIRED_ID}\", \"entry_managed_by\": \"tenant-admins\"}]}' | platform 04-removed.json"
+refuses migration-platform-removal-misnamed \
+  "kanidm-migrations/05-hello.json: the platform removes its entries in 04-<name>.json" \
+  "ids alpha KANIDM_REMOVED_ID KANIDM_RETIRED_ID; ids bravo KANIDM_REMOVED_ID KANIDM_RETIRED_ID
+   echo '{\"id\": \"\${KANIDM_REMOVED_ID}\",
+   \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | platform 05-hello.json"
 refuses migration-admins-as-list "$managed: tenant-admins, not [\"tenant-admins\"]" \
   "sed -i 's/\"entry_managed_by\": \"tenant-admins\"/\"entry_managed_by\": [\"tenant-admins\"]/' $M"
 refuses migration-platform-admins-own "$managed: platform-admins, not \"platform-admins\"" \
   "sed -i 's/\"entry_managed_by\": \"idm_admins\"/\"entry_managed_by\": \"platform-admins\"/' $M"
+staff() { # a platform group of its own that is an account policy, with what its change states past its ID (JSON)
+  for t in alpha bravo; do ids $t KANIDM_STAFF_ID KANIDM_STAFF_CREATE_ID KANIDM_STAFF_FILE_ID; done
+  echo '{"id":"${KANIDM_STAFF_CREATE_ID}","assertions":[{"state":"present","id":"${KANIDM_STAFF_ID}",'\
+'"class":["account_policy","group"],"name":"platform-staff","credential_type_minimum":"passkey"}]}' \
+    | platform 10-platform-staff.json
+  echo "{\"id\": \"\${KANIDM_STAFF_FILE_ID}\",
+    \"assertions\": [{\"state\": \"present\", \"id\": \"\${KANIDM_STAFF_ID}\", $1}]}" | platform 20-staff.json
+}
+export -f staff
 refuses migration-platform-group-unmanaged "$managed: platform-staff, not null" \
-  "ids alpha KANIDM_STAFF_ID KANIDM_STAFF_GROUP_ID; ids bravo KANIDM_STAFF_ID KANIDM_STAFF_GROUP_ID
-   echo '{\"id\": \"\${KANIDM_STAFF_ID}\", \"assertions\": [{\"state\": \"present\",
-   \"id\": \"\${KANIDM_STAFF_GROUP_ID}\", \"class\": [\"account_policy\", \"group\"], \"name\": \"platform-staff\",
-   \"credential_type_minimum\": \"passkey\"}]}' | platform 20-staff.json"
-refuses migration-policy-typo "platform-admins sets ['auth_session_expiry']" \
+  "staff '\"credential_type_minimum\": \"passkey\", \"authsession_expiry\": 3600, \"privilege_expiry\": 600'"
+refuses migration-platform-group-any-credential "platform-staff sign in with passkeys alone" \
+  "staff '\"entry_managed_by\": \"tenant-admins\", \"credential_type_minimum\": \"any\",
+   \"authsession_expiry\": 3600, \"privilege_expiry\": 600'"
+refuses migration-platform-group-session \
+  "platform-staff keeps a session and its admin actions for a whole number of seconds each, above 0" \
+  "staff '\"entry_managed_by\": \"tenant-admins\", \"credential_type_minimum\": \"passkey\",
+   \"authsession_expiry\": 3600, \"privilege_expiry\": true'"
+refuses migration-policy-typo "platform-admins states each of" \
   "sed -i '0,/\"authsession_expiry\"/s//\"auth_session_expiry\"/' $M"
 refuses migration-admins-any-passkey "platform-admins sign in with passkeys of an approved make and model alone" \
   "sed -i 's/\"credential_type_minimum\": \"attested_passkey\"/\"credential_type_minimum\": \"passkey\"/' $M"
+refuses migration-admins-any-passkey-at-create \
+  "\"name\":\"platform-admins\",\"credential_type_minimum\":\"attested_passkey\"}]}" \
+  "sed -i 's/\"credential_type_minimum\":\"attested_passkey\"/\"credential_type_minimum\":\"passkey\"/' $M"
+refuses migration-admins-tightened-at-create "\"name\":\"tenant-admins\",\"credential_type_minimum\":\"passkey\"}]}" \
+  "sed -i 's/\"name\":\"tenant-admins\",\"credential_type_minimum\":\"passkey\"/\
+\"name\":\"tenant-admins\",\"credential_type_minimum\":\"attested_passkey\"/' $M"
 dns="the cluster's DNS answers each tenant's identity host with its Kanidm's Service, one line each"
 refuses coredns-line-missing "$dns" "sed -i '/bravo-kanidm/d' clusters/test/coredns.yaml"
 refuses coredns-line-extra "$dns" \
@@ -891,7 +1019,7 @@ refuses passthrough-app-for-hello "kubernetes/apps/hello/ks.yaml: a host is \${T
    | (select(documentIndex == 1) | .spec.dependsOn) |= map(select(.name != \"issuer\"))' apps/hello/ks.yaml"
 refuses real-cluster-public-ca "prod: the public issuer's certificates chain to roots the images hold" \
   "$real; yq -i '.data.PUBLIC_CA_BUNDLE = \"eA==\"' clusters/prod/settings.yaml"
-refuses mesh-group-session "netbird-users sets ['authsession_expiry']" \
+refuses mesh-group-session "netbird-users states each of" \
   "sed -i 's/^          \"credential_type_minimum\": \"passkey\",\$/&\n          \"authsession_expiry\": 3600,/' \
   apps/netbird/sso/configmap.yaml"
 refuses mesh-group-any-credential "an app group that is an account policy has its members enrol passkeys alone" \
@@ -921,7 +1049,36 @@ renders sso-public "sed -i 's/oauth2_resource_server_basic/oauth2_resource_serve
 renders sso-without-pkce "yq -i '.metadata.annotations.\"suveraen/disable-pkce\" = \"true\"' $S"
 renders migration-removed "ids alpha KANIDM_REMOVED_ID KANIDM_RETIRED_ID; ids bravo KANIDM_REMOVED_ID KANIDM_RETIRED_ID
   echo '{\"id\": \"\${KANIDM_REMOVED_ID}\",
-  \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | platform 90-removed.json"
+  \"assertions\": [{\"state\": \"absent\", \"id\": \"\${KANIDM_RETIRED_ID}\"}]}' | platform 04-removed.json"
+renders migration-admins-tightened \
+  "sed -i '0,/\"credential_type_minimum\": \"passkey\"/s//\"credential_type_minimum\": \"attested_passkey\"/' $M"
+renders migration-platform-group "staff '\"entry_managed_by\": \"tenant-admins\",
+  \"credential_type_minimum\": \"attested_passkey\", \"authsession_expiry\": 3600, \"privilege_expiry\": 600'"
+renders migration-entry-added "ids alpha HELLO_STAFF_ID HELLO_STAFF_CREATE_ID
+  ids bravo HELLO_STAFF_ID HELLO_STAFF_CREATE_ID
+  echo '{\"id\":\"\${HELLO_STAFF_CREATE_ID}\",\"assertions\":[{\"state\":\"present\",\"id\":\"\${HELLO_STAFF_ID}\",\
+\"class\":[\"group\"],\"name\":\"hello-staff\"}]}' | hellofile 10-hello-staff.json
+  sed -i 's|      \"assertions\": \[|&\n        { \"state\": \"present\", \"id\": \"\${HELLO_STAFF_ID}\", \
+\"entry_managed_by\": \"tenant-admins\" },|' $S"
+renders migration-entry-removed "ids alpha HELLO_REMOVED_ID HELLO_STAFF_ID; ids bravo HELLO_REMOVED_ID HELLO_STAFF_ID
+  echo '{\"id\":\"\${HELLO_REMOVED_ID}\",\"assertions\":[{\"state\":\"absent\",\"id\":\"\${HELLO_STAFF_ID}\"}]}' \
+  | hellofile 05-hello.json"
+renders migration-entry-made-again "for t in alpha bravo; do
+    ids \$t HELLO_REMOVED_ID HELLO_USERS_NEW_ID HELLO_USERS_NEW_CREATE_ID
+    sed -i '/HELLO_USERS_CREATE_ID/d' $T/\$t/secrets.yaml
+  done
+  sed -i 's/HELLO_USERS_ID/HELLO_USERS_NEW_ID/; s/HELLO_USERS_CREATE_ID/HELLO_USERS_NEW_CREATE_ID/' $S
+  echo '{\"id\":\"\${HELLO_REMOVED_ID}\",\"assertions\":[{\"state\":\"absent\",\"id\":\"\${HELLO_USERS_ID}\"}]}' \
+  | hellofile 05-hello.json"
+renders migration-client-kind-changed "for t in alpha bravo; do
+    ids \$t HELLO_REMOVED_ID HELLO_WEB_ID HELLO_WEB_CREATE_ID
+    sed -i '/HELLO_OIDC_CREATE_ID/d' $T/\$t/secrets.yaml
+  done
+  sed -i 's/HELLO_OIDC_ID/HELLO_WEB_ID/; s/HELLO_OIDC_CREATE_ID/HELLO_WEB_CREATE_ID/' $S
+  sed -i 's/oauth2_resource_server_basic/oauth2_resource_server_public/' $S
+  sed -i '/components\/sso-secret/d' apps/hello/ks.yaml
+  echo '{\"id\":\"\${HELLO_REMOVED_ID}\",\"assertions\":[{\"state\":\"absent\",\"id\":\"\${HELLO_OIDC_ID}\"}]}' \
+  | hellofile 05-hello.json"
 renders real-cluster "$real"
 renders recovery "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery"
 renders recovery-offsite "knob POSTGRES_GENERATION g2; knob POSTGRES_BOOTSTRAP recovery; knob POSTGRES_RESTORE_FROM offsite-2"
