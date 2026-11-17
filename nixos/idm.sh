@@ -98,17 +98,18 @@ configmaps() {
   kubectl --request-timeout=30s -n "$1-kanidm" get configmaps -o json
 }
 
-# One line for each client in the tenant's attachments (configmaps on stdin), with tabs between its app, name, kind,
-# the redirect the probe names, the flags it asks for, those last applied, and what is wrong with it, "-" for none.
-# They come from the tenant's Kanidm namespace, so none names another tenant's app.
+# One line for each client in the tenant's attachments (configmaps on stdin), each as all the files of its attachment
+# declare it, in their order, with tabs between its app, name, kind, the redirect the probe names, the flags it asks
+# for, those last applied, and what is wrong with it, "-" for none. They come from the tenant's Kanidm namespace, so
+# none names another tenant's app.
 clients() {
   jq -r '.items[]
     | select(.metadata.name | test("^sso-[a-z][a-z0-9]*$"))
     | (.metadata.name | ltrimstr("sso-")) as $app
     | (.metadata.annotations // {}) as $a
     | "\($app)-oidc" as $name
-    | [.data["50-\($app).json"] // "null" | fromjson? | .assertions[]? | select(.state == "present" and .name == $name)]
-      as $found
+    | [[.data // {} | to_entries | sort_by(.key)[] | .value | fromjson? | .assertions[]? | select(.state == "present")]
+      | group_by(.id)[] | add | select(.name == $name)] as $found
     | ($found[0].class // []) as $class
     | [("basic", "public") as $k | select($class | index("oauth2_resource_server_\($k)")) | $k] as $kinds
     | ($found[0].oauth2_rs_origin // [] | first // null | if type == "string" then . else "" end) as $redirect
