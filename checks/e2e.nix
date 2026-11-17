@@ -37,14 +37,17 @@
 # Each tenant's Kanidm serves its own host through the gateway, which passes it through to Kanidm's own certificate,
 # to clients that Kanidm sees as the gateway whatever they claim, and to that tenant's apps alone under the same name;
 # it holds the platform's groups and each app's client as their files declare, an app's under IDs of the tenant's own
-# from its Secret, which no other tenant's Kanidm holds, and hello signs in with its client in each. suveraen-idm, which
-# reaches each Kanidm at the server's own gateway and never looks its name up, makes its first platform admin, who may
-# enrol nothing but a passkey of an approved make, and a tenant admin, who makes the tenant's people and changes its
-# groups' members but can't touch a platform admin or an admin group, nor delete or make a group, and sets Kanidm's own
-# groups; refuses to make an admin of a person who exists already; copies each confidential client's secret from Kanidm
-# into its app, so the release that adds an app is the only one, recovering idm_admin only when something is wrong;
-# gives a client a new secret; passes on nothing an app's namespace writes but a secret as Kanidm makes them; and leaves
-# idm_admin, admin and anonymous disabled. The checks take no run of Kanidm's migrations from lines a client had it log.
+# from its Secret, which no other tenant's Kanidm holds, and hello signs in with its client in each. A signed release
+# changes, adds and removes the entries each tenant's Kanidm holds, which each applies as it restarts, keeping the
+# members, flags, secret and attestation list admins set, and a restart with nothing changed applies nothing again.
+# suveraen-idm, which reaches each Kanidm at the server's own gateway and never looks its name up, makes its first
+# platform admin, who may enrol nothing but a passkey of an approved make, and a tenant admin, who makes the tenant's
+# people and changes its groups' members but can't touch a platform admin or an admin group, nor delete or make a group,
+# and sets Kanidm's own groups; refuses to make an admin of a person who exists already; copies each confidential
+# client's secret from Kanidm into its app, so the release that adds an app is the only one, recovering idm_admin only
+# when something is wrong; gives a client a new secret; passes on nothing an app's namespace writes but a secret as
+# Kanidm makes them; and leaves idm_admin, admin and anonymous disabled. The checks take no run of Kanidm's migrations
+# from lines a client had it log.
 # A tenant's mesh answers on its own host, which the gateway passes through to its edge, whose port alone the gateway
 # reaches; it reaches its tenant's PostgreSQL and Kanidm and nothing else, and once its database is back from a restore,
 # suveraen-mesh raises its network serial and starts its management again. It starts at the release before its own: the
@@ -689,6 +692,7 @@ runTest {
       import re
       import shlex
       import time
+      import uuid
       from collections.abc import Iterator
       from contextlib import contextmanager
       from datetime import datetime
@@ -1939,6 +1943,226 @@ runTest {
                   timeout=300,
               )
               return signed
+
+          with subtest("A release changes, adds and removes the Kanidm entries each tenant holds, which each Kanidm applies as it restarts, keeping what admins set"):
+              platform_migrations = "/srv/src/kubernetes/apps/kanidm/app/migrations.yaml"
+              hello_migrations = "/srv/src/kubernetes/apps/hello/sso/configmap.yaml"
+              netbird_migrations = "/srv/src/kubernetes/apps/netbird/sso/configmap.yaml"
+
+              # What a release writes into a file of the checkout: each old text, found once, replaced, and lines added
+              # at the end.
+              def edited(path, *pairs, added=""):
+                  text = forge.succeed(f"cat {path}")
+                  for old, new in pairs:
+                      assert text.count(old) == 1, (path, old)
+                      text = text.replace(old, new)
+                  return f"printf %s {shlex.quote(text + added)} | ${asCgit} tee {path} >/dev/null"
+
+              # What a tenant's Kanidm holds, as idm_admin reads it, of what the files state that these releases change,
+              # and of what admins and suveraen-idm set beside it.
+              def entries(t):
+                  def group(name):
+                      found = kanidm(t, f"group get {name}")
+                      # For a group Kanidm doesn't hold, the client prints its answer.
+                      return found["attrs"] if isinstance(found, dict) else found
+
+                  admins, org, users, staff = (
+                      group(name) for name in ["platform-admins", "tenant-admins", "hello-users", "hello-staff"]
+                  )
+                  clients = {c["name"][0]: c for c in kanidm(t, "system oauth2 list")}
+                  hello, netbird = clients["hello-oidc"], clients.get("netbird-oidc", {})
+                  return {
+                      "platform-admins": (admins["credential_type_minimum"], admins["privilege_expiry"]),
+                      "hello-oidc": (
+                          hello["displayname"], sorted(hello["oauth2_rs_origin"]), sorted(hello["oauth2_rs_scope_map"])
+                      ),
+                      "hello-staff": staff if isinstance(staff, str) else (staff["uuid"], staff["entry_managed_by"]),
+                      "netbird-oidc": netbird.get("displayname"),
+                      "tenant-admins": org["uuid"],
+                      "members": {
+                          "platform-admins": admins.get("member"),
+                          "tenant-admins": org.get("member"),
+                          "hello-users": users.get("member"),
+                      },
+                      "attestation": "webauthn_attestation_ca_list" in admins,
+                      "localhost": netbird.get("oauth2_allow_localhost_redirect"),
+                  }
+
+              # What the files state of those entries in a tenant, as entries() reads it: as they first were, or with
+              # the change, which also makes hello-staff, by its ID and its manager's as Kanidm lists it.
+              def stated(t, netbird, staff=None):
+                  changed = staff is not None
+                  web = "https://hello." + read(f"${cluster}/tenants/{t}/secrets.yaml", "TENANT_APP_DOMAIN")
+                  origins = [f"{web}/oauth2/callback"] + ([f"{web}/oauth2/changed"] if changed else [])
+                  scopes = [f'hello-users@{idm[t]}: {{"openid", "profile"}}'] + (
+                      [f'hello-staff@{idm[t]}: {{"openid"}}'] if changed else []
+                  )
+                  return {
+                      "platform-admins": (["attested_passkey"], ["240" if changed else "300"]),
+                      "hello-oidc": (["hello, changed" if changed else "hello"], sorted(origins), sorted(scopes)),
+                      "hello-staff": ([staff[0]], staff[1]) if staff else "No matching group 'hello-staff'",
+                      "netbird-oidc": ["NetBird, changed" if changed else "NetBird"] if netbird else None,
+                  }
+
+              # Waits until each tenant's Kanidm has restarted since a moment and rolled out, ran its migrations without
+              # a fault, and holds what is wanted, and leaves idm_admin disabled. Reloader may restart Kanidm for each
+              # of its ConfigMaps a release changes, and Flux applies a file whose keys the tenant's Secret lacks only
+              # on a later try, once it holds them.
+              def applied(since, want):
+                  def done(last):
+                      try:
+                          found = {c["tenant"]: c for c in parsed("suveraen-idm check")["tenants"]}
+                          for t in tenants:
+                              server.succeed(f"kubectl -n {t}-kanidm rollout status statefulset kanidm --timeout=10s")
+                              runs = found[t]["migrations"]
+                              assert (found[t]["started"] or "") > since and runs, found[t]
+                              assert (runs["failed"], runs["denied"], found[t]["ids"]) == ([], 0, []), found[t]
+                          for t in tenants:
+                              try:
+                                  as_idm_admin(t)
+                                  now = entries(t)
+                                  assert now == want[t], (t, now, want[t])
+                              finally:
+                                  disable_idm_admin(t)
+                      except Exception:
+                          if last:
+                              raise
+                          return False
+                      return True
+
+                  retry(done, timeout_seconds=1200)
+
+              # The files a tenant's Kanidm holds, and how many it skipped as applied already as its container started:
+              # it runs them before it starts its web server, so no line a client has it log counts.
+              def skipped(t):
+                  maps = parsed(f"kubectl -n {t}-kanidm get configmaps -o json")["items"]
+                  files = sorted(
+                      key for m in maps if re.fullmatch(r"kanidm-migrations|sso-[a-z][a-z0-9]*", m["metadata"]["name"])
+                      for key in (m.get("data") or {}) if re.fullmatch(r"[0-9]{2}-.+\.json", key)
+                  )
+                  server.succeed(f"kubectl -n {t}-kanidm logs kanidm-0 -c app > /tmp/shared/output")
+                  lines = (server.shared_dir / "output").read_text(errors="replace").splitlines()
+                  web = next(
+                      i for i, line in enumerate(lines)
+                      if line.startswith("00000000-0000-0000-0000-000000000000 INFO ")
+                      and line.endswith(" [info]: Starting the web server...")
+                  )
+                  return files, sum("Assertion already applied" in line for line in lines[:web])
+
+              # By hand in the first tenant, as an admin: a member of hello-users, which its files leave to admins, and
+              # a display name and a redirect of hello-oidc's, which they state.
+              hello_web = "https://hello." + read(f"${cluster}/tenants/{first}/secrets.yaml", "TENANT_APP_DOMAIN")
+              drifted = {}
+              for t in tenants:
+                  as_idm_admin(t)
+                  if t == first:
+                      for args in [
+                          "group add-members hello-users e2emember",
+                          "system oauth2 set-displayname hello-oidc drift",
+                          f"system oauth2 add-redirect-url hello-oidc {hello_web}/drift",
+                      ]:
+                          server.succeed(cli(t, args))
+                  drifted[t] = entries(t)
+                  disable_idm_admin(t)
+              assert drifted[first]["hello-oidc"][:2] == (
+                  ["drift"], sorted([f"{hello_web}/drift", f"{hello_web}/oauth2/callback"])
+              ), drifted[first]
+              # What admins and suveraen-idm set there before: the attestation CA list, the admins and a member, and the
+              # redirects to members' own devices.
+              assert (drifted[first]["attestation"], drifted[first]["members"], drifted[first]["localhost"]) == (
+                  True,
+                  {"platform-admins": [f"e2eops@{idm[first]}"], "tenant-admins": [f"e2eorg@{idm[first]}"],
+                   "hello-users": [f"e2emember@{idm[first]}"]},
+                  ["true"],
+              ), drifted[first]
+
+              # A release that changes what the files state of the platform's groups and both apps' clients, and makes
+              # hello-staff, whose IDs each tenant's Secret gains in the same release.
+              staff_keys = {
+                  t: {key: str(uuid.uuid4()) for key in ["HELLO_STAFF_ID", "HELLO_STAFF_CREATE_ID", "HELLO_REMOVED_ID"]}
+                  for t in tenants
+              }
+              made = json.dumps({"id": "''${HELLO_STAFF_CREATE_ID}", "assertions": [
+                  {"state": "present", "id": "''${HELLO_STAFF_ID}", "class": ["group"], "name": "hello-staff"}
+              ]}, separators=(",", ":"))
+              users_end = '"entry_managed_by": "tenant-admins"\n        },'
+              staff_change = (
+                  '\n        {\n          "state": "present",\n          "id": "''${HELLO_STAFF_ID}",'
+                  '\n          "entry_managed_by": "tenant-admins"\n        },'
+              )
+              hello_change = [
+                  ('"displayname": "hello",', '"displayname": "hello, changed",'),
+                  ('/oauth2/callback"]', '/oauth2/callback", "https://hello.''${TENANT_APP_DOMAIN}/oauth2/changed"]'),
+                  ("  10-hello-users.json: |\n", f"  10-hello-staff.json: |\n    {made}\n  10-hello-users.json: |\n"),
+                  (users_end, users_end + staff_change),
+                  ('"profile"] }]', '"profile"] }, { "group": "hello-staff", "scopes": ["openid"] }]'),
+              ]
+              edits = [
+                  edited(platform_migrations, ('"privilege_expiry": 300,', '"privilege_expiry": 240,')),
+                  edited(hello_migrations, *hello_change),
+                  edited(netbird_migrations, ('"displayname": "NetBird",', '"displayname": "NetBird, changed",')),
+              ]
+              for t in tenants:
+                  edits.append(edited(f"${checkout}/tenants/{t}/secrets.yaml", added="".join(
+                      f"  {key}: {staff_keys[t][key]}\n" for key in ["HELLO_STAFF_ID", "HELLO_STAFF_CREATE_ID"]
+                  )))
+              since = server.succeed("date -u +%Y-%m-%dT%H:%M:%SZ").strip()
+              release("kanidm-change", " && ".join(edits))
+              with_change = {
+                  t: drifted[t] | stated(
+                      t, drifted[t]["netbird-oidc"] is not None,
+                      (staff_keys[t]["HELLO_STAFF_ID"], drifted[t]["tenant-admins"]),
+                  )
+                  for t in tenants
+              }
+              applied(since, with_change)
+              for t in tenants:
+                  assert probe_token(t, sso_secret(t)) == "400", t
+              found = hello_client()
+              assert {t: [(c["secret"], c["flags"]) for c in found[t]] for t in tenants} == {
+                  t: [("right", True)] for t in tenants
+              }, found
+
+              # A restart with nothing changed applies no file again.
+              since = server.succeed("date -u +%Y-%m-%dT%H:%M:%SZ").strip()
+              for t in tenants:
+                  server.succeed(f"kubectl -n {t}-kanidm delete pod kanidm-0")
+              applied(since, with_change)
+              for t in tenants:
+                  files, skips = skipped(t)
+                  assert skips == len(files), (t, skips, files)
+
+              # A release that changes it all back and removes hello-staff: its file and its part of hello's go, and
+              # 05-hello.json, which Kanidm applies before any file that makes an entry, removes its ID. Each tenant's
+              # Secret gains that file's ID and loses the one of the file that made hello-staff.
+              removal = json.dumps(
+                  {"id": "''${HELLO_REMOVED_ID}", "assertions": [{"state": "absent", "id": "''${HELLO_STAFF_ID}"}]},
+                  separators=(",", ":"),
+              )
+              edits = [
+                  edited(platform_migrations, ('"privilege_expiry": 240,', '"privilege_expiry": 300,')),
+                  edited(
+                      hello_migrations,
+                      *[(new, old) for old, new in hello_change],
+                      ("\ndata:\n", f"\ndata:\n  05-hello.json: |\n    {removal}\n"),
+                  ),
+                  edited(netbird_migrations, ('"displayname": "NetBird, changed",', '"displayname": "NetBird",')),
+              ]
+              for t in tenants:
+                  edits.append(edited(
+                      f"${checkout}/tenants/{t}/secrets.yaml",
+                      (f"  HELLO_STAFF_CREATE_ID: {staff_keys[t]['HELLO_STAFF_CREATE_ID']}\n", ""),
+                      added=f"  HELLO_REMOVED_ID: {staff_keys[t]['HELLO_REMOVED_ID']}\n",
+                  ))
+              since = server.succeed("date -u +%Y-%m-%dT%H:%M:%SZ").strip()
+              release("kanidm-remove", " && ".join(edits))
+              applied(since, {t: drifted[t] | stated(t, drifted[t]["netbird-oidc"] is not None) for t in tenants})
+              for t in tenants:
+                  assert probe_token(t, sso_secret(t)) == "400", t
+              found = hello_client()
+              assert {t: [(c["secret"], c["flags"]) for c in found[t]] for t in tenants} == {
+                  t: [("right", True)] for t in tenants
+              }, found
 
           # A tenant's mesh as people use it: its owner through the dashboard's API, members' devices that run
           # NetBird's own client and sign in at the tenant's Kanidm or join by a setup key, and a camera behind a box at
