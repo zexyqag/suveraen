@@ -475,9 +475,8 @@ uuid = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 dynamic = "00000000-0000-0000-0001-000000000000"
 basic = ["account", "oauth2_resource_server", "oauth2_resource_server_basic"]
 public = ["account", "oauth2_resource_server", "oauth2_resource_server_public"]
-clientkeys = {"state", "id", "class", "name", "displayname", "description", "oauth2_rs_origin",
-              "oauth2_rs_origin_landing", "oauth2_rs_scope_map", "oauth2_rs_sup_scope_map", "oauth2_rs_claim_map",
-              "oauth2_prefer_short_username", "oauth2_consent_prompt_enable"}
+clientkeys = {"state", "id", "class", "name", "displayname", "oauth2_rs_origin", "oauth2_rs_origin_landing",
+              "oauth2_rs_scope_map"}
 policykeys = {"credential_type_minimum", "authsession_expiry", "privilege_expiry", "entry_managed_by"}
 # Nested in idm_admins, a group takes members only from its manager, so idm_admins manages platform-admins. tenant-admins
 # manage every other group the files declare, which lets them change its members alone, never rename or delete it.
@@ -568,14 +567,13 @@ for line in sys.stdin:
                         f" {json.dumps(manager)}")
                 groups.add(name)
             if classes == ["group"]:
-                extra = set(a) - {"state", "id", "class", "name", "description", "entry_managed_by"}
+                extra = set(a) - {"state", "id", "class", "name", "entry_managed_by"}
             elif classes == ["account_policy", "group"] and source == "kanidm-migrations":
-                extra = set(a) - {"state", "id", "class", "name", "description"} - policykeys
+                extra = set(a) - {"state", "id", "class", "name"} - policykeys
             elif classes == ["account_policy", "group"]:
                 # Kanidm holds a person to the strictest policy of all their groups, so the group of an app only
                 # tightens what its members may enrol, which Kanidm checks as one is enrolled.
-                extra = set(a) - {"state", "id", "class", "name", "description", "entry_managed_by",
-                                  "credential_type_minimum"}
+                extra = set(a) - {"state", "id", "class", "name", "entry_managed_by", "credential_type_minimum"}
                 if a.get("credential_type_minimum") != "passkey":
                     bad(where, f"an app group that is an account policy has its members enrol passkeys alone: {name}")
             elif classes in (sorted(basic), sorted(public)) and source != "kanidm-migrations":
@@ -583,8 +581,6 @@ for line in sys.stdin:
                 # Kanidm holds every account to one, and fails the whole file without it.
                 if not isinstance(a.get("displayname"), str) or not a["displayname"].strip():
                     bad(where, f"a client has a display name: {name}")
-                if classes == sorted(public) and "oauth2_consent_prompt_enable" in a:
-                    extra.add("oauth2_consent_prompt_enable")
                 clients.append((where, a))
             else:
                 bad(where, f"the platform declares groups, and an app groups and an OAuth2 client, never people,"
@@ -624,14 +620,13 @@ for line in sys.stdin:
             origins = []
         for value in origins + [a.get("oauth2_rs_origin_landing")]:
             url(here, value, s["hosts"])
-        for field in "oauth2_rs_scope_map", "oauth2_rs_sup_scope_map", "oauth2_rs_claim_map":
-            entries = a.get(field, [])
-            if not isinstance(entries, list) or field == "oauth2_rs_scope_map" and not entries:
-                bad(here, f"{field} is a list, and a client maps at least one group to its scopes")
-                continue
-            for e in entries:
-                if not isinstance(e, dict) or e.get("group") not in groups:
-                    bad(here, f"a client maps members or its own app groups alone: {e}")
+        values = a.get("oauth2_rs_scope_map")
+        if not isinstance(values, list) or not values:
+            bad(here, "a client maps at least one group to its scopes, in a list")
+            values = []
+        for v in values:
+            if not isinstance(v, dict) or v.get("group") not in groups:
+                bad(here, f"a client maps members or its own app groups alone: {v}")
         for flag, value in s["annotations"].items():
             if flag not in flags or value != "true":
                 bad(where, f"sso-{app} carries no annotation but {sorted(flags)}, set to true: {flag}")
