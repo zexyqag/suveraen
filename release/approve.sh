@@ -35,6 +35,8 @@ show_signers() {
   done
 }
 
+# Paths below are the repository's, wherever in the clone this runs.
+cd "$(git rev-parse --show-toplevel)"
 state=$(git rev-parse --absolute-git-dir)/approve
 mkdir -p "$state"
 # Fully qualified refs only, and no tags: a tag named like a branch would otherwise win.
@@ -87,6 +89,36 @@ if [[ $url =~ github\.com[:/]([^/]+)/([^/]+)$ ]]; then
   jq -e '.check_runs | length > 0 and all(.conclusion | IN("success", "neutral", "skipped"))' <<<"$runs" >/dev/null ||
     die "Not every check on $candidate has passed. Release once they have."
 fi
+
+# Kanidm applies a migration again once the bytes under its file's ID change, and refuses one that makes an entry it
+# holds, so each tenant that applied a file making one fails it at every start once its text is another, or once
+# another file makes that entry. Such a file is a value of a ConfigMap the cluster applies from kubernetes/ that names
+# classes; this prints each in a commit as its file's ID and each entry's, its text and where it is.
+creates() {
+  { git grep -z -l -F class "$1" -- 'kubernetes/*.yaml' || [ $? = 1 ]; } | while IFS= read -r -d '' file; do
+    data=$(git show "$file" | yq ea -o=json -I=0 'select(.kind == "ConfigMap") | .data // {} | to_entries[]') ||
+      die "$(printf %s "${file#*:}" | clean) isn't YAML in $1."
+    jq -r --arg at "${file#*:}" '(.value | fromjson? | objects) as $m
+      | ($m.assertions | arrays | .[] | objects | select(has("class")) | .id) as $entry
+      | (["file", $m.id], ["entry", $entry]) as $id
+      | [($id | tojson), (.value | tojson), "\($at): \(.key)"] | @tsv' <<<"$data"
+  done
+}
+# The text main first held under each ID, through every release, which tenants may have applied since.
+: >"$state/made"
+last=
+for commit in $(git rev-list --first-parent --reverse "$release"); do
+  kube=$(git rev-parse -q --verify "$commit:kubernetes" || true)
+  [ -n "$kube" ] && [ "$kube" != "$last" ] || continue
+  last=$kube
+  creates "$commit" >>"$state/made"
+done
+creates "$candidate" >"$state/candidate"
+changed=$(awk -F '\t' 'FILENAME == ARGV[1] { if (!($1 in made)) made[$1] = $2; next }
+  $1 in made && made[$1] != $2 && !seen[$3]++ { print "  " $3 }' "$state/made" "$state/candidate" | clean)
+[ -z "$changed" ] || die "These files make a Kanidm entry, but not with the text main first held under their ID or for that entry:
+$changed
+Kanidm refuses such a file at every start of every tenant that applied the old one. Revert each to that text, or make a new entry under new IDs and remove the old one."
 
 echo
 echo "Changes since the last release:"

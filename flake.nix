@@ -34,6 +34,7 @@
           diffutils
           gawk
           coreutils
+          yq-go
         ];
         text = builtins.readFile ./release/approve.sh;
       };

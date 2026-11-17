@@ -1,7 +1,9 @@
 # Runs the release command against a scratch repository: the first release, refusals for a wrong key, a forged
 # or rewound main, a tag posing as main and an unsafe key change, terminal control codes stripped from the review,
-# a key change done in two releases, the canary signed in only when confirmed, and refusals while checks fail or
-# can't be read.
+# a key change done in two releases, the canary signed in only when confirmed, a file that makes a Kanidm entry
+# refused once its text is other than main first held under its ID or for its entry, in any layout and from any
+# directory of the clone, while added, moved, deleted and restored ones pass, and refusals while checks fail or can't
+# be read.
 { pkgs, approve }:
 pkgs.runCommand "approve-test"
   {
@@ -115,6 +117,75 @@ pkgs.runCommand "approve-test"
     echo release | approve
     released
     ! git log -1 --format=%B refs/remotes/origin/main | grep -q Canary || exit 1
+
+    # A file that makes a Kanidm entry keeps the text main first held under its ID, in whatever layout; a release adds,
+    # moves, deletes and restores such files instead.
+    cat > ../sso.yaml <<'EOF'
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: sso-hello
+    data:
+      10-hello-oidc.json: |
+        {"id":"''${HELLO_OIDC_CREATE_ID}","assertions":[{"state":"present","id":"''${HELLO_OIDC_ID}","class":["account","oauth2_resource_server","oauth2_resource_server_basic"],"name":"hello-oidc","displayname":"hello-oidc","oauth2_rs_origin_landing":"https://pending.invalid/"}]}
+      10-hello-users.json: |
+        {"id":"''${HELLO_USERS_CREATE_ID}","assertions":[{"state":"present","id":"''${HELLO_USERS_ID}","class":["group"],"name":"hello-users"}]}
+      50-hello.json: |
+        {
+          "id": "''${HELLO_SSO_ID}",
+          "assertions": [{ "state": "present", "id": "''${HELLO_USERS_ID}", "entry_managed_by": "tenant-admins" }]
+        }
+    EOF
+    sso=kubernetes/apps/hello/sso/configmap.yaml
+    # ../sso.yaml with hello-oidc's file for a client of the kind given, as a double-quoted scalar.
+    quoted() {
+      python3 -c '
+    import json, sys
+    lines = open(sys.argv[1]).read().split("\n")
+    i = lines.index("  10-hello-oidc.json: |")
+    text = lines[i + 1].strip().replace("_basic", "_" + sys.argv[2]) + "\n"
+    print("\n".join(lines[:i] + ["  10-hello-oidc.json: " + json.dumps(text)] + lines[i + 2:]), end="")' ../sso.yaml "$1"
+    }
+    stage "mkdir -p kubernetes/apps/hello/sso && cp ../sso.yaml $sso" "hello makes its entries"
+    echo release | approve
+    released
+    # From a directory of the clone, its paths are still the repository's.
+    stage "sed 's/oauth2_resource_server_basic/oauth2_resource_server_public/' ../sso.yaml > $sso" "hello-oidc is public"
+    if (cd kubernetes/apps && echo release | approve) > ../out 2>&1; then
+      cat ../out
+      echo "approve should have refused"
+      exit 1
+    fi
+    grep -qx "  $sso: 10-hello-oidc.json" ../out
+    ! grep -q 10-hello-users ../out || exit 1
+    grep -q "refuses such a file at every start of every tenant that applied the old one" ../out
+    stage "quoted public > $sso" "hello-oidc is public, quoted"
+    refused
+    grep -qx "  $sso: 10-hello-oidc.json" ../out
+    stage "quoted basic > $sso" "hello-oidc quoted"
+    echo release | approve
+    released
+    client=kubernetes/apps/hello/sso/client.yaml
+    stage "{ sed -n 1,5p ../sso.yaml | sed s/sso-hello/hello-client/; grep -A1 10-hello-oidc.json ../sso.yaml; } > $client
+      sed '/10-hello-oidc.json/,+1d' ../sso.yaml > $sso" "hello-oidc in a ConfigMap of its own"
+    echo release | approve
+    released
+    stage "sed '/10-hello-oidc.json/,+1d; /10-hello-users.json/,+1d' ../sso.yaml > $sso" "hello-users goes"
+    echo release | approve
+    released
+    stage "sed '/10-hello-oidc.json/,+1d; s/\"class\":\[\"group\"\],\"name\":\"hello-users\"/\
+    \"class\":[\"account_policy\",\"group\"],\"name\":\"hello-users\",\"credential_type_minimum\":\"passkey\"/' \
+      ../sso.yaml > $sso" "hello-users is back as an account policy"
+    refused
+    grep -qx "  $sso: 10-hello-users.json" ../out
+    stage "sed '/10-hello-oidc.json/,+1d; s/HELLO_USERS_CREATE_ID/HELLO_GROUP_CREATE_ID/' ../sso.yaml > $sso" \
+      "hello-users is back, made by another file"
+    refused
+    grep -qx "  $sso: 10-hello-users.json" ../out
+    stage "sed '/10-hello-oidc.json/,+1d' ../sso.yaml > $sso" "hello-users is back"
+    echo release | approve
+    released
+
     git config user.signingkey $keys/owner
     stage "echo four > four" four
     refused
