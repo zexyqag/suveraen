@@ -448,6 +448,55 @@ if blanked != [columns["scrubbed"]]:
     bad.append(f"scrub.sql blanks {blanked}")
 print("; ".join(bad))
 '
+# Prints where a value a Kustomization took from a Secret (JSON lines in the file given, with its directory of what
+# its migrations take IDs from) lands outside a Secret, the standby CA's external account ID and its migrations' IDs,
+# in what it rendered (JSON lines on stdin). Anything else may be read by more than those who may read Secrets: the
+# servers' checks list the Flux objects whose values these are. A tenant's domains name its hosts, which its Gateways
+# and certificates hold as well. A value shorter than 8 characters could be part of anything, and isn't followed: only
+# a test cluster's values are, as every other's are encrypted, which render gives stand-ins far longer.
+secretsonly='
+import json, sys
+taken = {}
+for line in open(sys.argv[1]):
+    s = json.loads(line)
+    for key, value in (s["values"] or {}).items():
+        if key not in ("TENANT_DOMAIN", "TENANT_APP_DOMAIN") and len(str(value)) >= 8:
+            taken.setdefault(s["name"], []).append((key, s["source"], str(value)))
+
+
+def strings(node, path=()):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield from strings(v, path + (str(k),))
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from strings(v, path + (str(i),))
+    elif isinstance(node, str):
+        yield path, node
+
+
+bad = set()
+for line in sys.stdin:
+    r = json.loads(line)
+    name = r["name"]
+    if name not in taken:
+        continue
+    with open(f"{sys.argv[2]}/{name}.idkeys") as f:
+        ids = set(f.read().split())
+    for d in r["docs"]:
+        kind = d.get("kind") if isinstance(d, dict) else None
+        if kind in (None, "Secret"):
+            continue
+        where = "{}/{}".format(kind, (d.get("metadata") or {}).get("name"))
+        for path, text in strings(d):
+            for key, source, value in taken[name]:
+                if value in text and not (
+                    kind == "ClusterIssuer" and path == ("spec", "acme", "externalAccountBinding", "keyID")
+                    or kind == "ConfigMap" and key in ids
+                ):
+                    bad.add(f"{name} puts {key} from {source} in {where}")
+print("; ".join(sorted(bad)))
+'
 # One line of JSON for each source of a tenant's Kanidm migrations: its ConfigMap, and for an app the hosts its
 # listeners name and its Secret sso, in files named by the arguments after the cluster, tenant, source and app.
 migrationsource='
@@ -996,6 +1045,7 @@ for dir in kubernetes/clusters/*/; do
   rendered=$out/$cluster
   mkdir -p "$w" "$rendered"
   : >"$w/paths"
+  : >"$w/secret-values"
 
   yq -n ".apiVersion = \"kustomize.toolkit.fluxcd.io/v1\" | .kind = \"Kustomization\"
     | .metadata = {\"name\": \"cluster\", \"namespace\": \"flux-system\"} | .spec.path = \"./$dir\"" >"$w/root.yaml"
@@ -1058,6 +1108,8 @@ for dir in kubernetes/clusters/*/; do
       fi
       bad=$(yq 'keys | .[]' "$w/src.vars.yaml" | grep -xF "$defaults" || true)
       [ -z "$bad" ] || fail "$cluster/$name: $kind/$ref sets $bad, which only a template may set"
+      [ "$kind" != Secret ] || yq -o=json -I=0 "{\"name\": \"$name\", \"source\": \"$ref\", \"values\": .}" \
+        "$w/src.vars.yaml" >>"$w/secret-values"
       both=$(yq ea 'select(fileIndex == 0) as $a | select(fileIndex == 1) | keys | .[]
         | select(. as $k | $a | has($k))' \
         "$w/$name.vars.yaml" "$w/src.vars.yaml")
@@ -2088,6 +2140,15 @@ done
 
 bad=$(python3 -I -c "$migrations" "$founding" <"$work/migrations.jsonl")
 [ -z "$bad" ] || fail "Kanidm's migrations: $bad"
+# Once the migrations are known to say which IDs they take.
+for dir in kubernetes/clusters/*/; do
+  cluster=$(basename "$dir")
+  bad=$(for file in "$out/$cluster"/*.yaml; do
+    yq ea -o=json -I=0 "[.] as \$docs | {\"name\": \"$(basename "$file" .yaml)\", \"docs\": \$docs}" "$file"
+  done | python3 -I -c "$secretsonly" "$work/$cluster/secret-values" "$work/$cluster")
+  [ -z "$bad" ] || fail "$cluster: what a Secret gives lands only in Secrets, the standby CA's external account ID" \
+    "and Kanidm's IDs: $bad"
+done
 # Every cluster sets the same settings and secrets, so none is forgotten in one of them.
 [ "$(for keys in "$work"/*/keys; do sort "$keys" | sha256sum; done | sort -u | wc -l)" = 1 ] \
   || fail "the clusters don't set the same settings and secrets"

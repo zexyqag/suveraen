@@ -146,6 +146,15 @@ refuses edge-includes-key "bravo-hello-edge-hello reads HELLO_API_KEY: an app re
   "append $T/bravo/secrets.yaml '  HELLO_API_KEY: x\n'
    append apps/hello/app/key.yaml '$keymap\${HELLO_API_KEY:=none}\n'
    append edge/base/kustomization.yaml '  - ../../apps/hello/app/key.yaml\n'"
+secretonly="what a Secret gives lands only in Secrets, the standby CA's external account ID and Kanidm's IDs"
+refuses secret-in-values "$secretonly: alpha-hello puts HELLO_DB_PASSWORD from tenant-alpha in HelmRelease/hello" \
+  "yq -i '.spec.values.controllers.hello.containers.app.env.DB_PASSWORD = \"\${HELLO_DB_PASSWORD}\"' \
+   apps/hello/app/helmrelease.yaml"
+refuses id-in-settings "$secretonly: alpha-hello puts HELLO_SSO_ID from tenant-alpha in ConfigMap/hello" \
+  "append apps/hello/app/configmap.yaml '  SSO: \${HELLO_SSO_ID}\n'"
+refuses cluster-secret-in-issuer \
+  "$secretonly: issuer-standby puts ACME_STANDBY_EAB_HMAC from cluster-secrets in ClusterIssuer/standby" \
+  "yq -i '.metadata.annotations.hmac = \"\${ACME_STANDBY_EAB_HMAC}\"' platform/issuer/standby/app/standby.yaml"
 refuses secret-overrides-route-port "$only: ROUTE_TARGET_PORT" \
   "append $T/bravo/secrets.yaml '  ROUTE_TARGET_PORT: \"22\"\n'"
 refuses secret-and-setting "HELLO_GREETING comes from more than one of its sources" \
