@@ -1206,6 +1206,8 @@ pkgs.testers.runNixOSTest {
           refused(dry(gateway("bravo", "hello.org.test", "bravo-hello")), "hostnames")
           server.succeed("kubectl -n flux-system delete configmap hostnames")
           refused(dry(gateway("alpha", "hello.example.test", "alpha-hello")), "hostnames")
+          # Labelled as the tenant's Kanidm, which nothing here runs, it would go on being found unchecked.
+          server.succeed("kubectl delete namespace alpha-kanidm --timeout=120s")
 
       with subtest("The platform's pods run ahead of tenants', whose pods can't ask for its priority or Ceph's"):
           server.succeed("kubectl get priorityclass tenant -o jsonpath='{.globalDefault}' | grep -x true")
