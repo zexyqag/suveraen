@@ -1,0 +1,12 @@
+cluster	evaluated
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+cluster	certificate alpha-kanidm/tls	ok	4	certificate renewal late	renews 2026-11-21T12:00:00Z, expires 2026-12-21T12:00:00Z	certificates renewed	certificates
+cluster	certificate gateway/alpha-hello-hello	ok	4	certificate renewal late	renews 2026-11-21T12:00:00Z, expires 2026-12-21T12:00:00Z	certificates renewed	certificates
+cluster	edge alpha-hello-hello	ok	4	edge unanswered	answered	edges answering again	edges
+cluster	edge alpha-kanidm-idm	ok	4	edge unanswered	answered	edges answering again	edges
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+complete	certificates	certificate 
+complete	edges	edge 
+complete	flux	Flux 
+kanidm	judged	{}
+checks	done

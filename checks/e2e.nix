@@ -59,14 +59,15 @@
 # devices keep to it through an upgrade by a signed release, through the restore, whose lost changes they leave behind,
 # and through the server's reboot, without signing in again.
 # Kanidm's volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all
-# replaces; the server's checks alert once when an app holds a wrong one, and when that clears.
+# replaces; the server's checks alert once when an app holds a wrong one, or has no pod behind its edges, and when that
+# clears.
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
 # tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
-# records it, its own off-site copies included, none of them late, Flux's objects and every certificate in order, and
-# each mesh within the operator's rules, in a session that takes no write; one more pool still fits, and when it passes
-# its quota's warning they alert once, and once more when that clears, as for an exit, a token and a person who left in
-# a mesh, with the change of who can reach what. Its etcd comes back in place from a provider's copy, decrypted off the
-# server, as it was when copied, and Ceph stays healthy.
+# records it, its own off-site copies included, none of them late, Flux's objects and every certificate in order, every
+# edge answering it through the gateway, and each mesh within the operator's rules, in a session that takes no write;
+# one more pool still fits, and when it passes its quota's warning they alert once, and once more when that clears, as
+# for an exit, a token and a person who left in a mesh, with the change of who can reach what. Its etcd comes back in
+# place from a provider's copy, decrypted off the server, as it was when copied, and Ceph stays healthy.
 {
   pkgs,
   module,
@@ -557,9 +558,10 @@ runTest {
       # There's no release to upgrade to here.
       system.autoUpgrade.enable = lib.mkForce false;
 
-      # No name of the tenants' identity hosts resolves here, so suveraen-idm proves it reaches each at the server's
-      # own gateway, under certificates from the test CA, whose root the test puts where suveraen-idm looks for it.
-      suveraen.idm.caFile = "/var/lib/test-ca.pem";
+      # No name of the tenants' hosts resolves here, so suveraen-idm proves it reaches each identity host at the
+      # server's own gateway, and the server's checks each edge, under certificates from the test CA, whose root the
+      # test puts where both look for it.
+      suveraen.cluster.gatewayCA = "/var/lib/test-ca.pem";
       # For the test's own looks into Kanidm, and at the certificates the hosts serve.
       environment.systemPackages = [
         config.suveraen.idm.kanidm
@@ -1562,7 +1564,7 @@ runTest {
           # Each tenant's Kanidm at its public name, which the server reaches through the gateway as anyone does.
           idm = {t: h for h, namespace in passthrough.items() for t in tenants if namespace == f"{t}-kanidm"}
           assert sorted(idm) == tenants, idm
-          kanidm_ca = "${nodes.server.suveraen.idm.caFile}"
+          kanidm_ca = "${nodes.server.suveraen.cluster.gatewayCA}"
           # The test's own requests reach Kanidm as suveraen-idm does, at the server's gateway, as no name of it
           # resolves there: curl by its address, and the client in a mount namespace whose hosts file names it.
           reach = {t: f"--cacert {kanidm_ca} --resolve {h}:443:${server}" for t, h in idm.items()}
@@ -3319,7 +3321,7 @@ runTest {
           # any, each by those it names, so that another finding alerted with them changes nothing here.
           def checks_said(*titles):
               named = "${nodes.server.networking.hostName}: "
-              ours = ("backups ", "Ceph ", "certificate", "cluster status ", "Flux ", "Kanidm ", "STUN ", "mesh ", "still: ")
+              ours = ("backups ", "Ceph ", "certificate", "cluster status ", "edge", "Flux ", "Kanidm ", "STUN ", "mesh ", "still: ")
               heard = []
               for a in alerts():
                   title = a.get("title", "").removeprefix(named)
@@ -3352,7 +3354,7 @@ runTest {
                       refused_at(n, server_keys, f"s3api list-objects-v2 --bucket {bucket_at(n, tenant)}")
                       refused_at(n, keys_of(tenant, n), f"s3api list-objects-v2 --bucket {platform}")
 
-          with subtest("The server finds every backup's last good copy where its controller records it, judges Flux's objects and every certificate, and none is late"):
+          with subtest("The server finds every backup's last good copy where its controller records it, judges Flux's objects and every certificate, reaches every edge through the gateway, and none is late"):
               # When each backup was last good, as the controllers record it, under the name the server gives it.
               def recorded():
                   stores = {(o["metadata"]["namespace"], o["metadata"]["name"]): o for o in items("objectstores")}
@@ -3415,9 +3417,10 @@ runTest {
                   for o in items(plural)
               }
               certificates = {f"certificate {c['metadata']['namespace']}/{c['metadata']['name']}" for c in items("certificates")}
-              assert flux and certificates, (flux, certificates)
+              edges = {f"edge {g['metadata']['name']}" for g in items("gateways") if g["metadata"]["namespace"] == "gateway"}
+              assert flux and certificates and edges, (flux, certificates, edges)
               assert findings.keys() == (
-                  before.keys() | archiving | offsite | identities | stun_findings | mesh_parts | flux | certificates
+                  before.keys() | archiving | offsite | identities | stun_findings | mesh_parts | flux | certificates | edges
                   | {"Ceph status", "cluster status", "etcd-snapshots", "knot-backup"}
               ), findings
               assert all(state == "ok" for state, _ in findings.values()), findings
@@ -3426,6 +3429,8 @@ runTest {
                   key: findings[key] for key in flux
               }
               assert all(findings[key][1].startswith("renews ") for key in certificates), {key: findings[key] for key in certificates}
+              # At each of the server's addresses, through ServiceLB and the gateway.
+              assert all(findings[key][1] == "answered" for key in edges), {key: findings[key] for key in edges}
               # How each tenant's Kanidm ran its migrations as it started, which the checks go by once its log no longer
               # reaches back there.
               judged = json.loads(server.succeed("cat /var/lib/private/host-checks/kanidm-judged.json"))
@@ -3562,21 +3567,55 @@ runTest {
                   ("${nodes.server.networking.hostName}: Ceph healthy again", 3)
               ], checks_said(*ceph_said)[said + 1:]
 
-          with subtest("An app whose copy of its client's secret is wrong reaches the phone once, and so does its sync"):
+          with subtest("An app whose copy of its client's secret is wrong, and one with no pod behind its edges, reach the phone once, and so do their sync and return"):
               sync_said = ["Kanidm clients out of sync", "Kanidm clients in sync again"]
               said = len(checks_said(*sync_said))
+              # First's hello, kept from Flux, which would bring it back within its hour.
+              outage = sorted(
+                  f"edge {g['metadata']['name']}" for g in items("gateways")
+                  if g["metadata"]["name"].startswith(f"{first}-hello-")
+              )
+              unanswered = f"edge unanswered: {len(outage)}" if len(outage) > 1 else "edge unanswered"
+              edges_said = [unanswered, "edges answering again"]
+              edges_before = len(checks_said(*edges_said))
+              merge("flux-system", f"kustomization {first}-hello", {"spec": {"suspend": True}})
+              server.succeed(f"kubectl -n {first}-hello scale deployment hello --replicas=0")
+              for host in hosts_of(first, f"{first}-hello"):
+                  forge.wait_until_succeeds(
+                      f"test $(curl -s -o /dev/null -w '%{{http_code}}' --cacert /tmp/ca.crt --resolve {host}:443:${server}"
+                      f" https://{host}/) -ge 500",
+                      timeout=120,
+                  )
+              # As if the checks had found them unanswered a day ago.
+              since_json = "/var/lib/private/host-checks/since.json"
+              day_ago = int(server.succeed("date +%s")) - 86400
+              first_found = json.loads(server.succeed(f"cat {since_json}")) | {key: day_ago for key in outage}
+              server.succeed(f"echo {shlex.quote(json.dumps(first_found))} > {since_json}")
               set_sso_secret(first, "a" * 48)
               _, findings = host_checks()
               assert findings[f"{first}-kanidm/hello-oidc"][0] == "late", findings
+              assert all(findings[key][0] == "late" for key in outage), {key: findings[key] for key in outage}
               assert checks_said(*sync_said)[said:] == [
                   ("${nodes.server.networking.hostName}: Kanidm clients out of sync", 4)
               ], checks_said(*sync_said)[said:]
+              assert checks_said(*edges_said)[edges_before:] == [
+                  (f"${nodes.server.networking.hostName}: {unanswered}", 4)
+              ], checks_said(*edges_said)[edges_before:]
               server.succeed(f"suveraen-idm sync {first}")
+              server.succeed(f"kubectl -n {first}-hello scale deployment hello --replicas=1")
+              server.succeed(f"kubectl -n {first}-hello rollout status deployment hello --timeout=300s")
+              merge("flux-system", f"kustomization {first}-hello", {"spec": {"suspend": False}})
+              for host in hosts_of(first, f"{first}-hello"):
+                  forge.wait_until_succeeds(f"{fetch(host)} -o /dev/null", timeout=120)
               _, findings = host_checks()
               assert findings[f"{first}-kanidm/hello-oidc"][0] == "ok", findings
+              assert all(findings[key] == ("ok", "answered") for key in outage), {key: findings[key] for key in outage}
               assert checks_said(*sync_said)[said + 1:] == [
                   ("${nodes.server.networking.hostName}: Kanidm clients in sync again", 3)
               ], checks_said(*sync_said)[said + 1:]
+              assert checks_said(*edges_said)[edges_before + 1:] == [
+                  ("${nodes.server.networking.hostName}: edges answering again", 3)
+              ], checks_said(*edges_said)[edges_before + 1:]
 
           with subtest("The standby CA issues too, with our external account there"):
               standby = {

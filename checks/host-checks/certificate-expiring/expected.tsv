@@ -5,6 +5,7 @@ cluster	certificate gateway/alpha-hello-hello	late	5	certificate renewal late	re
 cluster	certificate gateway/short	late	4	certificate renewal late	renewal due 2026-10-20T12:00:00Z (2d 0h ago), grace 1d; expires 2026-10-23T12:00:00Z	certificates renewed	certificates
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
 checks	done

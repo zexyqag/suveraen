@@ -4,6 +4,7 @@ cluster	certificate alpha-kanidm/tls	ok	4	certificate renewal late	renewal due 2
 cluster	certificate gateway/alpha-hello-hello	ok	4	certificate renewal late	renews 2026-11-21T12:00:00Z, expires 2026-12-21T12:00:00Z	certificates renewed	certificates
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
 checks	done

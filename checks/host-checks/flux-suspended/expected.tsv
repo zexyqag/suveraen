@@ -7,6 +7,7 @@ cluster	Flux Kustomization flux-system/tenant-bravo	ok	4	Flux not ready	ready	Fl
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
 since	state	{"Flux Kustomization flux-system/tenant-alpha suspended":1792497600,"Flux Kustomization flux-system/tenant-alpha":1792411200,"Flux HelmRelease alpha-hello/hello suspended":1792666800}

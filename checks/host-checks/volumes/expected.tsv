@@ -15,6 +15,7 @@ cluster	other-hello/offsite-check-1	late	4	backups late	missing, required since 
 cluster	other-hello/offsite-check-2	late	4	backups late	missing, required since 2026-10-22T10:30:00Z (1h 30m ago), grace 1h	backups on time again	backups
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
 checks	done

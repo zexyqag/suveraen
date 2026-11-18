@@ -6,6 +6,7 @@ host	fresh	ok	4	backups late	missing since 2026-10-22T12:00:00Z (0m ago), limit 
 host	probe	late	4	backups late	missing since 2026-10-22T10:00:00Z (2h 0m ago), limit 1h	backups on time again	backups
 host	spool	ok	4	backups late	missing since 2026-10-22T11:30:00Z (30m ago), limit 1h	backups on time again	backups
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
 checks	done

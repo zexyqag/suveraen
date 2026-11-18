@@ -14,6 +14,7 @@ host	cluster status	ok	4	cluster status unreadable	read	cluster status readable 
 host	etcd-snapshots	ok	4	backups late	last 2026-10-22T00:00:00Z (12h 0m ago), limit 13h	backups on time again	backups
 complete	ceph	Ceph 
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
 checks	done

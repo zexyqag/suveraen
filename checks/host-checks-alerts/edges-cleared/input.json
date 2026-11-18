@@ -1,0 +1,133 @@
+{
+  "edges": [
+    {
+      "gateway": "alpha-hello-hello",
+      "listener": "https",
+      "address": "203.0.113.10",
+      "code": 200,
+      "exit": 0
+    },
+    {
+      "gateway": "alpha-hello-hello",
+      "listener": "https",
+      "address": "2001:db8::2",
+      "code": 200,
+      "exit": 0
+    },
+    {
+      "gateway": "alpha-kanidm-idm",
+      "listener": "tls",
+      "address": "203.0.113.10",
+      "code": 302,
+      "exit": 0
+    },
+    {
+      "gateway": "alpha-kanidm-idm",
+      "listener": "tls",
+      "address": "2001:db8::2",
+      "code": 302,
+      "exit": 0
+    }
+  ],
+  "cluster": {
+    "gateways": {
+      "items": [
+        {
+          "metadata": {
+            "name": "alpha-hello-hello",
+            "namespace": "gateway"
+          },
+          "spec": {
+            "listeners": [
+              {
+                "name": "https",
+                "protocol": "HTTPS",
+                "hostname": "hello.example.test",
+                "tls": {
+                  "certificateRefs": [
+                    {
+                      "name": "alpha-hello-hello-tls"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "alpha-kanidm-idm",
+            "namespace": "gateway"
+          },
+          "spec": {
+            "listeners": [
+              {
+                "name": "tls",
+                "protocol": "TLS",
+                "hostname": "idm.one.test",
+                "tls": {
+                  "certificateRefs": null
+                }
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "plain",
+            "namespace": "gateway"
+          },
+          "spec": {
+            "listeners": [
+              {
+                "name": "http",
+                "protocol": "HTTP",
+                "hostname": "plain.example.test"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "certificates": {
+      "items": [
+        {
+          "metadata": {
+            "name": "alpha-hello-hello",
+            "namespace": "gateway",
+            "creationTimestamp": "2026-09-22T12:00:00Z"
+          },
+          "spec": {
+            "secretName": "alpha-hello-hello-tls",
+            "dnsNames": [
+              "hello.example.test"
+            ]
+          },
+          "status": {
+            "notBefore": "2026-09-22T12:00:00Z",
+            "notAfter": "2026-12-21T12:00:00Z",
+            "renewalTime": "2026-11-21T12:00:00Z"
+          }
+        },
+        {
+          "metadata": {
+            "name": "tls",
+            "namespace": "alpha-kanidm",
+            "creationTimestamp": "2026-09-22T12:00:00Z"
+          },
+          "spec": {
+            "secretName": "tls",
+            "dnsNames": [
+              "idm.one.test"
+            ]
+          },
+          "status": {
+            "notBefore": "2026-09-22T12:00:00Z",
+            "notAfter": "2026-12-21T12:00:00Z",
+            "renewalTime": "2026-11-21T12:00:00Z"
+          }
+        }
+      ]
+    }
+  }
+}

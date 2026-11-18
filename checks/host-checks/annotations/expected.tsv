@@ -16,6 +16,7 @@ cluster	young-postgres/postgres WAL archiving	ok	4	backups late	no valid suverae
 cluster	young-postgres/postgres base backup	ok	4	backups late	last 2026-10-22T11:40:00Z (20m ago), limit 8d	backups on time again	backups
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
 checks	done

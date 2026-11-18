@@ -4,6 +4,7 @@ cluster	Flux release	late	4	Flux and the host on different releases	Flux on fedc
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
 since	state	{"Flux release":1792497600}

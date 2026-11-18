@@ -18,6 +18,7 @@ cluster	alpha-netbird tokens	ok	4	mesh tokens outside the rules	no token, every 
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 host	mesh STUN port	late	4	mesh STUN port wrong	the cluster's STUN_PORT is 3478, where this server answers no STUN	mesh STUN port right again	mesh
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
 checks	done

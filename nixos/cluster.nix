@@ -96,10 +96,7 @@ let
   inherit (cfg.nodeServices) resolver;
 
   inherit (cfg) edge stun;
-  webPorts = [
-    80
-    443
-  ];
+  webPorts = lib.attrValues cfg.webPorts;
   edgePorts = lib.concatStringsSep ", " (
     map (port: "tcp . ${toString port}") webPorts
     ++ lib.optional (stun.port != null) "udp . ${toString stun.port}"
@@ -356,6 +353,27 @@ in
         namespace = "flux-system";
       };
       description = "The name and namespace of the Kustomization that applies the release's cluster directory.";
+    };
+
+    webPorts = lib.mkOption {
+      type = lib.types.attrsOf lib.types.port;
+      readOnly = true;
+      internal = true;
+      default = {
+        http = 80;
+        https = 443;
+      };
+      description = "The ports at which the gateway takes the web on the node's addresses: HTTP, which it only redirects, and HTTPS.";
+    };
+
+    gatewayCA = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/var/lib/test-ca.pem";
+      description = ''
+        The CA the certificates the gateway's hosts serve come from, as the server's own clients of them trust it, for
+        a test CA; null for the system's CAs.
+      '';
     };
 
     nodeServices = lib.mkOption {

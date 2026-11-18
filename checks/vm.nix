@@ -16,12 +16,12 @@
 # channel when the watcher is gone, and says there when the watcher's ntfy stops answering; a daily publish the way its
 # alerts go tells the watcher when that way is broken. The server and its Flux only take commits signed by a release
 # signer, the server never goes back to an older one, and it alerts when its configuration, or the nixpkgs its release
-# locks, gets old. The server's checks read how old the backups the cluster records are, Ceph's health, Flux's objects
-# and the certificates with an account that reads nothing else, ask the node's addresses for STUN, and alert once per
-# change, also when the cluster can't be read. Its etcd snapshots reach both providers encrypted to recovery keys, under
-# a prefix its key can neither leave nor empty; with one provider down they still reach the other, and the phone hears
-# of it. Wiped, the server comes back from a provider's copy through its restore command, with its token file alone;
-# another token leaves a running server's own database in place.
+# locks, gets old. The server's checks read how old the backups the cluster records are, Ceph's health, Flux's objects,
+# the certificates and the Gateways with an account that reads nothing else, ask the node's addresses for STUN, and
+# alert once per change, also when the cluster can't be read. Its etcd snapshots reach both providers encrypted to
+# recovery keys, under a prefix its key can neither leave nor empty; with one provider down they still reach the other,
+# and the phone hears of it. Wiped, the server comes back from a provider's copy through its restore command, with its
+# token file alone; another token leaves a running server's own database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -1383,7 +1383,7 @@ pkgs.testers.runNixOSTest {
       def create(obj):
           server.succeed(f"echo {shlex.quote(json.dumps(obj))} | kubectl create -f -")
 
-      with subtest("The servers' checks read the backups', Ceph's, Flux's and the certificates' status and nothing else"):
+      with subtest("The servers' checks read the backups', Ceph's, Flux's, the certificates' and the Gateways' status and nothing else"):
           server.succeed("systemctl start host-checks")
           server.succeed("systemctl show host-checks -p DynamicUser --value | grep -x yes")
           checker = "--as=system:serviceaccount:kube-system:host-checks"
@@ -1400,6 +1400,7 @@ pkgs.testers.runNixOSTest {
               (["helm.toolkit.fluxcd.io"], ["helmreleases"], [], ["list"]),
               (["source.toolkit.fluxcd.io"], ["gitrepositories", "ocirepositories"], [], ["list"]),
               (["cert-manager.io"], ["certificates"], [], ["list"]),
+              (["gateway.networking.k8s.io"], ["gateways"], [], ["list"]),
           ]), rules
           for denied in [
               "list secrets -A",
@@ -1419,7 +1420,7 @@ pkgs.testers.runNixOSTest {
               "list certificaterequests.cert-manager.io -A",
               "list issuers.cert-manager.io -A",
               "list orders.acme.cert-manager.io -A",
-              "list gateways.gateway.networking.k8s.io -A",
+              "get gateways.gateway.networking.k8s.io/probe -n gateway",
               "list httproutes.gateway.networking.k8s.io -A",
           ]:
               server.fail(f"kubectl auth can-i {denied} {checker}")
@@ -1627,6 +1628,7 @@ pkgs.testers.runNixOSTest {
               "/apis/ceph.rook.io/v1/cephclusters", "/apis/kustomize.toolkit.fluxcd.io/v1/kustomizations",
               "/apis/helm.toolkit.fluxcd.io/v2/helmreleases", "/apis/source.toolkit.fluxcd.io/v1/gitrepositories",
               "/apis/source.toolkit.fluxcd.io/v1/ocirepositories", "/apis/cert-manager.io/v1/certificates",
+              "/apis/gateway.networking.k8s.io/v1/namespaces/gateway/gateways",
           ]:
               server.wait_until_succeeds(f"kubectl get --raw {path}", timeout=300)
           server.succeed("systemctl start host-checks")

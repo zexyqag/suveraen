@@ -19,6 +19,15 @@
       "renewalGrace": 86400,
       "urgentShare": 10,
       "issueGrace": 3600
+    },
+    "edges": {
+      "addresses": [
+        "203.0.113.10",
+        "2001:db8::2"
+      ],
+      "unansweredAfter": 1800,
+      "maxTime": 15,
+      "cap": 25
     }
   },
   "files": {},

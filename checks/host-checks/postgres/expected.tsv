@@ -22,6 +22,7 @@ cluster	quiet-postgres/postgres WAL archiving	late	4	backups late	not reported s
 cluster	quiet-postgres/postgres base backup	late	4	backups late	no ObjectStore postgres, required since 2026-10-22T10:00:00Z (2h 0m ago), grace 1h	backups on time again	backups
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
 checks	done

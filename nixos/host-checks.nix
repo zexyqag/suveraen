@@ -1,8 +1,8 @@
 # Every server checks, from the status the controllers record and with an account that may read little else, how old
 # each tenant's WAL archiving, base backups, off-site copies, checks and volume copies are against what their templates
 # allow (suveraen/max-age), how old its own backup files are, and Ceph's health; whether Flux's objects are ready and
-# applied the release the server runs, and cert-manager renews every certificate in time; whether its own addresses
-# answer STUN;
+# applied the release the server runs, cert-manager renews every certificate in time, and each of the gateway's edges
+# answers the server through the gateway; whether its own addresses answer STUN;
 # and as root, with no credential, each tenant's Kanidm (suveraen-idm check, idm.nix) and each tenant's mesh against
 # the operator's rules (suveraen-mesh check, mesh.nix). It alerts once when that changes, again while it lasts, and
 # when it can't read the cluster or check every tenant's Kanidm and mesh, and notes each change of who can reach what in
@@ -16,14 +16,18 @@
 let
   cfg = config.suveraen.checks;
   alert = lib.getExe config.suveraen.alerts.command;
-  inherit (config.suveraen.cluster) nodeIP stun;
+  inherit (config.suveraen.cluster) nodeIP stun gatewayCA;
+  port = config.suveraen.cluster.webPorts.https;
   # How long a STUN binding request may wait for its answer.
   stunSeconds = 5;
   stunProbes = if stun.port == null then 0 else lib.length nodeIP;
   # What the checks keep from one run to the next, by the name systemd keeps it under.
   state = "host-checks";
-  # Room for STUN's answers, suveraen-idm and suveraen-mesh check, and suveraen-alert to try both channels.
-  timeout = stunSeconds * stunProbes + 2 * config.suveraen.alerts.retrySeconds + 540;
+  # The edges are asked all at once, each for no longer than maxTime: room to start them all.
+  edgeCap = cfg.edges.maxTime + 10;
+  ca = if gatewayCA == null then config.security.pki.caBundle else gatewayCA;
+  # Room for STUN's answers, suveraen-idm and suveraen-mesh check, the edges', and suveraen-alert to try both channels.
+  timeout = stunSeconds * stunProbes + edgeCap + 2 * config.suveraen.alerts.retrySeconds + 540;
   bootDelay = 600;
 
   duration = lib.types.strMatching "[1-9][0-9]*[mhd]";
@@ -117,6 +121,12 @@ let
         # cert-manager issues within minutes; one with no certificate an hour after it was made failed to.
         issueGrace = 3600;
       };
+      edges = {
+        addresses = nodeIP;
+        unansweredAfter = seconds cfg.edges.unansweredAfter;
+        inherit (cfg.edges) maxTime;
+        cap = edgeCap;
+      };
     }
   );
 
@@ -140,6 +150,39 @@ let
         jq -n --arg address "$address" --arg why "$why" \
           '{($address): (if $why == "" then {answered: true} else {answered: false, $why} end)}'
       done | jq -s 'add' >"$RUNTIME_DIRECTORY/stun.json"
+    '';
+  };
+
+  # Run after read, as the check: each HTTPS or TLS listener of the gateway's Gateways, asked for its host at each of the
+  # node's addresses, through the gateway's own Service, all at once. curl's errors name the host, so they go nowhere;
+  # what each answered is kept by Gateway and listener.
+  edgeProbe = pkgs.writeShellApplication {
+    name = "host-checks-edges";
+    runtimeInputs = [
+      pkgs.curl
+      pkgs.jq
+    ];
+    text = ''
+      run=$RUNTIME_DIRECTORY
+      [ -s "$run/gateways.json" ] || exit 0
+      jq -r '.items // [] | .[] | .metadata.name as $gateway | .spec.listeners[]?
+        | select((.protocol == "HTTPS" or .protocol == "TLS") and .hostname != null) | [$gateway, .name, .hostname]
+        | @tsv' "$run/gateways.json" | {
+        while IFS=$'\t' read -r gateway listener host; do
+          for address in ${lib.escapeShellArgs nodeIP}; do
+            (
+              at=$address
+              if [[ $at == *:* ]]; then at="[$at]"; fi
+              status=0
+              code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout ${toString cfg.edges.connectTimeout} \
+                --max-time ${toString cfg.edges.maxTime} --cacert ${lib.escapeShellArg ca} \
+                --resolve "$host:${toString port}:$at" "https://$host:${toString port}/" 2>/dev/null) || status=$?
+              printf '%s\t%s\t%s\t%s\t%s\n' "$gateway" "$listener" "$address" "$code" "$status" >>"$run/edges.tsv"
+            ) &
+          done
+        done
+        wait
+      }
     '';
   };
 
@@ -228,6 +271,7 @@ let
       get /apis/source.toolkit.fluxcd.io/v1/gitrepositories "$run/gitrepositories.json"
       get /apis/source.toolkit.fluxcd.io/v1/ocirepositories "$run/ocirepositories.json"
       get /apis/cert-manager.io/v1/certificates "$run/certificates.json"
+      get /apis/gateway.networking.k8s.io/v1/namespaces/gateway/gateways "$run/gateways.json"
       : >"$run/cronjobs.json"
       cronjobs() {
         for ns in $(jq -r '.items // [] | map(.metadata.namespace) | unique[]' "$1"); do
@@ -245,11 +289,11 @@ let
 
       args=()
       for part in nodes clusters objectstores pvcs replicationsources cephcluster kustomizations helmreleases \
-        gitrepositories ocirepositories certificates cronjobs idm mesh; do
+        gitrepositories ocirepositories certificates gateways cronjobs idm mesh; do
         args+=(--slurpfile "$part" "$run/$part.json")
       done
-      # Of Flux's objects and certificates, only what the checks judge: a chart's values and a condition's message can
-      # hold anything the release gives them.
+      # Of Flux's objects, certificates and Gateways, only what the checks judge: a chart's values and a condition's
+      # message can hold anything the release gives them.
       jq -n "''${args[@]}" '
         def listed(f): if . == null then null else {items: [.items[] | f]} end;
         def flux: {metadata: (.metadata | {name, namespace}), spec: (.spec | {suspend, dependsOn}),
@@ -260,7 +304,9 @@ let
           kustomizations: ($kustomizations[0] | listed(flux)), helmreleases: ($helmreleases[0] | listed(flux)),
           gitrepositories: ($gitrepositories[0] | listed(flux)), ocirepositories: ($ocirepositories[0] | listed(flux)),
           certificates: ($certificates[0] | listed({metadata: (.metadata | {name, namespace, creationTimestamp}),
-            status: (.status // {} | {notBefore, notAfter, renewalTime})})),
+            spec: (.spec | {secretName, dnsNames}), status: (.status // {} | {notBefore, notAfter, renewalTime})})),
+          gateways: ($gateways[0] | listed({metadata: (.metadata | {name, namespace}),
+            spec: {listeners: [.spec.listeners[]? | {name, protocol, hostname, tls: (.tls // {} | {certificateRefs})}]}})),
           cronjobs: ($cronjobs | add // {}), idm: $idm[0], mesh: $mesh[0]}' >"$run/cluster.json"
     '';
   };
@@ -301,14 +347,17 @@ let
       [ -e "$state/mesh.json" ] || echo '{}' >"$state/mesh.json"
       [ -e "$state/since.json" ] || echo '{}' >"$state/since.json"
       [ -e "$run/stun.json" ] || echo '{}' >"$run/stun.json"
+      [ -e "$run/edges.tsv" ] || : >"$run/edges.tsv"
       # The release this host's upgrade resolved last, if it has yet.
       revision=$(cat ${config.suveraen.upgrade.revisionFile} 2>/dev/null || true)
       findings=$(jq -n --argjson now "$now" --slurpfile spec ${spec} --argjson files "$files" \
-        --slurpfile stun "$run/stun.json" --arg revision "$revision" \
+        --slurpfile stun "$run/stun.json" --rawfile edges "$run/edges.tsv" --arg revision "$revision" \
         --slurpfile seen "$state/first-seen.json" --argjson read "$(<"$state/last-read")" \
         --slurpfile judged "$state/kanidm-judged.json" \
         --slurpfile mesh "$state/mesh.json" --slurpfile since "$state/since.json" --slurpfile cluster "$cluster" \
         '{$now, spec: $spec[0], $files, stun: $stun[0], cluster: $cluster[0],
+          edges: [$edges | split("\n")[] | select(. != "") | split("\t")
+            | {gateway: .[0], listener: .[1], address: .[2], code: (.[3] | tonumber), exit: (.[4] | tonumber)}],
           revision: (if $revision == "" then null else $revision end),
           state: {lastRead: $read, firstSeen: $seen[0], kanidmJudged: $judged[0],
             mesh: $mesh[0], since: $since[0]}}' \
@@ -431,6 +480,29 @@ in
       };
     };
 
+    edges = {
+      unansweredAfter = lib.mkOption {
+        type = duration;
+        default = "30m";
+        description = "How long one of the gateway's edges may go unanswered before it alerts.";
+      };
+
+      connectTimeout = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 5;
+        description = "How many seconds asking an edge may wait for its connection.";
+      };
+
+      maxTime = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 15;
+        description = ''
+          How many seconds asking an edge may take in all. The edges are asked all at once, so the checks take about
+          this long longer.
+        '';
+      };
+    };
+
     families = lib.mkOption {
       type = lib.types.attrsOf lib.types.path;
       default = { };
@@ -500,6 +572,7 @@ in
       backups = ./host-checks/backups.jq;
       ceph = ./host-checks/ceph.jq;
       certificates = ./host-checks/certificates.jq;
+      edges = ./host-checks/edges.jq;
       flux = ./host-checks/flux.jq;
       kanidm = ./host-checks/kanidm.jq;
       mesh = ./host-checks/mesh.jq;
@@ -587,6 +660,12 @@ in
             resources = [ "certificates" ];
             verbs = [ "list" ];
           }
+          # Read in the gateway's namespace alone, the only one the edge-objects policy lets hold Gateways.
+          {
+            apiGroups = [ "gateway.networking.k8s.io" ];
+            resources = [ "gateways" ];
+            verbs = [ "list" ];
+          }
         ];
       }
       {
@@ -609,7 +688,7 @@ in
     ];
 
     systemd.services.host-checks = {
-      description = "Check how old the backups are, Ceph's health, Flux and the certificates";
+      description = "Check how old the backups are, Ceph's health, Flux, the certificates and the edges";
       # Not ordered after k3s: one that never gets ready would hold the check back with it, where prepare and read
       # report it as unreadable.
       serviceConfig = {
@@ -630,7 +709,11 @@ in
           "+${lib.getExe (told "mesh" config.suveraen.mesh.command)}"
         ];
         ExecStart = lib.getExe read;
-        ExecStartPost = "+${lib.getExe report}";
+        # Whatever the edges answer, or don't, within the cap, the report judges.
+        ExecStartPost = [
+          "-${pkgs.coreutils}/bin/timeout ${toString edgeCap} ${lib.getExe edgeProbe}"
+          "+${lib.getExe report}"
+        ];
       };
     };
     # What the checks keep names people of the tenants' meshes, and goes with the findings, not with the snapshots of

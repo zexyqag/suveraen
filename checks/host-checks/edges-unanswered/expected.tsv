@@ -1,0 +1,15 @@
+cluster	evaluated
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+cluster	certificate alpha-netbird/tls	ok	4	certificate renewal late	renews 2026-11-21T12:00:00Z, expires 2026-12-21T12:00:00Z	certificates renewed	certificates
+cluster	certificate gateway/alpha-hello-hello	ok	4	certificate renewal late	renews 2026-11-21T12:00:00Z, expires 2026-12-21T12:00:00Z	certificates renewed	certificates
+cluster	certificate gateway/bravo-hello-hello	ok	4	certificate renewal late	renews 2026-11-21T12:00:00Z, expires 2026-12-21T12:00:00Z	certificates renewed	certificates
+cluster	edge alpha-hello-hello	late	4	edge unanswered	unanswered since 2026-10-22T11:00:00Z (1h 0m ago), limit 30m: https over IPv4: HTTP 503; https over IPv6: HTTP 503	edges answering again	edges
+cluster	edge alpha-netbird-netbird	ok	4	edge unanswered	unanswered since 2026-10-22T12:00:00Z (0m ago), limit 30m: tls over IPv4: no connection; tls over IPv6: no answer within 25s	edges answering again	edges
+cluster	edge bravo-hello-hello	ok	4	edge unanswered	unanswered since 2026-10-22T11:50:00Z (10m ago), limit 30m: https over IPv6: no answer within 15s	edges answering again	edges
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+complete	certificates	certificate 
+complete	edges	edge 
+complete	flux	Flux 
+kanidm	judged	{}
+since	state	{"edge alpha-hello-hello":1792666800,"edge bravo-hello-hello":1792669800,"edge alpha-netbird-netbird":1792670400}
+checks	done

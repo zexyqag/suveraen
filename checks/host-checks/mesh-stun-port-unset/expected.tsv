@@ -19,6 +19,7 @@ host	STUN 203.0.113.10	ok	4	STUN unanswered	answered on UDP 3478	STUN answered a
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 host	mesh STUN port	late	4	mesh STUN port wrong	the cluster's settings name no STUN_PORT	mesh STUN port right again	mesh
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
 checks	done

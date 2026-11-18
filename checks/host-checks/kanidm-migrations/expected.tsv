@@ -21,6 +21,7 @@ cluster	fable-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled	
 cluster	fable-kanidm migrations	late	4	Kanidm migrations failed	as it started: 1 changes skipped to entries it may not see	Kanidm migrations applied again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 complete	certificates	certificate 
+complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{"alpha":{"started":"2026-10-01T08:00:00Z","migrations":{"version":"1.11.2","upgrade":null,"failed":[],"denied":0},"upgrade":[]},"bravo":{"started":"2026-10-20T08:00:00Z","migrations":{"version":"1.11.2","upgrade":null,"failed":["11-obj.json: AccessDenied"],"denied":0},"upgrade":[]},"corgi":{"started":"2026-10-01T08:00:00Z","migrations":{"version":"1.11.2","upgrade":null,"failed":[],"denied":0},"upgrade":[]},"eagle":{"started":"2026-10-01T08:00:00Z","migrations":{"version":"1.11.2","upgrade":null,"failed":[],"denied":0},"upgrade":[]},"fable":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.11.2","upgrade":null,"failed":[],"denied":1},"upgrade":[]}}
 since	state	{"Kanidm check":1792670400}

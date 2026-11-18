@@ -19,6 +19,7 @@
 }:
 let
   cfg = config.suveraen.idm;
+  inherit (config.suveraen.cluster) gatewayCA;
 
   idm = pkgs.writeShellApplication {
     name = "suveraen-idm";
@@ -33,7 +34,7 @@ let
     ];
     text = ''
       run=/run/suveraen-idm
-      cacert=${lib.escapeShellArg (if cfg.caFile == null then "" else cfg.caFile)}
+      cacert=${lib.escapeShellArg (if gatewayCA == null then "" else gatewayCA)}
       gateway=${lib.escapeShellArg (lib.head config.suveraen.cluster.nodeIP)}
       logscan=${./idm-migrations.jq}
       idscan=${./idm-ids.jq}
@@ -52,13 +53,6 @@ in
         The Kanidm client suveraen-idm runs. A client must match its server's version, so every tenant's Kanidm runs
         this one's (checks/render.sh).
       '';
-    };
-
-    caFile = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      example = "/var/lib/test-ca.pem";
-      description = "The CA the tenants' Kanidm certificates come from, for a test CA; null for the system's CAs.";
     };
 
     command = lib.mkOption {
