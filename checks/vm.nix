@@ -19,10 +19,11 @@
 # locks, gets old. The server keeps its metrics on loopback behind a password, and its daemons reach nothing else. The
 # server's checks read how old the backups the cluster records are, Ceph's health, Flux's objects, the certificates and
 # the Gateways with an account that reads nothing else, ask the node's addresses for STUN, read what the rules on its
-# metrics find, and alert once per change, also when the cluster or the rules can't be read. Its etcd snapshots reach
-# both providers encrypted to recovery keys, under a prefix its key can neither leave nor empty; with one provider down
-# they still reach the other, and the phone hears of it. Wiped, the server comes back from a provider's copy through its
-# restore command, with its token file alone; another token leaves a running server's own database in place.
+# metrics find, such as a failed unit, and alert once per change, also when the cluster or the rules can't be read. Its
+# etcd snapshots reach both providers encrypted to recovery keys, under a prefix its key can neither leave nor empty;
+# with one provider down they still reach the other, and the phone hears of it. Wiped, the server comes back from a
+# provider's copy through its restore command, with its token file alone; another token leaves a running server's own
+# database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -324,6 +325,11 @@ pkgs.testers.runNixOSTest {
           checks.files.probe = {
             path = "/var/lib/backup-probe";
             maxAge = "1h";
+          };
+          # So that what the rules find comes, and goes, within minutes.
+          metrics = {
+            interval = "15s";
+            holdFor = "1m";
           };
           offsite = {
             recipients = [ keys.snakeOilEd25519PublicKey ];
@@ -1689,6 +1695,28 @@ pkgs.testers.runNixOSTest {
           )
           server.succeed("systemctl start host-checks")
           [back] = sent("metric rules checked again")
+          assert back.get("priority", 3) == 3, back
+
+      # What a rule on the server's metrics finds now: each alert's state and key.
+      def found_by(rule):
+          out = server.succeed(
+              f"suveraen-metrics check | jq -c --arg rule {shlex.quote(rule)}"
+              " '.rules[] | select(.name == $rule) | .alerts[] | {state, key: .annotations.key}'"
+          )
+          return [json.loads(line) for line in out.splitlines()]
+
+      with subtest("A failed unit reaches the phone once, and so does its reset"):
+          server.succeed("systemd-run --unit=probe false")
+          retry(lambda _: {"state": "firing", "key": "probe.service"} in found_by("units failed"), timeout_seconds=300)
+          server.succeed("systemctl start host-checks")
+          [failed] = sent("units failed")
+          assert keys(failed["message"]) == {"New:", "metric units failed probe.service"}, failed
+          server.succeed("systemctl start host-checks")
+          assert len(sent("units failed")) == 1
+          server.succeed("systemctl reset-failed probe")
+          retry(lambda _: found_by("units failed") == [], timeout_seconds=300)
+          server.succeed("systemctl start host-checks")
+          [back] = sent("units no longer failed")
           assert back.get("priority", 3) == 3, back
 
       snapshots = "/var/lib/rancher/k3s/server/db/snapshots"

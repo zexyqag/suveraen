@@ -1,0 +1,194 @@
+# The node's own rules (nixos/metrics.nix): units that fail without alerting by themselves, or keep restarting, memory
+# running out, OOM kills and the connection table filling; and a family no longer in what the node's target gives.
+rule_files:
+  - rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'node_systemd_unit_state{job="node", instance="127.0.0.1:9100", name="coturn.service", state="failed", type="simple"}'
+        values: '0x5 1x60 0x30'
+      # Two connections of a socket's, whose instance names the address it came from.
+      - series: 'node_systemd_unit_state{job="node", instance="127.0.0.1:9100", name="sshd@3-192.0.2.1:22-198.51.100.7:51234.service", state="failed", type="simple"}'
+        values: '1x100'
+      - series: 'node_systemd_unit_state{job="node", instance="127.0.0.1:9100", name="sshd@4-192.0.2.1:22-198.51.100.8:40000.service", state="failed", type="simple"}'
+        values: '1x100'
+      # Units that alert by themselves when they fail, and their alerts.
+      - series: 'node_systemd_unit_state{job="node", instance="127.0.0.1:9100", name="host-checks.service", state="failed", type="oneshot"}'
+        values: '1x60'
+      - series: 'node_systemd_unit_state{job="node", instance="127.0.0.1:9100", name="alert@host-checks.service.service", state="failed", type="oneshot"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 15m
+        groupname: metrics
+        alertname: units failed
+        exp_alerts:
+          - &sshd
+            exp_labels: {name: sshd@, priority: "4"}
+            exp_annotations:
+              title: units failed
+              cleared: units no longer failed
+              detail: in the failed state
+              key: sshd@
+              inputs: node node_systemd_unit_state
+      - eval_time: 30m
+        groupname: metrics
+        alertname: units failed
+        exp_alerts:
+          - &coturn
+            exp_labels: {name: coturn.service, priority: "4"}
+            exp_annotations:
+              title: units failed
+              cleared: units no longer failed
+              detail: in the failed state
+              key: coturn.service
+              inputs: node node_systemd_unit_state
+          - *sshd
+      # It stands for as long again as it is held for once the unit is reset.
+      - eval_time: 75m
+        groupname: metrics
+        alertname: units failed
+        exp_alerts: [*coturn, *sshd]
+      - eval_time: 85m
+        groupname: metrics
+        alertname: units failed
+        exp_alerts: [*sshd]
+  - interval: 1m
+    input_series:
+      # Restarted three times within the hour, then not again.
+      - series: 'node_systemd_service_restart_total{job="node", instance="127.0.0.1:9100", name="k3s.service"}'
+        values: '0x5 1x5 2x5 3x120'
+      - series: 'node_systemd_service_restart_total{job="node", instance="127.0.0.1:9100", name="coturn.service"}'
+        values: '0x5 1x5 2x120'
+    alert_rule_test:
+      - eval_time: 40m
+        groupname: metrics
+        alertname: units restarting
+        exp_alerts:
+          - &restarting
+            exp_labels: {name: k3s.service, priority: "4"}
+            exp_annotations:
+              title: units restarting
+              cleared: units no longer restarting
+              detail: restarted 3 times in the last hour
+              key: k3s.service
+              inputs: node node_systemd_service_restart_total
+      - eval_time: 100m
+        groupname: metrics
+        alertname: units restarting
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'node_memory_MemTotal_bytes{job="node", instance="127.0.0.1:9100"}'
+        values: '10000000000x60'
+      - series: 'node_memory_MemAvailable_bytes{job="node", instance="127.0.0.1:9100"}'
+        values: '2000000000x10 500000000x50'
+      # Stalled 1.2 seconds a minute: 2% of the time.
+      - series: 'node_pressure_memory_stalled_seconds_total{job="node", instance="127.0.0.1:9100"}'
+        values: '0x10 0+1.2x50'
+    alert_rule_test:
+      - eval_time: 20m
+        groupname: metrics
+        alertname: memory low
+        exp_alerts: []
+      - eval_time: 30m
+        groupname: metrics
+        alertname: memory low
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, priority: "4"}
+            exp_annotations:
+              title: memory low
+              cleared: memory available again
+              detail: 5% of memory available
+              inputs: node node_memory_MemAvailable_bytes node_memory_MemTotal_bytes
+      - eval_time: 45m
+        groupname: metrics
+        alertname: memory stalled
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, priority: "4"}
+            exp_annotations:
+              title: memory stalled
+              cleared: memory no longer stalled
+              detail: every task waited on memory 2% of the last 15 minutes
+              inputs: node node_pressure_memory_stalled_seconds_total
+  - interval: 1m
+    input_series:
+      - series: 'node_vmstat_oom_kill{job="node", instance="127.0.0.1:9100"}'
+        values: '0x10 1x150'
+      - series: 'node_nf_conntrack_entries_limit{job="node", instance="127.0.0.1:9100"}'
+        values: '262144x60'
+      - series: 'node_nf_conntrack_entries{job="node", instance="127.0.0.1:9100"}'
+        values: '1000x10 200000x50'
+    alert_rule_test:
+      - eval_time: 30m
+        groupname: metrics
+        alertname: OOM kills
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, priority: "4"}
+            exp_annotations:
+              title: OOM kills
+              cleared: no more OOM kills
+              detail: the kernel killed 1 for want of memory in the last hour
+              inputs: node node_vmstat_oom_kill
+      # An hour after the kill, and as long again as it is held for.
+      - eval_time: 90m
+        groupname: metrics
+        alertname: OOM kills
+        exp_alerts: []
+      - eval_time: 30m
+        groupname: metrics
+        alertname: connection table filling
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, priority: "4"}
+            exp_annotations:
+              title: connection table filling
+              cleared: connection table has room again
+              detail: 76.29% of the connection table in use
+              inputs: node node_nf_conntrack_entries node_nf_conntrack_entries_limit
+  - interval: 1m
+    input_series:
+      # The node's target answers, without one of the families the rules read.
+      - series: 'up{job="node", instance="127.0.0.1:9100"}'
+        values: '1x60'
+      - series: 'node_systemd_unit_state{job="node", instance="127.0.0.1:9100", name="coturn.service", state="failed", type="simple"}'
+        values: '0x60'
+      - series: 'node_systemd_service_restart_total{job="node", instance="127.0.0.1:9100", name="coturn.service"}'
+        values: '0x60'
+      - series: 'node_memory_MemTotal_bytes{job="node", instance="127.0.0.1:9100"}'
+        values: '10000000000x60'
+      - series: 'node_memory_MemAvailable_bytes{job="node", instance="127.0.0.1:9100"}'
+        values: '5000000000x60'
+      - series: 'node_vmstat_oom_kill{job="node", instance="127.0.0.1:9100"}'
+        values: '0x60'
+      - series: 'node_nf_conntrack_entries_limit{job="node", instance="127.0.0.1:9100"}'
+        values: '262144x60'
+      - series: 'node_nf_conntrack_entries{job="node", instance="127.0.0.1:9100"}'
+        values: '1000x60'
+    alert_rule_test:
+      - eval_time: 20m
+        groupname: metrics
+        alertname: inputs missing
+        exp_alerts: []
+      - eval_time: 40m
+        groupname: metrics
+        alertname: inputs missing
+        exp_alerts:
+          - &missing
+            exp_labels: {job: node, family: node_pressure_memory_stalled_seconds_total, priority: "4"}
+            exp_annotations:
+              title: metric inputs missing
+              cleared: metric inputs back
+              detail: absent while its source answers, so no rule reading it can fire
+              key: node_pressure_memory_stalled_seconds_total
+              inputs: node
+              lost: node_pressure_memory_stalled_seconds_total
+  - interval: 1m
+    input_series:
+      # A target that doesn't answer is down, and its families aren't missing.
+      - series: 'up{job="node", instance="127.0.0.1:9100"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        groupname: metrics
+        alertname: inputs missing
+        exp_alerts: []

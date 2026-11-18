@@ -179,6 +179,13 @@ let
     '';
   };
 
+  # Units that alert when they fail, and their alerts, which a failed unit doesn't alert again for.
+  alerted = "(${
+    lib.concatMapStringsSep "|" lib.escapeRegex (lib.unique config.suveraen.alerts.units)
+  })\\.service|alert@.+";
+  # A unit by its name, but for an instance's, such as a socket's connection, which could name an address.
+  unit = series: ''label_replace(${series}, "name", "$1@", "name", "([^@]+)@.*")'';
+
   # Every daemon here reaches nothing beyond the host's loopback.
   confined = {
     IPAddressDeny = "any";
@@ -237,8 +244,7 @@ in
               '';
             };
             keep = lib.mkOption {
-              type = lib.types.listOf lib.types.str;
-              default = [ ];
+              type = lib.types.nonEmptyListOf lib.types.str;
               example = [ ''node_systemd_unit_state{state="failed"}'' ];
               description = "The series it keeps, by selectors; every family they name is one a rule reads.";
             };
@@ -430,18 +436,10 @@ in
           // {
             job_name = job;
             metric_relabel_configs = [
-              (
-                if j.keep == [ ] then
-                  {
-                    action = "drop";
-                    "if" = ''{__name__!=""}'';
-                  }
-                else
-                  {
-                    action = "keep";
-                    "if" = j.keep;
-                  }
-              )
+              {
+                action = "keep";
+                "if" = j.keep;
+              }
             ];
           }
         ) cfg.jobs;
@@ -502,10 +500,17 @@ in
       };
     };
 
-    # Nothing but what a rule reads.
+    # Nothing but what a rule reads: these collectors for the node's own rules below.
     services.prometheus.exporters.node = {
       enable = true;
       listenAddress = "127.0.0.1";
+      enabledCollectors = [
+        "systemd"
+        "meminfo"
+        "pressure"
+        "vmstat"
+        "conntrack"
+      ];
       # Off already; the module confines the exporter further for these.
       disabledCollectors = [
         "netdev"
@@ -513,6 +518,7 @@ in
       ];
       extraFlags = [
         "--collector.disable-defaults"
+        "--collector.systemd.enable-restarts-metrics"
         "--web.config.file=%d/web.yml"
       ];
     };
@@ -522,6 +528,72 @@ in
       serviceConfig = confined // {
         LoadCredential = [ "web.yml:${nodeWebConfig}" ];
         MemoryMax = "128M";
+      };
+    };
+
+    # The node's own: units that fail without alerting by themselves, or keep restarting, memory running out, the
+    # kernel killing for it, and the connection table filling, which drops connections for everyone.
+    suveraen.metrics.jobs.node.labels = [ "name" ];
+    suveraen.metrics.jobs.node.keep = [
+      ''node_systemd_unit_state{state="failed"}''
+      "node_systemd_service_restart_total"
+      "node_memory_MemAvailable_bytes"
+      "node_memory_MemTotal_bytes"
+      "node_pressure_memory_stalled_seconds_total"
+      "node_vmstat_oom_kill"
+      "node_nf_conntrack_entries"
+      "node_nf_conntrack_entries_limit"
+    ];
+    suveraen.metrics.rules = {
+      "units failed" = {
+        expr = "max by (name) (${unit ''node_systemd_unit_state{state="failed", name!~`${alerted}`}''}) == 1";
+        title = "units failed";
+        cleared = "units no longer failed";
+        detail = "in the failed state";
+        key = [ "name" ];
+        reads = [ "node_systemd_unit_state" ];
+      };
+      "units restarting" = {
+        expr = "max by (name) (${unit "increase(node_systemd_service_restart_total[1h])"}) >= 3";
+        title = "units restarting";
+        cleared = "units no longer restarting";
+        detail = "restarted {{ $value | humanize }} times in the last hour";
+        key = [ "name" ];
+        reads = [ "node_systemd_service_restart_total" ];
+      };
+      "memory low" = {
+        expr = "node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.1";
+        title = "memory low";
+        cleared = "memory available again";
+        detail = "{{ $value | humanizePercentage }} of memory available";
+        reads = [
+          "node_memory_MemAvailable_bytes"
+          "node_memory_MemTotal_bytes"
+        ];
+      };
+      "memory stalled" = {
+        expr = "rate(node_pressure_memory_stalled_seconds_total[15m]) > 0.01";
+        title = "memory stalled";
+        cleared = "memory no longer stalled";
+        detail = "every task waited on memory {{ $value | humanizePercentage }} of the last 15 minutes";
+        reads = [ "node_pressure_memory_stalled_seconds_total" ];
+      };
+      "OOM kills" = {
+        expr = "increase(node_vmstat_oom_kill[1h]) > 0";
+        title = "OOM kills";
+        cleared = "no more OOM kills";
+        detail = "the kernel killed {{ $value | humanize }} for want of memory in the last hour";
+        reads = [ "node_vmstat_oom_kill" ];
+      };
+      "connection table filling" = {
+        expr = "node_nf_conntrack_entries / node_nf_conntrack_entries_limit > 0.75";
+        title = "connection table filling";
+        cleared = "connection table has room again";
+        detail = "{{ $value | humanizePercentage }} of the connection table in use";
+        reads = [
+          "node_nf_conntrack_entries"
+          "node_nf_conntrack_entries_limit"
+        ];
       };
     };
 
