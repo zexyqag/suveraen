@@ -106,6 +106,15 @@ in
       description = "How long to keep retrying a channel, enough to ride out the watcher's own reboot.";
     };
 
+    probeTopic = lib.mkOption {
+      type = lib.types.strMatching "[A-Za-z0-9_-]+";
+      default = "probe";
+      description = ''
+        The topic, beside the alerts' on the first channel's ntfy, that a host with a heartbeat publishes to once a day
+        as an alert would, which no phone follows.
+      '';
+    };
+
     smart = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -228,7 +237,11 @@ in
           booted=$(< /run/heartbeat/booted)
           now=$(date +%s)
           errors=()
-          if [ -e ${undelivered} ]; then errors+=("alerts not delivered"); fi
+          if [ -e ${undelivered} ]; then
+            errors+=("alerts not delivered")
+            # No alert may come to clear it.
+            if [ $(( now - $(stat -c %Y ${undelivered}) )) -gt 3600 ]; then systemctl start --no-block alert-probe; fi
+          fi
           ${lib.concatStrings (
             lib.mapAttrsToList (name: stamp: ''
               at=$(stat -c %Y ${lib.escapeShellArg stamp.path} 2>/dev/null || echo 0)
@@ -287,7 +300,34 @@ in
           AccuracySec = "1s";
         };
       };
-      suveraen.alerts.units = [ "heartbeat" ];
+
+      # The way an alert takes, from this host's token to a topic of the watcher's ntfy, can break unseen while there
+      # is nothing to alert, so this goes that way once a day, to a topic no phone follows, and the heartbeat reports
+      # it when it gets nowhere, and has it go again hourly until it gets through.
+      systemd.services.alert-probe = {
+        description = "Publish as an alert would, to a topic no phone follows";
+        startAt = "daily";
+        path = [ pkgs.curl ];
+        serviceConfig.Type = "oneshot";
+        script = ''
+          if url=$(< ${lib.escapeShellArg cfg.urlFile}) && ${authorized cfg.tokenFile} -fsS --connect-timeout 10 \
+            --max-time 30 --retry 10 --retry-all-errors --retry-max-time ${toString cfg.retrySeconds} \
+            -H "Title: ${config.networking.hostName}: alerts get through" -H "Priority: 1" \
+            --data-binary "Published once a day, the way alerts go." "''${url%/*}/${cfg.probeTopic}"; then
+            rm -f ${undelivered}
+          else
+            echo "The probe got nowhere."
+            mkdir -p "$(dirname ${undelivered})"
+            date > ${undelivered}
+          fi
+        '';
+      };
+      systemd.timers.alert-probe.timerConfig.Persistent = true;
+
+      suveraen.alerts.units = [
+        "heartbeat"
+        "alert-probe"
+      ];
     })
   ];
 }

@@ -13,14 +13,14 @@
 # clocks use NTS. The watcher's ntfy only takes known publishers and keeps its account API, stats and attachments
 # closed; the server's alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops, when its
 # checks do and while its boot-time SSH port is open, and says when each ends; and the server falls back to a second
-# channel when the watcher is gone, and says there when the watcher's ntfy stops answering. The server and its Flux only
-# take commits signed by a release signer, the server never goes back to an older one, and it alerts when its
-# configuration gets old. The server's checks read how old the backups the cluster records are and Ceph's health with an
-# account that reads nothing else, ask the node's addresses for STUN, and alert once per change, also when the cluster
-# can't be read. Its etcd snapshots reach both providers encrypted to recovery keys, under a prefix its key can neither
-# leave nor empty; with one provider down they still reach the other, and the phone hears of it. Wiped, the server comes
-# back from a provider's copy through its restore command, with its token file alone; another token leaves a running
-# server's own database in place.
+# channel when the watcher is gone, and says there when the watcher's ntfy stops answering; a daily publish the way its
+# alerts go tells the watcher when that way is broken. The server and its Flux only take commits signed by a release
+# signer, the server never goes back to an older one, and it alerts when its configuration gets old. The server's checks
+# read how old the backups the cluster records are and Ceph's health with an account that reads nothing else, ask the
+# node's addresses for STUN, and alert once per change, also when the cluster can't be read. Its etcd snapshots reach
+# both providers encrypted to recovery keys, under a prefix its key can neither leave nor empty; with one provider down
+# they still reach the other, and the phone hears of it. Wiped, the server comes back from a provider's copy through its
+# restore command, with its token file alone; another token leaves a running server's own database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -1697,16 +1697,32 @@ pkgs.testers.runNixOSTest {
           )
           return [json.loads(line) for line in out.splitlines()]
 
-      with subtest("The server tells through its second channel when the watcher's ntfy stops answering, and says so once it answers"):
+      with subtest("The server tells through its second channel when the watcher's ntfy stops answering"):
           unanswered = "watcher's ntfy not answering"
           told = len(fell_back(unanswered))
           watcher.succeed("systemctl stop ntfy-sh")
           retry(lambda _: len(fell_back(unanswered)) > told, timeout_seconds=300)
           assert fell_back(unanswered)[-1].get("priority") == 5, fell_back(unanswered)
+
+      with subtest("The server's daily publish goes the way alerts do, and when it gets nowhere, the heartbeat says so"):
+          undelivered = "/var/lib/suveraen-alert/undelivered"
+          # The watcher's ntfy is still down, and the alert about it has gone out.
+          server.succeed("systemctl start alert-probe")
+          server.succeed(f"test -e {undelivered}")
+          server.wait_until_succeeds(
+              "journalctl -u heartbeat -o cat | grep -q 'Reported unhealthy: alerts not delivered'", timeout=120
+          )
           watcher.succeed("systemctl start ntfy-sh")
           watcher.wait_until_succeeds("curl -fsS http://127.0.0.1:2586/v1/health")
+          # The server says so through it, now that it answers again.
           retry(lambda _: len(sent("watcher's ntfy answering again")) == 1, timeout_seconds=120)
           assert sent("watcher's ntfy answering again")[0].get("priority", 3) == 3
+          server.succeed("systemctl start alert-probe")
+          server.succeed(f"test ! -e {undelivered}")
+          # At the lowest priority, on a topic of its own.
+          probes = server.succeed("curl -fsS ${phone} 'http://alerts.test/probe/json?poll=1'").splitlines()
+          priorities = [m.get("priority") for m in map(json.loads, probes) if m.get("title") == "server: alerts get through"]
+          assert priorities and set(priorities) == {1}, probes
 
       with subtest("The server falls back to its second channel when the watcher is gone"):
           watcher.succeed("systemctl stop nginx")
