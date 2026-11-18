@@ -918,12 +918,17 @@ pkgs.testers.runNixOSTest {
               out = server.fail(f"kubectl label namespace rook-ceph pod-security.kubernetes.io/{mode}=baseline --dry-run=server 2>&1")
               assert "pod-security-labels" in out, out
 
+      # Which hosts are whose, as Flux keeps the map.
+      hostnames = (
+          "kubectl -n flux-system create configmap hostnames --from-literal=example.test=alpha"
+          " --from-literal=one.test=alpha-hello --from-literal=org.test=bravo --from-literal=idm.one.test=alpha-kanidm"
+      )
+
       with subtest("A tenant's namespaces, names and hosts are its own, Gateways stay at the gateway, and so do certificates unless an app terminates TLS itself"):
           server.succeed(
               "kubectl apply -f ${standIns} && kubectl wait --for condition=established crd --all --timeout=120s"
               " && kubectl create namespace gateway && kubectl create namespace cert-manager"
-              " && kubectl -n flux-system create configmap hostnames --from-literal=example.test=alpha"
-              " --from-literal=one.test=alpha-hello --from-literal=org.test=bravo --from-literal=idm.one.test=alpha-kanidm"
+              f" && {hostnames}"
           )
           server.succeed(
               "kubectl apply -f ${../kubernetes/platform/policies/app/tenant-namespaces.yaml}"
@@ -1206,6 +1211,8 @@ pkgs.testers.runNixOSTest {
           refused(dry(gateway("bravo", "hello.org.test", "bravo-hello")), "hostnames")
           server.succeed("kubectl -n flux-system delete configmap hostnames")
           refused(dry(gateway("alpha", "hello.example.test", "alpha-hello")), "hostnames")
+          # As Flux keeps it, for what comes after.
+          server.succeed(hostnames)
           # Labelled as the tenant's Kanidm, which nothing here runs, it would go on being found unchecked.
           server.succeed("kubectl delete namespace alpha-kanidm --timeout=120s")
 
