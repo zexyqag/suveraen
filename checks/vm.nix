@@ -1416,7 +1416,8 @@ pkgs.testers.runNixOSTest {
           token_file = "${nodes.server.suveraen.metrics.credentials.kubelet-token.file}"
           ca_file = "${nodes.server.suveraen.metrics.credentials.kubelet-ca.file}"
           server.wait_until_succeeds(f"test -s {token_file} && test -s {ca_file}", timeout=300)
-          server.succeed(f"setpriv --reuid=nobody --regid=nogroup --clear-groups cat {token_file} 2>&1 | grep -q 'Permission denied'")
+          status, said = server.execute(f"setpriv --reuid=nobody --regid=nogroup --clear-groups cat {token_file} 2>&1")
+          assert status != 0 and "Permission denied" in said, status
           kubelet = (
               f"curl -s -o /dev/null -w '%{{http_code}}' --cacert {ca_file}"
               f" -H \"Authorization: Bearer $(cat {token_file})\" https://127.0.0.1:10250"
