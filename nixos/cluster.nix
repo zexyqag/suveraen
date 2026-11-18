@@ -762,6 +762,9 @@ in
           pkgs.jq
         ];
         needsCluster = true;
+        after = [ "k3s.service" ];
+        # Six tries, of up to 20 seconds each.
+        timeout = 150;
         labels = [
           "namespace"
           "pod"
@@ -769,8 +772,14 @@ in
         ];
         script = ''
           crictl() { command crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock --timeout 20s "$@"; }
-          # Read whole first, so a runtime that can't be asked fails the writer, and its file goes stale.
-          listed=$(crictl ps -a -o json)
+          # Read whole first, so a runtime that can't be asked fails the writer, and its file goes stale. k3s may say
+          # it has started before its runtime answers.
+          tries=6
+          until listed=$(crictl ps -a -o json); do
+            tries=$((tries - 1))
+            [ "$tries" -gt 0 ] || exit 1
+            sleep 5
+          done
           attempts=() killed=()
           while IFS=$'\t' read -r namespace pod container attempt exited; do
             labels="namespace=\"$namespace\",pod=\"$pod\",container=\"$container\""

@@ -41,6 +41,7 @@
     (lib.mkIf config.suveraen.metrics.enable {
       suveraen.metrics = {
         textfiles.chrony = {
+          after = [ "chronyd.service" ];
           path = [
             config.services.chrony.package
             pkgs.gawk

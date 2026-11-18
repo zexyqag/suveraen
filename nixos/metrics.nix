@@ -41,7 +41,6 @@ let
   credentials = "/run/suveraen-metrics-credentials";
   credentialsGroup = baseNameOf credentials;
   # The units credentials are made after, and again whenever one starts.
-  following = lib.unique (lib.concatMap (c: c.after) (lib.attrValues cfg.credentials));
 
   # The family a selector keeps, as node_systemd_unit_state of node_systemd_unit_state{state="failed"}.
   family = selector: lib.head (builtins.match "([a-zA-Z_:][a-zA-Z0-9_:]*).*" selector);
@@ -288,15 +287,15 @@ let
   };
   password = [ "suveraen-metrics-password.service" ];
 
-  # Where the scripts modules declare run: each in turn and within its own timeout, so one that hangs or fails leaves
-  # the others' files fresh, and its own as it was; as root, but on a read-only system and reaching nothing beyond
-  # loopback.
+  # Where the scripts modules declare run: each in a unit of its own and within its own timeout, so one that hangs,
+  # fails or waits for what it follows leaves the others' files as they were, and its own as it was; as root, but on a
+  # read-only system and reaching nothing beyond loopback.
   scripted =
-    scripts:
+    script:
     confined
     // {
       Type = "oneshot";
-      TimeoutStartSec = lib.foldl' (sum: t: sum + t.timeout) 30 (lib.attrValues scripts);
+      TimeoutStartSec = script.timeout + 30;
       MemoryMax = "256M";
       ProtectSystem = "strict";
       ProtectHome = true;
@@ -395,6 +394,11 @@ in
               default = 60;
               description = "How many seconds it may run.";
             };
+            after = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = "The units whose service it reads, after which it runs, and runs again whenever one starts.";
+            };
             families = lib.mkOption {
               type = lib.types.nonEmptyListOf lib.types.str;
               description = "The families it writes, each one a rule reads.";
@@ -429,10 +433,10 @@ in
       );
       default = { };
       description = ''
-        What modules measure that no target gives, by name: each a script the metrics' writer runs every
-        textfileInterval, in turn and each within its own timeout, as root, but on a read-only system and reaching
-        nothing beyond loopback, and whose file the node's target reads. One whose file goes stale alerts, and holds the
-        findings of the rules reading it.
+        What modules measure that no target gives, by name: each a script run every textfileInterval, after the units it
+        follows and again whenever one of them starts, in a unit of its own and within its own timeout, as root, but on
+        a read-only system and reaching nothing beyond loopback, and whose file the node's target reads. One whose file
+        goes stale alerts, and holds the findings of the rules reading it.
       '';
     };
 
@@ -484,10 +488,9 @@ in
       );
       default = { };
       description = ''
-        What the store reads targets with, such as a token or a CA, by name, each made by a script: the metrics'
-        credentials unit runs them after the units they follow, again whenever one of those starts and every
-        credentialInterval, in turn and each within its own timeout, as root, but on a read-only system and reaching
-        nothing beyond loopback. A credential's file, which root and the store alone may read, is replaced once its
+        What the store reads targets with, such as a token or a CA, by name, each made by a script run after the units
+        it follows, again whenever one of them starts and every credentialInterval, in a unit of its own and within its
+        own timeout, as root, but on a read-only system and reaching nothing beyond loopback. A credential's file, which root and the store alone may read, is replaced once its
         script has run to its end, and the store reads it again at each scrape; one whose script fails keeps it as it
         was.
       '';
@@ -638,385 +641,396 @@ in
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    assertions =
-      let
-        # The rules, or writers, that don't do as the message says, by name.
-        refused = set: ok: lib.attrNames (lib.filterAttrs (name: r: !ok name r) set);
-        checking = set: ok: message: {
-          assertion = refused set ok == [ ];
-          message = "${message}: ${lib.concatStringsSep ", " (refused set ok)}.";
+  config = lib.mkIf cfg.enable (
+    lib.mkMerge [
+      {
+        assertions =
+          let
+            # The rules, or writers, that don't do as the message says, by name.
+            refused = set: ok: lib.attrNames (lib.filterAttrs (name: r: !ok name r) set);
+            checking = set: ok: message: {
+              assertion = refused set ok == [ ];
+              message = "${message}: ${lib.concatStringsSep ", " (refused set ok)}.";
+            };
+            check = checking cfg.rules;
+            writing = checking cfg.textfiles;
+          in
+          [
+            {
+              assertion = config.suveraen.cluster.enable;
+              message = "suveraen.metrics needs suveraen.cluster.enable: the servers' checks judge its rules.";
+            }
+            # Each is a word or more of its findings' keys; Watchdog is the rules' own, and so is rules.
+            (check
+              (
+                name: _:
+                builtins.match "[A-Za-z][A-Za-z0-9 ]*[A-Za-z0-9]" name != null
+                && !lib.elem name [
+                  "Watchdog"
+                  "rules"
+                ]
+                && !own ? ${name}
+                && !lib.any (other: lib.hasPrefix "${name} " other || lib.hasPrefix "${other} " name) names
+              )
+              "suveraen.metrics.rules are named in letters, digits and spaces, apart from the metrics' own, and none begins another as a word"
+            )
+            (check (_: r: printed (printable r) r.detail && plain r.title && plain r.cleared)
+              "suveraen.metrics.rules print nothing but their value and the labels the sources of what they read may print (${lib.concatStringsSep ", " everyLabel}), and in their detail alone"
+            )
+            (check (
+              _: r: lib.all (label: lib.elem label (printable r)) r.key
+            ) "suveraen.metrics.rules are keyed only by labels the sources of what they read may print")
+            (check (
+              _: r: lib.all (f: sources ? ${f}) r.reads
+            ) "suveraen.metrics.rules read only families a job keeps or a writer writes")
+            {
+              assertion = lib.all (f: lib.elem f read) (lib.attrNames sources);
+              message = "suveraen.metrics.jobs and textfiles keep and write only families a rule reads: ${
+                lib.concatStringsSep ", " (lib.filter (f: !(lib.elem f read)) (lib.attrNames sources))
+              }.";
+            }
+            (checking cfg.jobs (
+              _: j:
+              lib.all (a: lib.elem a.input (map family j.keep)) (lib.attrValues j.aggregate)
+              && lib.all (f: lib.elem f (gives j)) j.optional
+            ) "suveraen.metrics.jobs aggregate only families they keep, and may lack only those they store")
+            (writing (
+              w: _: builtins.match "[a-z][a-z0-9-]*" w != null && !cfg.jobs ? ${w}
+            ) "suveraen.metrics.textfiles are named [a-z][a-z0-9-]*, other than a job")
+            (writing
+              (
+                _: t:
+                lib.all (f: lib.elem f t.families) t.optional
+                && lib.all (
+                  f:
+                  !keptBy ? ${f} && lib.length (lib.filter (v: lib.elem f cfg.textfiles.${v}.families) writers) == 1
+                ) t.families
+              )
+              "suveraen.metrics.textfiles write families of their own, which no job keeps, and may lack only those"
+            )
+            (checking cfg.credentials (
+              c: _: builtins.match "[a-z][a-z0-9-]*" c != null
+            ) "suveraen.metrics.credentials are named [a-z][a-z0-9-]*")
+          ];
+
+        suveraen.metrics.jobs.node.scrape = {
+          static_configs = [ { targets = [ "127.0.0.1:${toString nodePort}" ]; } ];
+          basic_auth = {
+            username = user;
+            # VictoriaMetrics' own credential, which it fills in when it reads this.
+            password_file = "%{CREDENTIALS_DIRECTORY}/basic_auth_password";
+          };
         };
-        check = checking cfg.rules;
-        writing = checking cfg.textfiles;
-      in
-      [
-        {
-          assertion = config.suveraen.cluster.enable;
-          message = "suveraen.metrics needs suveraen.cluster.enable: the servers' checks judge its rules.";
-        }
-        # Each is a word or more of its findings' keys; Watchdog is the rules' own, and so is rules.
-        (check
-          (
-            name: _:
-            builtins.match "[A-Za-z][A-Za-z0-9 ]*[A-Za-z0-9]" name != null
-            && !lib.elem name [
-              "Watchdog"
-              "rules"
-            ]
-            && !own ? ${name}
-            && !lib.any (other: lib.hasPrefix "${name} " other || lib.hasPrefix "${other} " name) names
-          )
-          "suveraen.metrics.rules are named in letters, digits and spaces, apart from the metrics' own, and none begins another as a word"
-        )
-        (check (_: r: printed (printable r) r.detail && plain r.title && plain r.cleared)
-          "suveraen.metrics.rules print nothing but their value and the labels the sources of what they read may print (${lib.concatStringsSep ", " everyLabel}), and in their detail alone"
-        )
-        (check (
-          _: r: lib.all (label: lib.elem label (printable r)) r.key
-        ) "suveraen.metrics.rules are keyed only by labels the sources of what they read may print")
-        (check (
-          _: r: lib.all (f: sources ? ${f}) r.reads
-        ) "suveraen.metrics.rules read only families a job keeps or a writer writes")
-        {
-          assertion = lib.all (f: lib.elem f read) (lib.attrNames sources);
-          message = "suveraen.metrics.jobs and textfiles keep and write only families a rule reads: ${
-            lib.concatStringsSep ", " (lib.filter (f: !(lib.elem f read)) (lib.attrNames sources))
-          }.";
-        }
-        (checking cfg.jobs (
-          _: j:
-          lib.all (a: lib.elem a.input (map family j.keep)) (lib.attrValues j.aggregate)
-          && lib.all (f: lib.elem f (gives j)) j.optional
-        ) "suveraen.metrics.jobs aggregate only families they keep, and may lack only those they store")
-        (writing (
-          w: _: builtins.match "[a-z][a-z0-9-]*" w != null && !cfg.jobs ? ${w}
-        ) "suveraen.metrics.textfiles are named [a-z][a-z0-9-]*, other than a job")
-        (writing
-          (
-            _: t:
-            lib.all (f: lib.elem f t.families) t.optional
-            && lib.all (
-              f:
-              !keptBy ? ${f} && lib.length (lib.filter (v: lib.elem f cfg.textfiles.${v}.families) writers) == 1
-            ) t.families
-          )
-          "suveraen.metrics.textfiles write families of their own, which no job keeps, and may lack only those"
-        )
-        (checking cfg.credentials (
-          c: _: builtins.match "[a-z][a-z0-9-]*" c != null
-        ) "suveraen.metrics.credentials are named [a-z][a-z0-9-]*")
-      ];
 
-    suveraen.metrics.jobs.node.scrape = {
-      static_configs = [ { targets = [ "127.0.0.1:${toString nodePort}" ]; } ];
-      basic_auth = {
-        username = user;
-        # VictoriaMetrics' own credential, which it fills in when it reads this.
-        password_file = "%{CREDENTIALS_DIRECTORY}/basic_auth_password";
-      };
-    };
+        systemd.services.suveraen-metrics-password = {
+          description = "Make the password of this server's metrics, once";
+          wantedBy = [ "multi-user.target" ];
+          before = [
+            "victoriametrics.service"
+            "vmalert.service"
+            "prometheus-node-exporter.service"
+          ];
+          path = [
+            pkgs.coreutils
+            pkgs.mkpasswd
+          ];
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            PrivateNetwork = true;
+            ProtectSystem = "strict";
+            ProtectHome = true;
+            PrivateTmp = true;
+            NoNewPrivileges = true;
+            StateDirectory = "suveraen-metrics";
+            StateDirectoryMode = "0700";
+            RuntimeDirectory = "suveraen-metrics";
+            RuntimeDirectoryMode = "0700";
+            UMask = "0077";
+          };
+          script = ''
+            if [ ! -s ${passwordFile} ]; then
+              head -c 32 /dev/urandom | base32 -w 0 | tr -d = >${passwordFile}.new
+              mv ${passwordFile}.new ${passwordFile}
+            fi
+            printf 'basic_auth_users:\n  ${user}: %s\n' "$(mkpasswd -m bcrypt -s <${passwordFile})" >${nodeWebConfig}
+          '';
+        };
 
-    systemd.services.suveraen-metrics-password = {
-      description = "Make the password of this server's metrics, once";
-      wantedBy = [ "multi-user.target" ];
-      before = [
-        "victoriametrics.service"
-        "vmalert.service"
-        "prometheus-node-exporter.service"
-      ];
-      path = [
-        pkgs.coreutils
-        pkgs.mkpasswd
-      ];
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        PrivateNetwork = true;
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        PrivateTmp = true;
-        NoNewPrivileges = true;
-        StateDirectory = "suveraen-metrics";
-        StateDirectoryMode = "0700";
-        RuntimeDirectory = "suveraen-metrics";
-        RuntimeDirectoryMode = "0700";
-        UMask = "0077";
-      };
-      script = ''
-        if [ ! -s ${passwordFile} ]; then
-          head -c 32 /dev/urandom | base32 -w 0 | tr -d = >${passwordFile}.new
-          mv ${passwordFile}.new ${passwordFile}
-        fi
-        printf 'basic_auth_users:\n  ${user}: %s\n' "$(mkpasswd -m bcrypt -s <${passwordFile})" >${nodeWebConfig}
-      '';
-    };
+        # Outside the snapshots, and never backed up: gone once their retention is up.
+        suveraen.storage.unsnapshotted.metrics = {
+          path = "/var/lib/private/${config.services.victoriametrics.stateDir}";
+          inherit (cfg) quota;
+        };
 
-    # Outside the snapshots, and never backed up: gone once their retention is up.
-    suveraen.storage.unsnapshotted.metrics = {
-      path = "/var/lib/private/${config.services.victoriametrics.stateDir}";
-      inherit (cfg) quota;
-    };
-
-    services.victoriametrics = {
-      enable = true;
-      listenAddress = "127.0.0.1:${toString storePort}";
-      retentionPeriod = cfg.retention;
-      basicAuthUsername = user;
-      basicAuthPasswordFile = passwordFile;
-      prometheusConfig = {
-        global.scrape_interval = cfg.interval;
-        scrape_configs = lib.mapAttrsToList (
-          job: j:
-          j.scrape
-          // {
-            job_name = job;
-            metric_relabel_configs = [
-              {
-                action = "keep";
-                # The node's target reads the writers' files too.
-                "if" =
-                  j.keep
-                  ++ lib.optionals (job == "node" && writers != [ ]) (
-                    [ "node_textfile_mtime_seconds" ] ++ lib.attrNames writtenBy
-                  );
+        services.victoriametrics = {
+          enable = true;
+          listenAddress = "127.0.0.1:${toString storePort}";
+          retentionPeriod = cfg.retention;
+          basicAuthUsername = user;
+          basicAuthPasswordFile = passwordFile;
+          prometheusConfig = {
+            global.scrape_interval = cfg.interval;
+            scrape_configs = lib.mapAttrsToList (
+              job: j:
+              j.scrape
+              // {
+                job_name = job;
+                metric_relabel_configs = [
+                  {
+                    action = "keep";
+                    # The node's target reads the writers' files too.
+                    "if" =
+                      j.keep
+                      ++ lib.optionals (job == "node" && writers != [ ]) (
+                        [ "node_textfile_mtime_seconds" ] ++ lib.attrNames writtenBy
+                      );
+                  }
+                ]
+                ++ j.relabel;
               }
-            ]
-            ++ j.relabel;
-          }
-        ) cfg.jobs;
-      };
-      extraOptions = lib.optional (
-        aggregated != [ ]
-      ) "-streamAggr.config=${yaml.generate "aggregate.yml" aggregated}";
-    };
-    systemd.services.victoriametrics = {
-      wants = password;
-      after = password;
-      serviceConfig =
-        confined
-        // {
-          MemoryMax = "1G";
-        }
-        // lib.optionalAttrs (cfg.credentials != { }) {
-          SupplementaryGroups = [ credentialsGroup ];
+            ) cfg.jobs;
+          };
+          extraOptions = lib.optional (
+            aggregated != [ ]
+          ) "-streamAggr.config=${yaml.generate "aggregate.yml" aggregated}";
         };
-    };
+        systemd.services.victoriametrics = {
+          wants = password;
+          after = password;
+          serviceConfig =
+            confined
+            // {
+              MemoryMax = "1G";
+            }
+            // lib.optionalAttrs (cfg.credentials != { }) {
+              SupplementaryGroups = [ credentialsGroup ];
+            };
+        };
 
-    services.vmalert.instances."" = {
-      enable = true;
-      inherit rules;
-      settings = {
-        "datasource.url" = "http://127.0.0.1:${toString storePort}";
-        "datasource.basicAuth.username" = user;
-        "datasource.basicAuth.passwordFile" = "%d/password";
-        "httpListenAddr" = "127.0.0.1:${toString rulesPort}";
-        "httpAuth.username" = user;
-        "httpAuth.password" = "file://%d/password";
-        # The servers' checks read what fires, and alone send it.
-        "notifier.blackhole" = true;
-        "evaluationInterval" = "${toString (seconds cfg.interval)}s";
-      };
-    };
-    systemd.services.vmalert = {
-      wants = password ++ [ "victoriametrics.service" ];
-      after = password ++ [ "victoriametrics.service" ];
-      serviceConfig = confined // {
-        LoadCredential = [ "password:${passwordFile}" ];
-        MemoryMax = "256M";
-        # As the store's module has it.
-        LockPersonality = true;
-        MemoryDenyWriteExecute = true;
-        PrivateDevices = true;
-        PrivateUsers = true;
-        ProtectClock = true;
-        ProtectControlGroups = true;
-        ProtectHostname = true;
-        ProtectKernelLogs = true;
-        ProtectKernelModules = true;
-        ProtectKernelTunables = true;
-        ProtectProc = "invisible";
-        RestrictAddressFamilies = [
-          "AF_INET"
-          "AF_INET6"
-        ];
-        RestrictNamespaces = true;
-        RestrictRealtime = true;
-        SystemCallArchitectures = "native";
-        SystemCallFilter = [
-          "@system-service"
-          "~@privileged"
-        ];
-      };
-    };
+        services.vmalert.instances."" = {
+          enable = true;
+          inherit rules;
+          settings = {
+            "datasource.url" = "http://127.0.0.1:${toString storePort}";
+            "datasource.basicAuth.username" = user;
+            "datasource.basicAuth.passwordFile" = "%d/password";
+            "httpListenAddr" = "127.0.0.1:${toString rulesPort}";
+            "httpAuth.username" = user;
+            "httpAuth.password" = "file://%d/password";
+            # The servers' checks read what fires, and alone send it.
+            "notifier.blackhole" = true;
+            "evaluationInterval" = "${toString (seconds cfg.interval)}s";
+          };
+        };
+        systemd.services.vmalert = {
+          wants = password ++ [ "victoriametrics.service" ];
+          after = password ++ [ "victoriametrics.service" ];
+          serviceConfig = confined // {
+            LoadCredential = [ "password:${passwordFile}" ];
+            MemoryMax = "256M";
+            # As the store's module has it.
+            LockPersonality = true;
+            MemoryDenyWriteExecute = true;
+            PrivateDevices = true;
+            PrivateUsers = true;
+            ProtectClock = true;
+            ProtectControlGroups = true;
+            ProtectHostname = true;
+            ProtectKernelLogs = true;
+            ProtectKernelModules = true;
+            ProtectKernelTunables = true;
+            ProtectProc = "invisible";
+            RestrictAddressFamilies = [
+              "AF_INET"
+              "AF_INET6"
+            ];
+            RestrictNamespaces = true;
+            RestrictRealtime = true;
+            SystemCallArchitectures = "native";
+            SystemCallFilter = [
+              "@system-service"
+              "~@privileged"
+            ];
+          };
+        };
 
-    # Nothing but what a rule reads: these collectors for the node's own rules below; a module whose rules read another
-    # enables it.
-    services.prometheus.exporters.node = {
-      enable = true;
-      listenAddress = "127.0.0.1";
-      enabledCollectors = [
-        "systemd"
-        "meminfo"
-        "pressure"
-        "conntrack"
-      ];
-      # Off already; the module confines the exporter further for these.
-      disabledCollectors = [
-        "netdev"
-        "timex"
-      ];
-      extraFlags = [
-        "--collector.disable-defaults"
-        "--collector.systemd.enable-restarts-metrics"
-        "--web.config.file=%d/web.yml"
-      ]
-      ++ lib.optionals (writers != [ ]) [
-        "--collector.textfile"
-        "--collector.textfile.directory=${textfiles}"
-      ];
-    };
-    systemd.services.prometheus-node-exporter = {
-      wants = password;
-      after = password;
-      serviceConfig = confined // {
-        LoadCredential = [ "web.yml:${nodeWebConfig}" ];
-        MemoryMax = "128M";
-      };
-    };
+        # Nothing but what a rule reads: these collectors for the node's own rules below; a module whose rules read another
+        # enables it.
+        services.prometheus.exporters.node = {
+          enable = true;
+          listenAddress = "127.0.0.1";
+          enabledCollectors = [
+            "systemd"
+            "meminfo"
+            "pressure"
+            "conntrack"
+          ];
+          # Off already; the module confines the exporter further for these.
+          disabledCollectors = [
+            "netdev"
+            "timex"
+          ];
+          extraFlags = [
+            "--collector.disable-defaults"
+            "--collector.systemd.enable-restarts-metrics"
+            "--web.config.file=%d/web.yml"
+          ]
+          ++ lib.optionals (writers != [ ]) [
+            "--collector.textfile"
+            "--collector.textfile.directory=${textfiles}"
+          ];
+        };
+        systemd.services.prometheus-node-exporter = {
+          wants = password;
+          after = password;
+          serviceConfig = confined // {
+            LoadCredential = [ "web.yml:${nodeWebConfig}" ];
+            MemoryMax = "128M";
+          };
+        };
 
-    # The node's own: units that fail without alerting by themselves, or keep restarting, memory running out, and the
-    # connection table filling, which drops connections for everyone.
-    suveraen.metrics.jobs.node.labels = [ "name" ];
-    suveraen.metrics.jobs.node.keep = [
-      ''node_systemd_unit_state{state="failed"}''
-      "node_systemd_service_restart_total"
-      "node_memory_MemAvailable_bytes"
-      "node_memory_MemTotal_bytes"
-      "node_pressure_memory_stalled_seconds_total"
-      "node_nf_conntrack_entries"
-      "node_nf_conntrack_entries_limit"
-    ];
-    suveraen.metrics.rules = {
-      "units failed" = {
-        expr = "max by (name) (${unit ''node_systemd_unit_state{state="failed", name!~`${alerted}`}''}) == 1";
-        title = "units failed";
-        cleared = "units no longer failed";
-        detail = "in the failed state";
-        key = [ "name" ];
-        reads = [ "node_systemd_unit_state" ];
-      };
-      "units restarting" = {
-        expr = "max by (name) (${unit "increase(node_systemd_service_restart_total[1h])"}) >= 3";
-        title = "units restarting";
-        cleared = "units no longer restarting";
-        detail = "restarted {{ $value | humanize }} times in the last hour";
-        key = [ "name" ];
-        reads = [ "node_systemd_service_restart_total" ];
-      };
-      "memory low" = {
-        expr = "node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.1";
-        title = "memory low";
-        cleared = "memory available again";
-        detail = "{{ $value | humanizePercentage }} of memory available";
-        reads = [
+        # The node's own: units that fail without alerting by themselves, or keep restarting, memory running out, and the
+        # connection table filling, which drops connections for everyone.
+        suveraen.metrics.jobs.node.labels = [ "name" ];
+        suveraen.metrics.jobs.node.keep = [
+          ''node_systemd_unit_state{state="failed"}''
+          "node_systemd_service_restart_total"
           "node_memory_MemAvailable_bytes"
           "node_memory_MemTotal_bytes"
-        ];
-      };
-      "memory stalled" = {
-        expr = "rate(node_pressure_memory_stalled_seconds_total[15m]) > 0.01";
-        title = "memory stalled";
-        cleared = "memory no longer stalled";
-        detail = "every task waited on memory {{ $value | humanizePercentage }} of the last 15 minutes";
-        reads = [ "node_pressure_memory_stalled_seconds_total" ];
-      };
-      "connection table filling" = {
-        expr = "node_nf_conntrack_entries / node_nf_conntrack_entries_limit > 0.75";
-        title = "connection table filling";
-        cleared = "connection table has room again";
-        detail = "{{ $value | humanizePercentage }} of the connection table in use";
-        reads = [
+          "node_pressure_memory_stalled_seconds_total"
           "node_nf_conntrack_entries"
           "node_nf_conntrack_entries_limit"
         ];
-      };
-    };
+        suveraen.metrics.rules = {
+          "units failed" = {
+            expr = "max by (name) (${unit ''node_systemd_unit_state{state="failed", name!~`${alerted}`}''}) == 1";
+            title = "units failed";
+            cleared = "units no longer failed";
+            detail = "in the failed state";
+            key = [ "name" ];
+            reads = [ "node_systemd_unit_state" ];
+          };
+          "units restarting" = {
+            expr = "max by (name) (${unit "increase(node_systemd_service_restart_total[1h])"}) >= 3";
+            title = "units restarting";
+            cleared = "units no longer restarting";
+            detail = "restarted {{ $value | humanize }} times in the last hour";
+            key = [ "name" ];
+            reads = [ "node_systemd_service_restart_total" ];
+          };
+          "memory low" = {
+            expr = "node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.1";
+            title = "memory low";
+            cleared = "memory available again";
+            detail = "{{ $value | humanizePercentage }} of memory available";
+            reads = [
+              "node_memory_MemAvailable_bytes"
+              "node_memory_MemTotal_bytes"
+            ];
+          };
+          "memory stalled" = {
+            expr = "rate(node_pressure_memory_stalled_seconds_total[15m]) > 0.01";
+            title = "memory stalled";
+            cleared = "memory no longer stalled";
+            detail = "every task waited on memory {{ $value | humanizePercentage }} of the last 15 minutes";
+            reads = [ "node_pressure_memory_stalled_seconds_total" ];
+          };
+          "connection table filling" = {
+            expr = "node_nf_conntrack_entries / node_nf_conntrack_entries_limit > 0.75";
+            title = "connection table filling";
+            cleared = "connection table has room again";
+            detail = "{{ $value | humanizePercentage }} of the connection table in use";
+            reads = [
+              "node_nf_conntrack_entries"
+              "node_nf_conntrack_entries_limit"
+            ];
+          };
+        };
 
-    systemd.services.suveraen-metrics-textfiles = lib.mkIf (writers != [ ]) {
-      description = "Write what modules measure for this server's metrics";
-      serviceConfig = scripted cfg.textfiles // {
-        RuntimeDirectory = baseNameOf textfiles;
-        RuntimeDirectoryMode = "0755";
-        RuntimeDirectoryPreserve = true;
-      };
-      script = lib.concatStrings (
-        lib.mapAttrsToList (name: t: ''
-          if ${pkgs.coreutils}/bin/timeout ${toString t.timeout} ${program "textfile" name t} >${textfile name}.new; then
-            mv ${textfile name}.new ${textfile name}
-          else
-            echo "${name}: exit status $?"
-            rm -f ${textfile name}.new
-          fi
-        '') cfg.textfiles
-      );
-    };
-    systemd.timers.suveraen-metrics-textfiles = lib.mkIf (writers != [ ]) {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnBootSec = "30s";
-        OnUnitActiveSec = cfg.textfileInterval;
-      };
-    };
+        users.groups = lib.mkIf (cfg.credentials != { }) { ${credentialsGroup} = { }; };
 
-    users.groups = lib.mkIf (cfg.credentials != { }) { ${credentialsGroup} = { }; };
-    systemd.services.suveraen-metrics-credentials = lib.mkIf (cfg.credentials != { }) {
-      description = "Make what this server's metrics read their targets with";
-      wantedBy = following;
-      after = following;
-      serviceConfig = scripted cfg.credentials // {
-        # Each file root's and the group's, which only the store has.
-        Group = credentialsGroup;
-        UMask = "0027";
-        RuntimeDirectory = baseNameOf credentials;
-        RuntimeDirectoryMode = "0750";
-        RuntimeDirectoryPreserve = true;
-      };
-      script = ''
-        err=$(mktemp)
-        # credential <name> <file> <seconds> <script>
-        credential() {
-          local status=0 why
-          timeout "$3" "$4" >"$2.new" 2>"$err" || status=$?
-          if [ "$status" = 0 ]; then
-            mv "$2.new" "$2"
-            return
-          fi
-          rm -f "$2.new"
-          why=$(tail -n 1 "$err")
-          if [ "$status" = 124 ]; then why="no end within $3 seconds"; fi
-          echo "$1 not made again: ''${why:-exit status $status}"
-        }
-      ''
-      + lib.concatStrings (
-        lib.mapAttrsToList (name: c: ''
-          credential ${name} ${c.file} ${toString c.timeout} ${program "credential" name c}
-        '') cfg.credentials
-      );
-    };
-    systemd.timers.suveraen-metrics-credentials = lib.mkIf (cfg.credentials != { }) {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnBootSec = "30s";
-        OnUnitActiveSec = cfg.credentialInterval;
-      };
-    };
+        suveraen.checks = {
+          families.metrics = ./host-checks/metrics.jq;
+          told.metrics = { inherit command; };
+        };
 
-    suveraen.checks = {
-      families.metrics = ./host-checks/metrics.jq;
-      told.metrics = { inherit command; };
-    };
-
-    environment.systemPackages = [ command ];
-  };
+        environment.systemPackages = [ command ];
+      }
+      {
+        systemd.services =
+          lib.mapAttrs' (
+            name: t:
+            lib.nameValuePair "suveraen-metrics-textfile-${name}" {
+              description = "Write ${name} for this server's metrics";
+              wantedBy = t.after;
+              inherit (t) after;
+              serviceConfig = scripted t // {
+                RuntimeDirectory = baseNameOf textfiles;
+                RuntimeDirectoryMode = "0755";
+                RuntimeDirectoryPreserve = true;
+              };
+              script = ''
+                if ${pkgs.coreutils}/bin/timeout ${toString t.timeout} ${program "textfile" name t} >${textfile name}.new; then
+                  mv ${textfile name}.new ${textfile name}
+                else
+                  echo "exit status $?"
+                  rm -f ${textfile name}.new
+                fi
+              '';
+            }
+          ) cfg.textfiles
+          // lib.mapAttrs' (
+            name: c:
+            lib.nameValuePair "suveraen-metrics-credential-${name}" {
+              description = "Make ${name} for this server's metrics to read a target with";
+              wantedBy = c.after;
+              inherit (c) after;
+              serviceConfig = scripted c // {
+                # Root's and the group's, which only the store has.
+                Group = credentialsGroup;
+                UMask = "0027";
+                RuntimeDirectory = baseNameOf credentials;
+                RuntimeDirectoryMode = "0750";
+                RuntimeDirectoryPreserve = true;
+              };
+              script = ''
+                err=$(mktemp)
+                status=0
+                ${pkgs.coreutils}/bin/timeout ${toString c.timeout} ${program "credential" name c} >${c.file}.new 2>"$err" || status=$?
+                if [ "$status" = 0 ]; then
+                  mv ${c.file}.new ${c.file}
+                  exit 0
+                fi
+                rm -f ${c.file}.new
+                why=$(tail -n 1 "$err")
+                if [ "$status" = 124 ]; then why="no end within ${toString c.timeout} seconds"; fi
+                echo "not made again: ''${why:-exit status $status}"
+              '';
+            }
+          ) cfg.credentials;
+        systemd.timers =
+          lib.mapAttrs' (
+            name: _:
+            lib.nameValuePair "suveraen-metrics-textfile-${name}" {
+              wantedBy = [ "timers.target" ];
+              timerConfig = {
+                OnBootSec = "30s";
+                OnUnitActiveSec = cfg.textfileInterval;
+              };
+            }
+          ) cfg.textfiles
+          // lib.mapAttrs' (
+            name: _:
+            lib.nameValuePair "suveraen-metrics-credential-${name}" {
+              wantedBy = [ "timers.target" ];
+              timerConfig = {
+                OnBootSec = "30s";
+                OnUnitActiveSec = cfg.credentialInterval;
+              };
+            }
+          ) cfg.credentials;
+      }
+    ]
+  );
 }

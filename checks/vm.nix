@@ -1345,7 +1345,7 @@ pkgs.testers.runNixOSTest {
 
           # What the writer reads of chrony now.
           def tracking():
-              server.succeed("systemctl start suveraen-metrics-textfiles")
+              server.succeed("systemctl start suveraen-metrics-textfile-chrony")
               return dict(line.split() for line in server.succeed(f"grep -v '^#' {tracked}").splitlines())
 
           # The test's VMs reach no time server.
@@ -1809,14 +1809,14 @@ pkgs.testers.runNixOSTest {
       with subtest("A dataset past its line reaches the phone once, and so does its recovery"):
           dataset = "${nodes.server.suveraen.storage.unsnapshotted.probe.path}"
           server.succeed(f"mkdir -p {dataset} && mount -t tmpfs -o size=16m dataset-probe {dataset}")
-          server.succeed(f"head -c 15M /dev/zero > {dataset}/fill && systemctl start suveraen-metrics-textfiles")
+          server.succeed(f"head -c 15M /dev/zero > {dataset}/fill && systemctl start suveraen-metrics-textfile-datasets")
           retry(lambda _: {"state": "firing", "key": dataset} in found_by("datasets nearly full"), timeout_seconds=300)
           server.succeed("systemctl start host-checks")
           [full] = sent("datasets nearly full")
           assert keys(full["message"]) == {"New:", f"metric datasets nearly full {dataset}"}, full
           server.succeed("systemctl start host-checks")
           assert len(sent("datasets nearly full")) == 1
-          server.succeed(f"rm {dataset}/fill && systemctl start suveraen-metrics-textfiles")
+          server.succeed(f"rm {dataset}/fill && systemctl start suveraen-metrics-textfile-datasets")
           retry(lambda _: found_by("datasets nearly full") == [], timeout_seconds=300)
           server.succeed("systemctl start host-checks")
           [back] = sent("datasets have room again")
@@ -1836,11 +1836,11 @@ pkgs.testers.runNixOSTest {
 
       # Whether a rule finds a key firing, once the metrics' writer has read the containers again.
       def fires(rule, key):
-          server.succeed("systemctl start suveraen-metrics-textfiles")
+          server.succeed("systemctl start suveraen-metrics-textfile-containers")
           return {"state": "firing", "key": key} in found_by(rule)
 
       def gone(rule):
-          server.succeed("systemctl start suveraen-metrics-textfiles")
+          server.succeed("systemctl start suveraen-metrics-textfile-containers")
           return found_by(rule) == []
 
       with subtest("A container that keeps restarting reaches the phone once, and so does its end"):

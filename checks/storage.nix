@@ -140,7 +140,7 @@ in
     machine.succeed("test -z \"$(zfs list -Ho name -t snapshot -r rpool/log rpool/probe rpool/host-checks rpool/metrics)\"")
 
     # What the metrics read of the pool, as root, but on a read-only system, and of each bounded dataset.
-    machine.succeed("systemctl start suveraen-metrics-textfiles")
+    machine.succeed("systemctl start suveraen-metrics-textfile-pools suveraen-metrics-textfile-datasets")
     machine.succeed("grep -Eqx 'pool_capacity_ratio\\{pool=\"rpool\"\\} 0(\\.[0-9]+)?' /run/suveraen-metrics-textfiles/pools.prom")
     for path in ["/var/lib/rancher/k3s/agent/containerd", "/var/lib/kubelet", "/var/log", "/var/lib/private/probe",
                  "/var/lib/private/victoriametrics"]:
