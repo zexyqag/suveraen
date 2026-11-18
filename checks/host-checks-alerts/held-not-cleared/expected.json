@@ -1,6 +1,6 @@
 {
   "title": "example one cleared",
   "priority": 3,
-  "body": "Cleared: example one\nStill late:\nexample three: three is late\nexample two/a: its a is late",
+  "body": "Still late:\nexample three: three is late\nexample two/a: its a is late\nCleared: example one",
   "late": "cluster\texample three\tlate\t4\texample late\tthree is late\texample on time again\texample\ncluster\texample two/a\tlate\t4\texample late\tits a is late\texample on time again\texample\n"
 }

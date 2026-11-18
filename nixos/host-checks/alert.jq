@@ -51,14 +51,14 @@ rows as $rows
 | [$notices | select(. != []) | headline] as $noted
 | (if $notices != [] then ["Noted:"] + ($notices | map(line)) else [] end) as $notes
 | (if $back != [] then ["Cleared: \($back | map(.key) | join(", "))"] else [] end) as $cleared
+# suveraen-alert keeps the end of a long message, so what is still late comes first.
 | if $new != [] then
     {title: ([$new | headline] + $noted | join("; ")), priority: ($new + $notices | map(.priority) | max),
-     # suveraen-alert keeps the end of a long message.
      body: ((if $still != [] then ["Still late:"] + ($still | map(line)) else [] end) + $cleared
        + ["New:"] + ($new | map(line)) + $notes | join("\n"))}
   elif $back != [] then
     {title: ([$back | cleared($late)] + $noted | join("; ")), priority: ([3] + ($notices | map(.priority)) | max),
-     body: ($cleared + (if $late != [] then ["Still late:"] + ($late | map(line)) else [] end) + $notes | join("\n"))}
+     body: ((if $late != [] then ["Still late:"] + ($late | map(line)) else [] end) + $cleared + $notes | join("\n"))}
   elif $notices != [] then
     {title: ($notices | headline), priority: ($notices | map(.priority) | max),
      body: ((if $late != [] then ["Still late:"] + ($late | map(line)) else [] end) + $notes | join("\n"))}
