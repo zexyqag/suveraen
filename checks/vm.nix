@@ -11,15 +11,15 @@
 # tenant's namespace, and its apps' charts can change neither what they run nor the keys their copies go with,
 # nor make or delete a volume copied off-site. Hosts and pods resolve names through the node's own resolver, and
 # clocks use NTS. The watcher's ntfy only takes known publishers and keeps its account API, stats and attachments
-# closed; the server's alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops and while
-# its boot-time SSH port is open, and says when each ends; and the server falls back to a second channel when the
-# watcher is gone. The server and its Flux only take commits signed by a release signer, the server never goes back to
-# an older one, and it alerts when its configuration gets old. The server's checks read how old the backups the cluster
-# records are and Ceph's health with an account that reads nothing else, ask the node's addresses for STUN, and alert
-# once per change, also when the cluster can't be read. Its etcd snapshots reach both providers encrypted to recovery
-# keys, under a prefix its key can neither leave nor empty; with one provider down they still reach the other, and the
-# phone hears of it. Wiped, the server comes back from a provider's copy through its restore command, with its token
-# file alone; another token leaves a running server's own database in place.
+# closed; the server's alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops, when its
+# checks do and while its boot-time SSH port is open, and says when each ends; and the server falls back to a second
+# channel when the watcher is gone. The server and its Flux only take commits signed by a release signer, the server
+# never goes back to an older one, and it alerts when its configuration gets old. The server's checks read how old the
+# backups the cluster records are and Ceph's health with an account that reads nothing else, ask the node's addresses
+# for STUN, and alert once per change, also when the cluster can't be read. Its etcd snapshots reach both providers
+# encrypted to recovery keys, under a prefix its key can neither leave nor empty; with one provider down they still
+# reach the other, and the phone hears of it. Wiped, the server comes back from a provider's copy through its restore
+# command, with its token file alone; another token leaves a running server's own database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -1641,6 +1641,26 @@ pkgs.testers.runNixOSTest {
           resolved = int(server.succeed(count.format("resolved")).strip())
           server.succeed("systemctl start heartbeat.timer")
           server.wait_until_succeeds(f"test $({count.format('resolved')}) -gt {resolved}", timeout=300)
+
+      with subtest("The watcher raises an alert when the server's checks stop, and says so when they run again"):
+          stopped = int(server.succeed(count.format("triggered")).strip())
+          # As if the checks had last run a day ago, and the server had booted before that.
+          server.succeed(
+              "touch -d '-1 day' /var/lib/private/host-checks/checked"
+              " && echo $(( $(date +%s) - 2 * 86400 )) > /run/heartbeat/booted"
+          )
+          server.wait_until_succeeds(f"test $({count.format('triggered')}) -gt {stopped}", timeout=300)
+          # Why, the server's journal tells alone: Gatus, whose page is public, holds a failure that names nothing. It
+          # answers from a cache of its own for a few seconds.
+          server.succeed("journalctl -u heartbeat -o cat | grep -q 'Reported unhealthy: .*checks stale'")
+          watcher.wait_until_succeeds(
+              "curl -fsS http://127.0.0.1:8080/api/v1/endpoints/statuses"
+              " | jq -e '.[] | select(.key == \"servers_server\") | any(.results[]; (.success | not) and (.errors // []) == [])'",
+              timeout=60,
+          )
+          again = int(server.succeed(count.format("resolved")).strip())
+          server.succeed("systemctl start host-checks")
+          server.wait_until_succeeds(f"test $({count.format('resolved')}) -gt {again}", timeout=300)
 
       # Gatus's own words, with the alert's description.
       unlock_said = (

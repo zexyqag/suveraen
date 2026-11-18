@@ -131,6 +131,30 @@ in
         default = "5min";
         description = "How often the host reports in.";
       };
+
+      stamps = lib.mkOption {
+        type = lib.types.attrsOf (
+          lib.types.submodule {
+            options = {
+              path = lib.mkOption {
+                type = lib.types.str;
+                description = "File whose time of last change says when the job last ran to its end.";
+              };
+              maxAge = lib.mkOption {
+                type = lib.types.ints.positive;
+                description = "Seconds it may get old.";
+              };
+            };
+          }
+        );
+        default = { };
+        description = ''
+          Jobs the host reports on with its heartbeat, by name: while one's stamp is older than its maxAge, the report
+          fails, and the watcher raises an alert; the host's journal says "<name> stale". A stamp counts from no earlier
+          than the host's first report since it booted, so a long wait for the disk passphrase, or to power off, isn't
+          taken for a stop.
+        '';
+      };
     };
 
     units = lib.mkOption {
@@ -199,13 +223,30 @@ in
         };
         script = ''
           misses=/run/heartbeat/misses
-          if [ -e ${undelivered} ]; then
-            report="success=false&error=alerts+not+delivered"
+          # The first report since boot, which no stamp counts from before.
+          [ -e /run/heartbeat/booted ] || date +%s >/run/heartbeat/booted
+          booted=$(< /run/heartbeat/booted)
+          now=$(date +%s)
+          errors=()
+          if [ -e ${undelivered} ]; then errors+=("alerts not delivered"); fi
+          ${lib.concatStrings (
+            lib.mapAttrsToList (name: stamp: ''
+              at=$(stat -c %Y ${lib.escapeShellArg stamp.path} 2>/dev/null || echo 0)
+              if [ $(( now - (at > booted ? at : booted) )) -gt ${toString stamp.maxAge} ]; then
+                errors+=(${lib.escapeShellArg "${name} stale"})
+              fi
+            '') cfg.heartbeat.stamps
+          )}
+          if [ ''${#errors[@]} = 0 ]; then
+            report=(--data-urlencode success=true)
           else
-            report="success=true"
+            # Why goes in this journal alone: the watcher's status page is public.
+            printf -v error '%s, ' "''${errors[@]}"
+            echo "Reported unhealthy: ''${error%, }"
+            report=(--data-urlencode success=false)
           fi
-          if ${authorized cfg.heartbeat.tokenFile} -fsS --connect-timeout 10 --max-time 30 -X POST \
-            ${lib.escapeShellArg cfg.heartbeat.url}"?$report"; then
+          if ${authorized cfg.heartbeat.tokenFile} -fsS --connect-timeout 10 --max-time 30 -X POST -G "''${report[@]}" \
+            ${lib.escapeShellArg cfg.heartbeat.url}; then
             echo 0 > "$misses"
           else
             n=$(( $(cat "$misses" 2>/dev/null || echo 0) + 1 ))

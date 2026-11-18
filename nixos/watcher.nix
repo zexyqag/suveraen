@@ -206,7 +206,7 @@ in
           heartbeat.interval = cfg.heartbeatTimeout;
           # A missed heartbeat already means the whole interval was silent, and one report means it's back.
           alerts = [
-            (ntfyAlert "No heartbeat from ${server}, or its alerts aren't getting through" {
+            (ntfyAlert "No heartbeat from ${server}, or its checks or alerts aren't working" {
               failure-threshold = 1;
               success-threshold = 1;
             })

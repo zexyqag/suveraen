@@ -20,6 +20,9 @@ let
   stunProbes = if stun.port == null then 0 else lib.length nodeIP;
   # What the checks keep from one run to the next, by the name systemd keeps it under.
   state = "host-checks";
+  # Room for STUN's answers, suveraen-idm and suveraen-mesh check, and suveraen-alert to try both channels.
+  timeout = stunSeconds * stunProbes + 2 * config.suveraen.alerts.retrySeconds + 540;
+  bootDelay = 600;
 
   duration = lib.types.strMatching "[1-9][0-9]*[mhd]";
   seconds =
@@ -289,6 +292,9 @@ let
       decision=$(jq -R -s -c --rawfile alerted "$state/late.tsv" --argjson now "$now" \
         --argjson remind ${toString (seconds cfg.remindAfter)} \
         --argjson reminded "$(cat "$state/reminded-at" 2>/dev/null || echo 0)" -f ${judge}/alert.jq <<<"$findings")
+      # What the heartbeat vouches for: the checks ran and were judged. Whether their alert got through, the
+      # undelivered marker tells.
+      touch "$state/checked"
       title=$(jq -r '.title // empty' <<<"$decision")
       if [ -n "$title" ]; then
         # The state stays as it was, so the next run sends it again.
@@ -514,8 +520,7 @@ in
           "AF_INET6"
           "AF_UNIX"
         ];
-        # Room for STUN's answers, suveraen-idm and suveraen-mesh check, and suveraen-alert to try both channels.
-        TimeoutStartSec = stunSeconds * stunProbes + 2 * config.suveraen.alerts.retrySeconds + 540;
+        TimeoutStartSec = timeout;
         ExecStartPre = lib.optional (stun.port != null) (lib.getExe stunProbe) ++ [
           "+${lib.getExe prepare}"
           "+${lib.getExe (told "idm" config.suveraen.idm.command)}"
@@ -534,9 +539,14 @@ in
     systemd.timers.host-checks = {
       wantedBy = [ "timers.target" ];
       timerConfig = {
-        OnBootSec = "10min";
+        OnBootSec = "${toString bootDelay}s";
         OnUnitActiveSec = "${toString (seconds cfg.interval)}s";
       };
+    };
+    # Once three runs are due, or the first after boot, and as long as one may take, the checks have stopped.
+    suveraen.alerts.heartbeat.stamps.checks = {
+      path = "/var/lib/private/${state}/checked";
+      maxAge = lib.max (3 * seconds cfg.interval) bootDelay + timeout;
     };
     # It alerts on what it finds by itself and exits 0; failing means the check itself broke.
     suveraen.alerts.units = [ "host-checks" ];
