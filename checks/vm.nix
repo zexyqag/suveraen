@@ -1458,7 +1458,7 @@ pkgs.testers.runNixOSTest {
           [late] = sent("backups late: 2")
           before, new = late["message"].split("\nNew:\n")
           assert keys(new) == {"checks-db/postgres WAL archiving", "probe"}, late
-          assert before.endswith("\nOn time again: checks-app/data-2"), late
+          assert before.endswith("\nCleared: checks-app/data-2"), late
 
           set_status("clusters.postgresql.cnpg.io", "checks-db", "postgres", archiving("True"))
           set_status("objectstores.barmancloud.cnpg.io", "checks-db", "postgres", backups("-9 days", "now"))
@@ -1502,10 +1502,11 @@ pkgs.testers.runNixOSTest {
       with subtest("A node address that leaves STUN unanswered reaches the phone once, and so does its answer"):
           server.succeed("systemctl stop coturn")
           server.succeed("systemctl start host-checks")
-          [unanswered] = sent("STUN unanswered")
+          # The title counts its findings, one for each of the node's addresses.
+          [unanswered] = sent(f"STUN unanswered: {len(node_addresses)}")
           assert keys(unanswered["message"]) == {"New:"} | {f"STUN {a}" for a in node_addresses}, unanswered
           server.succeed("systemctl start host-checks")
-          assert len(sent("STUN unanswered")) == 1
+          assert len(sent(f"STUN unanswered: {len(node_addresses)}")) == 1
           server.succeed("systemctl start coturn")
           for address in node_addresses:
               server.wait_until_succeeds(f"{stunclient} -t 1000 -p {stun_port} {address}", timeout=90)

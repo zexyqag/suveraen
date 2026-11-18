@@ -1,0 +1,2 @@
+cluster	Ceph OSD_DOWN	late	4	Ceph HEALTH_WARN: OSD_DOWN	1 osds down; ceph health detail says more	Ceph healthy again	ceph
+cluster	Ceph POOL_NEAR_FULL	late	4	Ceph HEALTH_WARN: POOL_NEAR_FULL	1 pool(s) nearfull; ceph health detail says more	Ceph healthy again	ceph

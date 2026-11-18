@@ -1,0 +1,6 @@
+{
+  "title": "Ceph POOL_NEAR_FULL cleared",
+  "priority": 3,
+  "body": "Cleared: Ceph POOL_NEAR_FULL\nStill late:\nCeph OSD_DOWN: 1 osds down; ceph health detail says more",
+  "late": "cluster\tCeph OSD_DOWN\tlate\t4\tCeph HEALTH_WARN: OSD_DOWN\t1 osds down; ceph health detail says more\tCeph healthy again\tceph\n"
+}

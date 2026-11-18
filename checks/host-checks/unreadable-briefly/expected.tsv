@@ -1,2 +1,3 @@
 cluster	unreadable
-host	cluster status	ok	4	cluster status unreadable	last read 2026-10-22T11:50:00Z (10m ago), limit 30m: no token for host-checks: connection refused
+host	cluster status	ok	4	cluster status unreadable	last read 2026-10-22T11:50:00Z (10m ago), limit 30m: no token for host-checks: connection refused	cluster status readable again	api
+checks	done

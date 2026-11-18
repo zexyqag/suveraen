@@ -1,0 +1,6 @@
+{
+  "title": "cluster status unreadable",
+  "priority": 4,
+  "body": "Still late:\nalpha-postgres/postgres base backup: last 2026-10-20T12:00:00Z (2d 0h ago), limit 26h\nCeph POOL_NEAR_FULL: 1 pool(s) nearfull; ceph health detail says more\nNew:\ncluster status: last read 2026-10-22T11:15:00Z (45m ago), limit 30m: /apis/batch/v1/namespaces/alpha-postgres/cronjobs/offsite: HTTP 403",
+  "late": "host\tcluster status\tlate\t4\tcluster status unreadable\tlast read 2026-10-22T11:15:00Z (45m ago), limit 30m: /apis/batch/v1/namespaces/alpha-postgres/cronjobs/offsite: HTTP 403\tcluster status readable again\tapi\ncluster\talpha-postgres/postgres base backup\tlate\t4\tbackups late\tlast 2026-10-20T12:00:00Z (2d 0h ago), limit 26h\tbackups on time again\tbackups\ncluster\tCeph POOL_NEAR_FULL\tlate\t4\tCeph HEALTH_WARN: POOL_NEAR_FULL\t1 pool(s) nearfull; ceph health detail says more\tCeph healthy again\tceph\n"
+}

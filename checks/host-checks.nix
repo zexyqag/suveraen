@@ -1,10 +1,11 @@
-# Runs the servers' checks (nixos/host-checks.jq) on what a cluster might hold, each case on top of base.json, and a
-# case of a tenant's mesh as a change to a mesh as the rules keep it (mesh.json); on some, what they then alert given
-# the findings late before, and when they last reminded (nixos/host-checks-alert.jq); suveraen-idm's filter for Kanidm's
-# log (nixos/idm-migrations.jq) on logs Kanidm wrote, stamped as the kubelet shows them, with the time its container
-# started; and its filter for the IDs a tenant's migrations declare (nixos/idm-ids.jq) on the ConfigMaps of a tenant's
-# Kanidm namespace; and compares what they find with what they should.
-{ pkgs }:
+# Runs the servers' checks (nixos/host-checks/judge.jq, on every family a server declares) on what a cluster might hold,
+# each case on top of base.json, and a case of a tenant's mesh as a change to a mesh as the rules keep it (mesh.json);
+# on some, or on the judge's rows as a case gives them, what they then alert given the findings late before, and when
+# they last reminded (nixos/host-checks/alert.jq); suveraen-idm's filter for Kanidm's log (nixos/idm-migrations.jq) on
+# logs Kanidm wrote, stamped as the kubelet shows them, with the time its container started; and its filter for the IDs
+# a tenant's migrations declare (nixos/idm-ids.jq) on the ConfigMaps of a tenant's Kanidm namespace; and compares what
+# they find with what they should.
+{ pkgs, judge }:
 pkgs.runCommand "host-checks" { nativeBuildInputs = [ pkgs.jq ]; } ''
   failed=0
   input() {
@@ -16,22 +17,25 @@ pkgs.runCommand "host-checks" { nativeBuildInputs = [ pkgs.jq ]; } ''
   }
   for case in ${./host-checks}/*/; do
     name=$(basename "$case")
-    if input "$case" | jq -r -f ${../nixos/host-checks.jq} | diff -u "$case/expected.tsv" -; then
+    if input "$case" | jq -r -L ${judge} -f ${judge}/main.jq | diff -u "$case/expected.tsv" -; then
       echo "ok $name"
     else
       echo "WRONG $name"
       failed=1
     fi
   done
+  # The judge's rows, or those a case gives, as a family may that none here does.
+  rows() {
+    if [ -e "$1/rows.tsv" ]; then cat "$1/rows.tsv"; else input "$1" | jq -r -L ${judge} -f ${judge}/main.jq; fi
+  }
   for case in ${./host-checks-alerts}/*/; do
     name=$(basename "$case")
-    merged=$(input "$case")
-    now=$(jq .now <<<"$merged")
+    now=$(jq .now ${./host-checks/base.json})
     reminded=$now
     if [ -e "$case/reminded" ]; then reminded=$(<"$case/reminded"); fi
-    if jq -r -f ${../nixos/host-checks.jq} <<<"$merged" \
+    if rows "$case" \
       | jq -R -s -c --rawfile alerted "$case/late.tsv" --argjson now "$now" --argjson remind 86400 \
-        --argjson reminded "$reminded" -f ${../nixos/host-checks-alert.jq} \
+        --argjson reminded "$reminded" -f ${judge}/alert.jq \
       | diff -u <(jq -c . "$case/expected.json") -; then
       echo "ok alert $name"
     else

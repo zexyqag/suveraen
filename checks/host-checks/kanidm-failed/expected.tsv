@@ -1,3 +1,5 @@
 cluster	evaluated
-cluster	Kanidm check	late	4	Kanidm unchecked	every tenant's Kanidm last checked 2026-10-22T11:00:00Z (1h 0m ago), limit 30m: suveraen-idm check: it gave no answer within 120 seconds
-host	cluster status	ok	4	cluster status unreadable	read
+cluster	Kanidm check	late	4	Kanidm unchecked	every tenant's Kanidm last checked 2026-10-22T11:00:00Z (1h 0m ago), limit 30m: suveraen-idm check: it gave no answer within 120 seconds	Kanidm checked again	kanidm
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+hold	kanidm	
+checks	done

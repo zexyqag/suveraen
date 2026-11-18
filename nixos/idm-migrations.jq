@@ -6,7 +6,7 @@
 #
 # Kanidm brings its own entries up to date only as it raises its domain level, at its very first start and its first on
 # a new minor version: a step it gives up on, such as a builtin entry whose name a person holds, it logs, goes on from
-# and never tries again. host-checks.jq keeps what such a start left undone.
+# and never tries again. host-checks/kanidm.jq keeps what such a start left undone.
 #
 # Kanidm writes what a client sends into its log as it is, line breaks too, so anyone who reaches it can add lines that
 # look like any of its own. It runs its migrations once, as it starts, and logs that it starts its web server before it

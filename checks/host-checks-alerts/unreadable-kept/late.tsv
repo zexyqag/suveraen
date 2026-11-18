@@ -1,0 +1,2 @@
+cluster	alpha-postgres/postgres base backup	late	4	backups late	last 2026-10-20T12:00:00Z (2d 0h ago), limit 26h	backups on time again	backups
+cluster	Ceph POOL_NEAR_FULL	late	4	Ceph HEALTH_WARN: POOL_NEAR_FULL	1 pool(s) nearfull; ceph health detail says more	Ceph healthy again	ceph

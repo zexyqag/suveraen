@@ -1,0 +1,5 @@
+cluster	example one	late	4	example late	one is late	example on time again	example
+cluster	example three	late	4	example late	three is late	example on time again	example
+cluster	example two/a	late	4	example late	its a is late	example on time again	example
+cluster	example two b	late	5	other late	another family's	other on time again	other
+cluster	examples	late	4	example late	not under the prefix	example on time again	example

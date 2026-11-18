@@ -117,7 +117,10 @@
             ;
           kubernetes = ./kubernetes;
         };
-        host-checks = import ./checks/host-checks.nix { inherit pkgs; };
+        host-checks = import ./checks/host-checks.nix {
+          inherit pkgs;
+          inherit (server.suveraen.checks) judge;
+        };
         test-scripts = import ./checks/test-scripts.nix {
           inherit pkgs;
           tests =

@@ -1,0 +1,21 @@
+{
+  "spec": {
+    "stun": {
+      "port": 3478,
+      "addresses": [
+        "203.0.113.10",
+        "2001:db8::2"
+      ]
+    }
+  },
+  "stun": {
+    "203.0.113.10": {
+      "answered": false,
+      "why": "STUN receive timeout after 5000 ms"
+    },
+    "2001:db8::2": {
+      "answered": false,
+      "why": "STUN receive timeout after 5000 ms"
+    }
+  }
+}

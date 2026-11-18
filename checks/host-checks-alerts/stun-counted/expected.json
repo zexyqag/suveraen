@@ -1,0 +1,6 @@
+{
+  "title": "STUN unanswered: 2",
+  "priority": 4,
+  "body": "New:\nSTUN 2001:db8::2: no answer on UDP 3478: STUN receive timeout after 5000 ms\nSTUN 203.0.113.10: no answer on UDP 3478: STUN receive timeout after 5000 ms",
+  "late": "host\tSTUN 2001:db8::2\tlate\t4\tSTUN unanswered\tno answer on UDP 3478: STUN receive timeout after 5000 ms\tSTUN answered again\tstun\nhost\tSTUN 203.0.113.10\tlate\t4\tSTUN unanswered\tno answer on UDP 3478: STUN receive timeout after 5000 ms\tSTUN answered again\tstun\n"
+}

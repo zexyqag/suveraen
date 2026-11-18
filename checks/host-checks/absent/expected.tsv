@@ -1,6 +1,6 @@
 cluster	evaluated
-kanidm	answered
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 kanidm	checked
-cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
-host	cluster status	ok	4	cluster status unreadable	read
 kanidm	judged	{}
+checks	done

@@ -3304,8 +3304,8 @@ runTest {
               server.succeed("systemctl start host-checks")
               invocation = server.succeed("systemctl show -p InvocationID --value host-checks").strip()
               journal = f"journalctl -o cat _SYSTEMD_INVOCATION_ID={invocation}"
-              # Its findings come by scope and then key, so with a mesh in the cluster, its STUN port's comes last.
-              server.wait_until_succeeds(f"{journal} | grep -Eq '^(ok|late|unknown) mesh STUN port: '", timeout=60)
+              # The judge's last line.
+              server.wait_until_succeeds(f"{journal} | grep -qx 'checks done'", timeout=60)
               findings = {}
               scope = None
               for line in shown(journal).splitlines():
@@ -3315,11 +3315,19 @@ runTest {
                       findings[m.group(2)] = (m.group(1), m.group(3))
               return scope, findings
 
-          # What the server's checks have alerted so far, as the phone got it.
-          def checks_said():
+          # What the server's checks have alerted so far, as the phone got it; given titles, only the alerts that name
+          # any, each by those it names, so that another finding alerted with them changes nothing here.
+          def checks_said(*titles):
+              named = "${nodes.server.networking.hostName}: "
               ours = ("backups ", "Ceph ", "cluster status ", "Kanidm ", "STUN ", "mesh ", "still: ")
-              return [(a["title"], a.get("priority", 3)) for a in alerts() if a.get("title", "").removeprefix(
-                  "${nodes.server.networking.hostName}: ").startswith(ours)]
+              heard = []
+              for a in alerts():
+                  title = a.get("title", "").removeprefix(named)
+                  if titles:
+                      title = "; ".join(t for t in title.split("; ") if t in titles)
+                  if title.startswith(titles or ours):
+                      heard.append((named + title, a.get("priority", 3)))
+              return heard
 
           # A new etcd snapshot, as if k3s had made it a while ago: the copy leaves out one younger than a minute, which
           # may still be being written.
@@ -3444,7 +3452,11 @@ runTest {
               assert who == "netbird|netbird|f", who
 
           with subtest("A planted exit, a token and a person who left reach the phone once, with the change of access, and so does their fix; once the owner blocks the person, their device is out of the mesh"):
-              said = len(checks_said())
+              mesh_said = [
+                  "mesh exit open", "mesh leaver still in", "mesh tokens outside the rules", "mesh access changed",
+                  "mesh exits closed", "mesh leavers out", "mesh tokens within the rules again",
+              ]
+              said = len(checks_said(*mesh_said))
               host = "${nodes.server.networking.hostName}"
               nb_op, nb_bob = nb_people["op"], nb_people["bob"]
               # The owner can make what the rules forbid: a way to everywhere through the box, and a token.
@@ -3464,9 +3476,9 @@ runTest {
                   "late", "late", "late", "notice",
               ], findings
               assert left in findings[f"{nb_ns} leaver"][1], findings[f"{nb_ns} leaver"]
-              assert checks_said()[said:] == [
+              assert checks_said(*mesh_said)[said:] == [
                   (f"{host}: mesh exit open; mesh leaver still in; mesh tokens outside the rules; mesh access changed", 4),
-              ], checks_said()[said:]
+              ], checks_said(*mesh_said)[said:]
               assert left in alerts()[-1]["message"], alerts()[-1]
               nb("DELETE", f"/api/networks/{nb_network['id']}/resources/{nb_ids['anywhere']}")
               nb("DELETE", f"/api/users/{nb_op['uuid']}/tokens/{nb_ids['token']}")
@@ -3482,9 +3494,9 @@ runTest {
               assert [findings[f"{nb_ns} {part}"][0] for part in ["exit", "tokens", "leaver", "changed"]] == [
                   "ok", "ok", "ok", "notice",
               ], findings
-              assert checks_said()[said + 1:] == [
+              assert checks_said(*mesh_said)[said + 1:] == [
                   (f"{host}: mesh exits closed; mesh leavers out; mesh tokens within the rules again; mesh access changed", 3),
-              ], checks_said()[said + 1:]
+              ], checks_said(*mesh_said)[said + 1:]
 
           with subtest("A pool past its quota's warning reaches the phone, one more pool still fits, and the alert clears"):
               apply({
@@ -3519,27 +3531,37 @@ runTest {
                   return set(c["status"]["ceph"].get("details", {})) - muted == {"POOL_NEAR_FULL"}
 
               retry(raised, timeout_seconds=300)
-              said = len(checks_said())
+              ceph_said = ["Ceph HEALTH_WARN: POOL_NEAR_FULL", "Ceph healthy again"]
+              said = len(checks_said(*ceph_said))
               host_checks()
-              assert checks_said()[said:] == [("${nodes.server.networking.hostName}: Ceph HEALTH_WARN: POOL_NEAR_FULL", 4)]
+              assert checks_said(*ceph_said)[said:] == [
+                  ("${nodes.server.networking.hostName}: Ceph HEALTH_WARN: POOL_NEAR_FULL", 4)
+              ], checks_said(*ceph_said)[said:]
               server.succeed("kubectl -n rook-ceph delete cephblockpool probe --timeout=300s")
               server.wait_until_succeeds(
                   "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}' | grep -x HEALTH_OK",
                   timeout=300,
               )
               host_checks()
-              assert checks_said()[said + 1:] == [("${nodes.server.networking.hostName}: Ceph healthy again", 3)]
+              assert checks_said(*ceph_said)[said + 1:] == [
+                  ("${nodes.server.networking.hostName}: Ceph healthy again", 3)
+              ], checks_said(*ceph_said)[said + 1:]
 
           with subtest("An app whose copy of its client's secret is wrong reaches the phone once, and so does its sync"):
-              said = len(checks_said())
+              sync_said = ["Kanidm clients out of sync", "Kanidm clients in sync again"]
+              said = len(checks_said(*sync_said))
               set_sso_secret(first, "a" * 48)
               _, findings = host_checks()
               assert findings[f"{first}-kanidm/hello-oidc"][0] == "late", findings
-              assert checks_said()[said:] == [("${nodes.server.networking.hostName}: Kanidm clients out of sync", 4)]
+              assert checks_said(*sync_said)[said:] == [
+                  ("${nodes.server.networking.hostName}: Kanidm clients out of sync", 4)
+              ], checks_said(*sync_said)[said:]
               server.succeed(f"suveraen-idm sync {first}")
               _, findings = host_checks()
               assert findings[f"{first}-kanidm/hello-oidc"][0] == "ok", findings
-              assert checks_said()[said + 1:] == [("${nodes.server.networking.hostName}: Kanidm clients in sync again", 3)]
+              assert checks_said(*sync_said)[said + 1:] == [
+                  ("${nodes.server.networking.hostName}: Kanidm clients in sync again", 3)
+              ], checks_said(*sync_said)[said + 1:]
 
           with subtest("The standby CA issues too, with our external account there"):
               standby = {

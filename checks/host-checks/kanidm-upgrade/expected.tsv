@@ -1,30 +1,30 @@
 cluster	evaluated
-kanidm	answered
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+cluster	alpha-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on	Kanidm IDs valid again	kanidm
+cluster	alpha-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled	Kanidm admin accounts disabled again	kanidm
+cluster	alpha-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness; as it started: 10-groups.json: SC0002ReferenceSyntaxInvalid	Kanidm migrations applied again	kanidm
+cluster	bravo-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on	Kanidm IDs valid again	kanidm
+cluster	bravo-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled	Kanidm admin accounts disabled again	kanidm
+cluster	bravo-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness	Kanidm migrations applied again	kanidm
+cluster	corgi-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on	Kanidm IDs valid again	kanidm
+cluster	corgi-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled	Kanidm admin accounts disabled again	kanidm
+cluster	corgi-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read	Kanidm migrations applied again	kanidm
+cluster	delta-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on	Kanidm IDs valid again	kanidm
+cluster	delta-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled	Kanidm admin accounts disabled again	kanidm
+cluster	delta-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read	Kanidm migrations applied again	kanidm
+cluster	eagle-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on	Kanidm IDs valid again	kanidm
+cluster	eagle-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled	Kanidm admin accounts disabled again	kanidm
+cluster	eagle-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started	Kanidm migrations applied again	kanidm
+cluster	fable-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on	Kanidm IDs valid again	kanidm
+cluster	fable-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled	Kanidm admin accounts disabled again	kanidm
+cluster	fable-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started	Kanidm migrations applied again	kanidm
+cluster	gamma-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on	Kanidm IDs valid again	kanidm
+cluster	gamma-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled	Kanidm admin accounts disabled again	kanidm
+cluster	gamma-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started	Kanidm migrations applied again	kanidm
+cluster	hydra-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on	Kanidm IDs valid again	kanidm
+cluster	hydra-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled	Kanidm admin accounts disabled again	kanidm
+cluster	hydra-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness; nothing here read how it ran them as it started at 2026-10-22T10:30:00Z, which counts as failed; restarting it runs them again	Kanidm migrations applied again	kanidm
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 kanidm	checked
-cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked
-cluster	alpha-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
-cluster	alpha-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
-cluster	alpha-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness; as it started: 10-groups.json: SC0002ReferenceSyntaxInvalid
-cluster	bravo-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
-cluster	bravo-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
-cluster	bravo-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness
-cluster	corgi-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
-cluster	corgi-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
-cluster	corgi-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read
-cluster	delta-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
-cluster	delta-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
-cluster	delta-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read
-cluster	eagle-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
-cluster	eagle-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
-cluster	eagle-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started
-cluster	fable-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
-cluster	fable-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
-cluster	fable-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started
-cluster	gamma-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
-cluster	gamma-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
-cluster	gamma-kanidm migrations	ok	4	Kanidm migrations failed	applied every file as it started
-cluster	hydra-kanidm IDs	ok	4	Kanidm IDs invalid	each a UUID of its own from Kanidm's dynamic range on
-cluster	hydra-kanidm admin accounts	ok	4	Kanidm admin accounts enabled	disabled
-cluster	hydra-kanidm migrations	late	4	Kanidm migrations failed	Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness; nothing here read how it ran them as it started at 2026-10-22T10:30:00Z, which counts as failed; restarting it runs them again
-host	cluster status	ok	4	cluster status unreadable	read
 kanidm	judged	{"alpha":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.0","upgrade":["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"],"failed":["10-groups.json: SC0002ReferenceSyntaxInvalid"],"denied":0},"upgrade":["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"]},"bravo":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.0","upgrade":null,"failed":[],"denied":0},"upgrade":["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"]},"corgi":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.0","upgrade":null,"failed":[],"denied":0},"upgrade":["Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read"]},"delta":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.0","upgrade":null,"failed":[],"denied":0},"upgrade":["Kanidm's upgrade from 1.11.2 to 1.12.0, which no check here read"]},"eagle":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.13.0","upgrade":[],"failed":[],"denied":0},"upgrade":[]},"fable":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.1","upgrade":null,"failed":[],"denied":0},"upgrade":[]},"gamma":{"started":"2026-10-22T11:50:00Z","migrations":{"version":"1.12.0","upgrade":null,"failed":[],"denied":0},"upgrade":[]},"hydra":{"started":"2026-10-01T08:00:00Z","migrations":{"version":"1.12.0","upgrade":null,"failed":[],"denied":0},"upgrade":["Kanidm's upgrade to 1.12.0, phase 7 - builtin access control profiles: AttributeUniqueness"]}}
+checks	done

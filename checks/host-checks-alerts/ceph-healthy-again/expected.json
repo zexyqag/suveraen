@@ -1,0 +1,6 @@
+{
+  "title": "Ceph healthy again",
+  "priority": 3,
+  "body": "Cleared: Ceph POOL_NEAR_FULL, Ceph PG_DAMAGED",
+  "late": ""
+}

@@ -1,0 +1,19 @@
+{
+  "cluster": {
+    "cephcluster": {
+      "metadata": {
+        "name": "rook-ceph",
+        "namespace": "rook-ceph",
+        "creationTimestamp": "2026-10-01T00:00:00Z"
+      },
+      "spec": {},
+      "status": {
+        "ceph": {
+          "health": "HEALTH_OK",
+          "lastChecked": "2026-10-22T11:59:00Z",
+          "details": {}
+        }
+      }
+    }
+  }
+}

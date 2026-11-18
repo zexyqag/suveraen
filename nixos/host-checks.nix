@@ -33,6 +33,45 @@ let
     }
     .${lib.last m};
 
+  # What the report runs: the judge on every family declared, each a jq module whose check gives its rows
+  # (host-checks/judge.jq, host-checks/rows.jq), and the alert's grammar.
+  families = lib.attrNames cfg.families;
+  judge = pkgs.linkFarm "host-checks" (
+    [
+      {
+        name = "judge.jq";
+        path = ./host-checks/judge.jq;
+      }
+      {
+        name = "rows.jq";
+        path = ./host-checks/rows.jq;
+      }
+      {
+        name = "alert.jq";
+        path = ./host-checks/alert.jq;
+      }
+      {
+        name = "main.jq";
+        path = pkgs.writeText "main.jq" ''
+          import "judge" as judge;
+          ${lib.concatMapStrings (name: "import \"${name}\" as family_${name};\n") families}
+          judge::judge(${
+            if families == [ ] then
+              "empty"
+            else
+              lib.concatMapStringsSep ", " (
+                name: "{name: \"${name}\", rows: [family_${name}::check(.)]}"
+              ) families
+          })
+        '';
+      }
+    ]
+    ++ lib.mapAttrsToList (name: path: {
+      name = "${name}.jq";
+      inherit path;
+    }) cfg.families
+  );
+
   spec = pkgs.writeText "host-checks.json" (
     builtins.toJSON {
       # The k3s node name: cluster.nix sets no other.
@@ -233,7 +272,7 @@ let
         '{$now, spec: $spec[0], $files, stun: $stun[0], cluster: $cluster[0],
           state: {lastRead: $read, firstSeen: $seen[0], kanidmChecked: $kanidm, kanidmJudged: $judged[0],
             mesh: $mesh[0]}}' \
-        | jq -r -f ${./host-checks.jq})
+        | jq -r -L ${judge} -f ${judge}/main.jq)
       if grep -qx $'kanidm\tchecked' <<<"$findings"; then echo "$now" >"$state/kanidm-checked"; fi
       judged=$(jq -R -r 'split("\t") | select(.[0:2] == ["kanidm", "judged"]) | .[2]' <<<"$findings")
       if [ -n "$judged" ]; then
@@ -241,13 +280,13 @@ let
         mv "$state/kanidm-judged.json.new" "$state/kanidm-judged.json"
       fi
       jq -R -r 'split("\t") | select(.[0:2] != ["mesh", "state"])
-        | if length == 6 then "\(.[2]) \(.[1]): \(.[5])" elif length == 2 then "\(.[0]) scope: \(.[1])"
-          else "\(.[0]) \(.[1]): \(.[2])" end' <<<"$findings"
+        | if length == 8 then "\(.[2]) \(.[1]): \(.[5])" elif .[0] == "cluster" then "cluster scope: \(.[1])"
+          elif length == 3 then "\(.[0]) \(.[1]): \(.[2])" else join(" ") end' <<<"$findings"
 
       touch "$state/late.tsv"
       decision=$(jq -R -s -c --rawfile alerted "$state/late.tsv" --argjson now "$now" \
         --argjson remind ${toString (seconds cfg.remindAfter)} \
-        --argjson reminded "$(cat "$state/reminded-at" 2>/dev/null || echo 0)" -f ${./host-checks-alert.jq} <<<"$findings")
+        --argjson reminded "$(cat "$state/reminded-at" 2>/dev/null || echo 0)" -f ${judge}/alert.jq <<<"$findings")
       title=$(jq -r '.title // empty' <<<"$decision")
       if [ -n "$title" ]; then
         # The state stays as it was, so the next run sends it again.
@@ -301,6 +340,23 @@ in
       };
     };
 
+    families = lib.mkOption {
+      type = lib.types.attrsOf lib.types.path;
+      default = { };
+      description = ''
+        The families of checks, by name: each a jq module beside host-checks/rows.jq, whose check($c) gives the rows of
+        what it finds in what the server read ($c, with the scope it checks in), as host-checks/judge.jq describes.
+      '';
+    };
+
+    judge = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      internal = true;
+      default = judge;
+      description = "The checks' judge on every family, and the grammar of their alerts, as the report runs them.";
+    };
+
     files = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.submodule {
@@ -332,7 +388,30 @@ in
         assertion = lib.all (f: lib.hasPrefix "/" f.path) (lib.attrValues cfg.files);
         message = "suveraen.checks.files' paths are absolute.";
       }
+      {
+        # Each is a module of the judge's, imported from its file under an alias no jq keyword can be.
+        assertion = lib.all (
+          name:
+          builtins.match "[a-z][a-z0-9]*" name != null
+          && !lib.elem name [
+            "judge"
+            "rows"
+            "alert"
+            "main"
+          ]
+        ) families;
+        message = "suveraen.checks.families are named [a-z][a-z0-9]*, other than judge, rows, alert and main.";
+      }
     ];
+
+    suveraen.checks.families = {
+      api = ./host-checks/api.jq;
+      backups = ./host-checks/backups.jq;
+      ceph = ./host-checks/ceph.jq;
+      kanidm = ./host-checks/kanidm.jq;
+      mesh = ./host-checks/mesh.jq;
+      stun = ./host-checks/stun.jq;
+    };
 
     # It may read the status it judges, by name where the kind holds more, and nothing else: no Secrets, pods, logs or
     # jobs.
