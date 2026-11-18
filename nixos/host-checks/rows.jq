@@ -35,3 +35,11 @@ def complete($prefix): ["complete", $prefix];
 
 # The family could tell nothing under the prefix: what it found late there before stands, unless told of again.
 def hold($prefix): ["hold", $prefix];
+
+# When the family first found what $key names wrong, which the report keeps for the next run as $c.state.since[$key];
+# what the family doesn't give again is forgotten.
+def first_seen($key; $at): ["since", $key, $at];
+
+# What the family first found wrong under the prefix, kept as it was while it can tell nothing.
+def seen_before($c; $prefix):
+  $c.state.since // {} | to_entries[] | select(.key | startswith($prefix)) | ["since", .key, .value];

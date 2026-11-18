@@ -1,0 +1,51 @@
+{
+  "state": {
+    "since": {
+      "Flux Kustomization flux-system/alpha-hello": 1792659600
+    }
+  },
+  "cluster": {
+    "kustomizations": {
+      "items": [
+        {
+          "metadata": {
+            "name": "alpha-hello",
+            "namespace": "flux-system"
+          },
+          "spec": {
+            "dependsOn": [
+              {
+                "name": "alpha-hello-db"
+              }
+            ]
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "DependencyNotReady"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "alpha-hello-db",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "HealthCheckFailed"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

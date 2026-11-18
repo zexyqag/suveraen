@@ -18,6 +18,7 @@ cluster	alpha-netbird tokens	unknown	4	mesh tokens outside the rules	unchecked: 
 host	STUN 203.0.113.10	ok	4	STUN unanswered	answered on UDP 3478	STUN answered again	stun
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 host	mesh STUN port	ok	4	mesh STUN port wrong	UDP 3478, the cluster's STUN_PORT	mesh STUN port right again	mesh
-kanidm	checked
+complete	certificates	certificate 
+complete	flux	Flux 
 kanidm	judged	{}
 checks	done

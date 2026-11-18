@@ -1,5 +1,4 @@
 cluster	skipped
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
-kanidm	checked
 kanidm	judged	{}
 checks	done

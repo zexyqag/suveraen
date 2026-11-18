@@ -16,12 +16,12 @@
 # channel when the watcher is gone, and says there when the watcher's ntfy stops answering; a daily publish the way its
 # alerts go tells the watcher when that way is broken. The server and its Flux only take commits signed by a release
 # signer, the server never goes back to an older one, and it alerts when its configuration, or the nixpkgs its release
-# locks, gets old. The server's checks read how old the backups the cluster records are and Ceph's health with an
-# account that reads nothing else, ask the node's addresses for STUN, and alert once per change, also when the cluster
-# can't be read. Its etcd snapshots reach both providers encrypted to recovery keys, under a prefix its key can neither
-# leave nor empty; with one provider down they still reach the other, and the phone hears of it. Wiped, the server comes
-# back from a provider's copy through its restore command, with its token file alone; another token leaves a running
-# server's own database in place.
+# locks, gets old. The server's checks read how old the backups the cluster records are, Ceph's health, Flux's objects
+# and the certificates with an account that reads nothing else, ask the node's addresses for STUN, and alert once per
+# change, also when the cluster can't be read. Its etcd snapshots reach both providers encrypted to recovery keys, under
+# a prefix its key can neither leave nor empty; with one provider down they still reach the other, and the phone hears
+# of it. Wiped, the server comes back from a provider's copy through its restore command, with its token file alone;
+# another token leaves a running server's own database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -1383,7 +1383,7 @@ pkgs.testers.runNixOSTest {
       def create(obj):
           server.succeed(f"echo {shlex.quote(json.dumps(obj))} | kubectl create -f -")
 
-      with subtest("The servers' checks read the backups' and Ceph's status and nothing else"):
+      with subtest("The servers' checks read the backups', Ceph's, Flux's and the certificates' status and nothing else"):
           server.succeed("systemctl start host-checks")
           server.succeed("systemctl show host-checks -p DynamicUser --value | grep -x yes")
           checker = "--as=system:serviceaccount:kube-system:host-checks"
@@ -1396,6 +1396,10 @@ pkgs.testers.runNixOSTest {
               (["volsync.backube"], ["replicationsources"], [], ["list"]),
               (["batch"], ["cronjobs"], ["offsite", "offsite-check-1", "offsite-check-2"], ["get"]),
               (["ceph.rook.io"], ["cephclusters"], ["rook-ceph"], ["get"]),
+              (["kustomize.toolkit.fluxcd.io"], ["kustomizations"], [], ["list"]),
+              (["helm.toolkit.fluxcd.io"], ["helmreleases"], [], ["list"]),
+              (["source.toolkit.fluxcd.io"], ["gitrepositories", "ocirepositories"], [], ["list"]),
+              (["cert-manager.io"], ["certificates"], [], ["list"]),
           ]), rules
           for denied in [
               "list secrets -A",
@@ -1407,9 +1411,89 @@ pkgs.testers.runNixOSTest {
               "get cronjobs/other -n default",
               "list configmaps -A",
               "list jobs -A",
+              "get kustomizations.kustomize.toolkit.fluxcd.io/cluster -n flux-system",
+              "watch helmreleases.helm.toolkit.fluxcd.io -A",
+              "patch gitrepositories.source.toolkit.fluxcd.io/suveraen -n flux-system",
+              "list buckets.source.toolkit.fluxcd.io -A",
+              "list helmcharts.source.toolkit.fluxcd.io -A",
+              "list certificaterequests.cert-manager.io -A",
+              "list issuers.cert-manager.io -A",
+              "list orders.acme.cert-manager.io -A",
+              "list gateways.gateway.networking.k8s.io -A",
+              "list httproutes.gateway.networking.k8s.io -A",
           ]:
               server.fail(f"kubectl auth can-i {denied} {checker}")
           server.succeed(f"kubectl auth can-i get cronjobs/offsite -n default {checker}")
+
+      # As if the checks had first found what each key names wrong as many seconds ago as given.
+      def found_wrong(ago):
+          server.succeed(
+              f"cd /var/lib/private/host-checks && jq --argjson ago {shlex.quote(json.dumps(ago))}"
+              " '. + ($ago | map_values(now - . | floor))' since.json > since.json.new && mv since.json.new since.json"
+          )
+
+      flux_ready = {"conditions": [{"type": "Ready", "status": "True", "reason": "Succeeded"}]}
+
+      with subtest("An unready Flux source, and Flux on another release than the host's, reach the phone once, and so does their recovery"):
+          # The test runs none of Flux's controllers, so its objects hold no status but what it gives them: none is
+          # ready, and the root Kustomization applied nothing, while the server took its own release.
+          found_wrong({"Flux GitRepository flux-system/suveraen": 2 * 3600, "Flux release": 2 * 86400})
+          server.succeed("systemctl start host-checks")
+          [late] = sent("Flux and the host on different releases; Flux not ready")
+          assert keys(late["message"]) == {"New:", "Flux GitRepository flux-system/suveraen", "Flux release"}, late
+          server.succeed("systemctl start host-checks")
+          assert len([t for t in server.succeed("${ops} | jq -r .title").splitlines() if t.startswith("server: Flux")]) == 1
+          release = server.succeed("cat ${nodes.server.suveraen.upgrade.revisionFile}").strip()
+          set_status("gitrepository", "flux-system", "suveraen", flux_ready, "--subresource=status")
+          set_status("kustomization", "flux-system", "cluster", flux_ready | {"lastAppliedRevision": f"main@sha1:{release}"},
+                     "--subresource=status")
+          server.succeed("systemctl start host-checks")
+          [back] = sent("Flux and the host on one release again; Flux ready again")
+          assert back.get("priority", 3) == 3, back
+
+      with subtest("A suspended Kustomization reaches the phone once, and so does its resume"):
+          create({
+              "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+              "kind": "Kustomization",
+              "metadata": {"name": "probe", "namespace": "flux-system"},
+              "spec": {"interval": "1h", "path": "./x", "prune": True, "sourceRef": {"kind": "GitRepository", "name": "suveraen"},
+                       "suspend": True},
+          })
+          set_status("kustomization", "flux-system", "probe", flux_ready, "--subresource=status")
+          found_wrong({"Flux Kustomization flux-system/probe suspended": 2 * 86400})
+          server.succeed("systemctl start host-checks")
+          [suspended] = sent("Flux suspended")
+          assert keys(suspended["message"]) == {"New:", "Flux Kustomization flux-system/probe suspended"}, suspended
+          assert suspended.get("priority", 3) == 3, suspended
+          server.succeed("systemctl start host-checks")
+          assert len(sent("Flux suspended")) == 1
+          server.succeed("""kubectl -n flux-system patch kustomization probe --type merge -p '{"spec":{"suspend":false}}'""")
+          server.succeed("systemctl start host-checks")
+          [resumed] = sent("Flux resumed")
+          assert resumed.get("priority", 3) == 3, resumed
+          server.succeed("kubectl -n flux-system delete kustomization probe")
+
+      with subtest("A certificate late to renew reaches the phone once, and so does its renewal"):
+          # A private CA's, as the platform's own parts hold; the stand-in records no status of its own.
+          create(certificate(None, "private", dnsNames=["barman-cloud"], issuerRef=own))
+
+          def issued(before, after, renewal):
+              set_status("certificates.cert-manager.io", "private", "probe",
+                         {"notBefore": at(before), "notAfter": at(after), "renewalTime": at(renewal)})
+
+          # Less than a tenth of its lifetime left.
+          issued("-85 days", "+5 days", "-25 days")
+          server.succeed("systemctl start host-checks")
+          [late] = sent("certificate renewal late")
+          assert keys(late["message"]) == {"New:", "certificate private/probe"}, late
+          assert late["priority"] == 5, late
+          server.succeed("systemctl start host-checks")
+          assert len(sent("certificate renewal late")) == 1
+          issued("now", "+90 days", "+60 days")
+          server.succeed("systemctl start host-checks")
+          [renewed] = sent("certificates renewed")
+          assert renewed.get("priority", 3) == 3, renewed
+          server.succeed("kubectl -n private delete certificates.cert-manager.io probe")
 
       with subtest("Late backups reach the phone once, and so does their recovery"):
           server.succeed("kubectl create namespace checks-db && kubectl create namespace checks-app")
@@ -1540,7 +1624,9 @@ pkgs.testers.runNixOSTest {
           for path in [
               "/api/v1/nodes", "/api/v1/persistentvolumeclaims", "/apis/postgresql.cnpg.io/v1/clusters",
               "/apis/barmancloud.cnpg.io/v1/objectstores", "/apis/volsync.backube/v1alpha1/replicationsources",
-              "/apis/ceph.rook.io/v1/cephclusters",
+              "/apis/ceph.rook.io/v1/cephclusters", "/apis/kustomize.toolkit.fluxcd.io/v1/kustomizations",
+              "/apis/helm.toolkit.fluxcd.io/v2/helmreleases", "/apis/source.toolkit.fluxcd.io/v1/gitrepositories",
+              "/apis/source.toolkit.fluxcd.io/v1/ocirepositories", "/apis/cert-manager.io/v1/certificates",
           ]:
               server.wait_until_succeeds(f"kubectl get --raw {path}", timeout=300)
           server.succeed("systemctl start host-checks")

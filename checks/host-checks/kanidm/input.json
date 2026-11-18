@@ -1,6 +1,6 @@
 {
   "state": {
-    "kanidmChecked": 1792667700
+    "since": {"Kanidm check": 1792667700}
   },
   "cluster": {
     "idm": {

@@ -1,0 +1,49 @@
+{
+  "state": {
+    "since": {
+      "Flux GitRepository flux-system/suveraen": 1792663200
+    }
+  },
+  "cluster": {
+    "kustomizations": {
+      "items": [
+        {
+          "metadata": {
+            "name": "cluster",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Ready",
+                "status": "True",
+                "reason": "ReconciliationSucceeded"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "gitrepositories": {
+      "items": [
+        {
+          "metadata": {
+            "name": "suveraen",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "GitOperationFailed"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

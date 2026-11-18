@@ -3,6 +3,7 @@ cluster	Ceph status	late	4	Ceph status not updated	HEALTH_OK, checked 2026-10-22
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 complete	ceph	Ceph 
-kanidm	checked
+complete	certificates	certificate 
+complete	flux	Flux 
 kanidm	judged	{}
 checks	done

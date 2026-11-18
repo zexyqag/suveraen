@@ -1,0 +1,36 @@
+{
+  "revision": "0123456789abcdef0123456789abcdef01234567",
+  "state": {
+    "since": {
+      "Flux release": 1792497600
+    }
+  },
+  "cluster": {
+    "kustomizations": {
+      "items": [
+        {
+          "metadata": {
+            "name": "cluster",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "True",
+                "reason": "ReconciliationSucceeded"
+              }
+            ],
+            "lastAppliedRevision": "main@sha1:fedcba9876543210fedcba9876543210fedcba98"
+          }
+        }
+      ]
+    }
+  }
+}

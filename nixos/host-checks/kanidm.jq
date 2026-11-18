@@ -111,15 +111,16 @@ def check($c):
   | ($c.state.kanidmJudged // {} | if $told then judged($idm; .) end) as $judged
   | [kanidm({now: $c.now, grace: $c.spec.missingGrace}; $idm; $judged)] as $kanidm
   | unchecked($idm; $kanidm) as $why
+  | ($c.state.since["Kanidm check"] // $c.now) as $unchecked
   | (select($c.scope == "evaluated")
       | $kanidm[],
-        (($c.state.kanidmChecked // $c.now) as $checked
-         | part("Kanidm check"; "check"; $why != null and $c.now - $checked > $c.spec.unreadableAfter;
-             if $why == null then "every tenant's Kanidm checked"
-             else "every tenant's Kanidm last checked \($checked | since($c.now)), limit"
-               + " \($c.spec.unreadableAfter | span): \($why)"
-             end)),
+        part("Kanidm check"; "check"; $why != null and $c.now - $unchecked > $c.spec.unreadableAfter;
+          if $why == null then "every tenant's Kanidm checked"
+          else "every tenant's Kanidm unchecked since \($unchecked | since($c.now)), limit"
+            + " \($c.spec.unreadableAfter | span): \($why)"
+          end),
         # While suveraen-idm check tells nothing, the tenants' Kanidm stand as they were found last.
         (select($told | not) | hold(""))),
-    (select($read and $why == null) | ["kanidm", "checked"]),
+    # Kept, whichever server checks the cluster, until every tenant's Kanidm is checked.
+    (select($why != null or ($read | not)) | first_seen("Kanidm check"; $unchecked)),
     (select($read and $told) | ["kanidm", "judged", ($judged | tojson)]);

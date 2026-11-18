@@ -1,0 +1,98 @@
+{
+  "state": {
+    "since": {
+      "Flux GitRepository flux-system/suveraen": 1792663200,
+      "Flux HelmRelease alpha-hello/hello": 1792668600,
+      "Flux Kustomization flux-system/gone": 1792663200,
+      "STUN 192.0.2.1": 1792584000
+    }
+  },
+  "cluster": {
+    "kustomizations": {
+      "items": [
+        {
+          "metadata": {
+            "name": "cluster",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "True",
+                "reason": "ReconciliationSucceeded"
+              }
+            ],
+            "lastAppliedRevision": "main@sha1:fedcba9876543210fedcba9876543210fedcba98"
+          }
+        }
+      ]
+    },
+    "helmreleases": {
+      "items": [
+        {
+          "metadata": {
+            "name": "hello",
+            "namespace": "alpha-hello"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "Unknown",
+                "reason": "Progressing"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "gitrepositories": {
+      "items": [
+        {
+          "metadata": {
+            "name": "suveraen",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "GitOperationFailed"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "ocirepositories": {
+      "items": [
+        {
+          "metadata": {
+            "name": "hello",
+            "namespace": "alpha-hello"
+          }
+        }
+      ]
+    }
+  }
+}

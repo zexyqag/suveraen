@@ -1,0 +1,88 @@
+{
+  "state": {
+    "since": {
+      "Flux Kustomization flux-system/tenant-alpha suspended": 1792497600,
+      "Flux Kustomization flux-system/tenant-alpha": 1792411200,
+      "Flux HelmRelease alpha-hello/hello suspended": 1792666800
+    }
+  },
+  "cluster": {
+    "kustomizations": {
+      "items": [
+        {
+          "metadata": {
+            "name": "tenant-alpha",
+            "namespace": "flux-system"
+          },
+          "spec": {
+            "suspend": true
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "HealthCheckFailed"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "tenant-bravo",
+            "namespace": "flux-system"
+          },
+          "spec": {
+            "suspend": false
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "True",
+                "reason": "ReconciliationSucceeded"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "helmreleases": {
+      "items": [
+        {
+          "metadata": {
+            "name": "hello",
+            "namespace": "alpha-hello"
+          },
+          "spec": {
+            "suspend": true
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "True",
+                "reason": "ReconciliationSucceeded"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

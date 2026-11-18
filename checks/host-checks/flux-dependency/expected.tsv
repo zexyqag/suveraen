@@ -1,0 +1,18 @@
+cluster	evaluated
+cluster	Flux HelmRelease alpha-netbird/netbird	unknown	4	Flux not ready	waits for Flux HelmRelease alpha-postgres/postgres	Flux ready again	flux
+cluster	Flux HelmRelease alpha-netbird/netbird suspended	ok	3	Flux suspended	not suspended	Flux resumed	flux
+cluster	Flux HelmRelease alpha-postgres/postgres	ok	4	Flux not ready	InstallFailed since 2026-10-22T12:00:00Z (0m ago), limit 1h	Flux ready again	flux
+cluster	Flux Kustomization flux-system/alpha-hello	unknown	4	Flux not ready	waits for Flux Kustomization flux-system/alpha-hello-db	Flux ready again	flux
+cluster	Flux Kustomization flux-system/alpha-hello suspended	ok	3	Flux suspended	not suspended	Flux resumed	flux
+cluster	Flux Kustomization flux-system/alpha-hello-db	late	4	Flux not ready	HealthCheckFailed since 2026-10-22T10:00:00Z (2h 0m ago), limit 1h	Flux ready again	flux
+cluster	Flux Kustomization flux-system/bravo-hello	ok	4	Flux not ready	DependencyNotReady since 2026-10-22T12:00:00Z (0m ago), limit 1h	Flux ready again	flux
+cluster	Flux Kustomization flux-system/bravo-kanidm	late	4	Flux not ready	DependencyNotReady since 2026-10-22T10:00:00Z (2h 0m ago), limit 1h	Flux ready again	flux
+cluster	Flux Kustomization flux-system/cluster	ok	4	Flux not ready	ready	Flux ready again	flux
+cluster	Flux Kustomization flux-system/policies	ok	4	Flux not ready	ready	Flux ready again	flux
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+complete	certificates	certificate 
+complete	flux	Flux 
+kanidm	judged	{}
+since	state	{"Flux Kustomization flux-system/alpha-hello":1792659600,"Flux Kustomization flux-system/alpha-hello-db":1792663200,"Flux Kustomization flux-system/bravo-hello":1792670400,"Flux Kustomization flux-system/bravo-kanidm":1792663200,"Flux HelmRelease alpha-postgres/postgres":1792670400}
+checks	done

@@ -1,0 +1,13 @@
+cluster	evaluated
+cluster	Flux HelmRelease alpha-hello/hello	ok	4	Flux not ready	ready	Flux ready again	flux
+cluster	Flux HelmRelease alpha-hello/hello suspended	ok	3	Flux suspended	suspended since 2026-10-22T11:00:00Z (1h 0m ago), limit 1d	Flux resumed	flux
+cluster	Flux Kustomization flux-system/tenant-alpha	unknown	4	Flux not ready	suspended, so not reconciled	Flux ready again	flux
+cluster	Flux Kustomization flux-system/tenant-alpha suspended	late	3	Flux suspended	suspended since 2026-10-20T12:00:00Z (2d 0h ago), limit 1d	Flux resumed	flux
+cluster	Flux Kustomization flux-system/tenant-bravo	ok	4	Flux not ready	ready	Flux ready again	flux
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+complete	certificates	certificate 
+complete	flux	Flux 
+kanidm	judged	{}
+since	state	{"Flux Kustomization flux-system/tenant-alpha suspended":1792497600,"Flux Kustomization flux-system/tenant-alpha":1792411200,"Flux HelmRelease alpha-hello/hello suspended":1792666800}
+checks	done

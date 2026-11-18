@@ -1,0 +1,24 @@
+{
+  "cluster": {
+    "kustomizations": {
+      "items": [
+        {
+          "metadata": {
+            "name": "tenant-alpha",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Ready",
+                "status": "True",
+                "reason": "ReconciliationSucceeded"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

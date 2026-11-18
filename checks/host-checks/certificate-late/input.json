@@ -1,0 +1,31 @@
+{
+  "cluster": {
+    "certificates": {
+      "items": [
+        {
+          "metadata": {
+            "name": "alpha-hello-hello",
+            "namespace": "gateway",
+            "creationTimestamp": "2026-08-20T12:00:00Z"
+          },
+          "status": {
+            "notBefore": "2026-08-20T12:00:00Z",
+            "notAfter": "2026-11-18T12:00:00Z",
+            "renewalTime": "2026-10-19T12:00:00Z"
+          }
+        },
+        {
+          "metadata": {
+            "name": "barman-cloud-server",
+            "namespace": "cloudnative-pg",
+            "creationTimestamp": "2026-08-03T12:00:00Z"
+          },
+          "status": {
+            "notBefore": "2026-08-03T12:00:00Z",
+            "notAfter": "2026-11-01T12:00:00Z"
+          }
+        }
+      ]
+    }
+  }
+}

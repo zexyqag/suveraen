@@ -1,0 +1,6 @@
+{
+  "title": "certificate renewal late",
+  "priority": 5,
+  "body": "New:\ncertificate gateway/alpha-hello-hello: renewal due 2026-09-27T12:00:00Z (25d 0h ago), grace 1d; expires 2026-10-27T12:00:00Z",
+  "late": "cluster\tcertificate gateway/alpha-hello-hello\tlate\t5\tcertificate renewal late\trenewal due 2026-09-27T12:00:00Z (25d 0h ago), grace 1d; expires 2026-10-27T12:00:00Z\tcertificates renewed\tcertificates\n"
+}

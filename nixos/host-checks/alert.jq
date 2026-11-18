@@ -35,8 +35,8 @@ rows as $rows
 | ([$found[] | select(.status == "late")] + $kept) as $late
 | [$found[] | select(.status == "ok") | .key] as $ok
 | [$found[].key] as $keys
-| [$before[].key] as $was
-| [$late[] | select(.key | IN($was[]) | not)] as $new
+# New, as is one whose priority rose since it was alerted.
+| [$late[] | . as $l | select(any($before[]; .key == $l.key and .priority >= $l.priority) | not)] as $new
 # What a family read all of and no longer finds has cleared, unless it stands as above; anything else no longer found
 # went with what it was about.
 | [$before[]

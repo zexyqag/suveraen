@@ -1,3 +1,4 @@
 cluster	unreadable
 host	cluster status	late	4	cluster status unreadable	last read 2026-10-22T11:15:00Z (45m ago), limit 30m: /apis/batch/v1/namespaces/alpha-postgres/cronjobs/offsite: HTTP 403	cluster status readable again	api
+since	state	{"Kanidm check":1792670400}
 checks	done

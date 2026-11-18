@@ -14,6 +14,7 @@ cluster	other-hello/files-1	ok	4	backups late	never, counted from 2026-10-22T10:
 cluster	other-hello/offsite-check-1	late	4	backups late	missing, required since 2026-10-22T10:30:00Z (1h 30m ago), grace 1h	backups on time again	backups
 cluster	other-hello/offsite-check-2	late	4	backups late	missing, required since 2026-10-22T10:30:00Z (1h 30m ago), grace 1h	backups on time again	backups
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
-kanidm	checked
+complete	certificates	certificate 
+complete	flux	Flux 
 kanidm	judged	{}
 checks	done

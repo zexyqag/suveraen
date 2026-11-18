@@ -1,0 +1,24 @@
+{
+  "cluster": {
+    "gitrepositories": {
+      "items": [
+        {
+          "metadata": {
+            "name": "suveraen",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Ready",
+                "status": "True",
+                "reason": "Succeeded"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

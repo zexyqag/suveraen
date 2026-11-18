@@ -1,6 +1,6 @@
 {
   "state": {
-    "kanidmChecked": 1792669500
+    "since": {"Kanidm check": 1792669500}
   },
   "cluster": {
     "idm": {"busy": true, "tenants": null}

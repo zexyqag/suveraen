@@ -1,0 +1,13 @@
+{
+  "revision": "0123456789abcdef0123456789abcdef01234567",
+  "state": {
+    "since": {
+      "Flux GitRepository flux-system/suveraen": 1792663200,
+      "Flux release": 1792584000,
+      "edge alpha-hello-hello": 1792666800
+    }
+  },
+  "cluster": {
+    "unreadable": "/apis/kustomize.toolkit.fluxcd.io/v1/kustomizations: HTTP 503"
+  }
+}

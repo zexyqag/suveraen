@@ -34,6 +34,7 @@ let
         exit 1
       fi
       echo "$count" >/run/suveraen-upgrade/revcount
+      echo "$rev" >/run/suveraen-upgrade/revision
       echo "$modified" >/run/suveraen-upgrade/lastmodified
       # When each followed input that the release locks was last changed, found by its name in the release's flake.nix.
       jq -c --argjson followed ${lib.escapeShellArg (builtins.toJSON cfg.followedInputs)} '
@@ -56,6 +57,14 @@ in
         Alert once a day when the configuration this host runs was committed longer ago than this. It catches releases
         that stopped coming as well as a branch someone keeps frozen.
       '';
+    };
+
+    revisionFile = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      internal = true;
+      default = "${state}/revision";
+      description = "Where the host records the commit its last upgrade built, once it has upgraded.";
     };
 
     followedInputs = lib.mkOption {
@@ -97,7 +106,14 @@ in
         StateDirectory = "suveraen-upgrade";
       };
       preStart = "${lib.getExe resolve} ${lib.escapeShellArg flake}";
-      postStart = "cp /run/suveraen-upgrade/revcount /run/suveraen-upgrade/lastmodified /run/suveraen-upgrade/inputs.json ${state}/";
+      postStart = "cp ${
+        lib.concatMapStringsSep " " (file: "/run/suveraen-upgrade/${file}") [
+          "revcount"
+          "revision"
+          "lastmodified"
+          "inputs.json"
+        ]
+      } ${state}/";
     };
 
     systemd.services.release-age = {

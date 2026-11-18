@@ -62,11 +62,11 @@
 # replaces; the server's checks alert once when an app holds a wrong one, and when that clears.
 # The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
 # tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
-# records it, its own off-site copies included, none of them late, and each mesh within the operator's rules, in a
-# session that takes no write; one more pool still fits, and when it passes its quota's warning they alert once, and
-# once more when that clears, as for an exit, a token and a person who left in a mesh, with the change of who can reach
-# what. Its etcd comes back in place from a provider's copy, decrypted off the server, as it was when copied, and Ceph
-# stays healthy.
+# records it, its own off-site copies included, none of them late, Flux's objects and every certificate in order, and
+# each mesh within the operator's rules, in a session that takes no write; one more pool still fits, and when it passes
+# its quota's warning they alert once, and once more when that clears, as for an exit, a token and a person who left in
+# a mesh, with the change of who can reach what. Its etcd comes back in place from a provider's copy, decrypted off the
+# server, as it was when copied, and Ceph stays healthy.
 {
   pkgs,
   module,
@@ -3319,7 +3319,7 @@ runTest {
           # any, each by those it names, so that another finding alerted with them changes nothing here.
           def checks_said(*titles):
               named = "${nodes.server.networking.hostName}: "
-              ours = ("backups ", "Ceph ", "cluster status ", "Kanidm ", "STUN ", "mesh ", "still: ")
+              ours = ("backups ", "Ceph ", "certificate", "cluster status ", "Flux ", "Kanidm ", "STUN ", "mesh ", "still: ")
               heard = []
               for a in alerts():
                   title = a.get("title", "").removeprefix(named)
@@ -3352,7 +3352,7 @@ runTest {
                       refused_at(n, server_keys, f"s3api list-objects-v2 --bucket {bucket_at(n, tenant)}")
                       refused_at(n, keys_of(tenant, n), f"s3api list-objects-v2 --bucket {platform}")
 
-          with subtest("The server finds every backup's last good copy where its controller records it, and none is late"):
+          with subtest("The server finds every backup's last good copy where its controller records it, judges Flux's objects and every certificate, and none is late"):
               # When each backup was last good, as the controllers record it, under the name the server gives it.
               def recorded():
                   stores = {(o["metadata"]["namespace"], o["metadata"]["name"]): o for o in items("objectstores")}
@@ -3406,11 +3406,26 @@ runTest {
                   "exit", "public", "all", "share", "foreign", "home", "admins", "tokens", "powers", "settings", "floor",
                   "leaver", "scrub", "changed", "check",
               ]} | {"mesh STUN port"}
+              # Each of Flux's objects and each certificate, which renews in time; the server here never upgrades, so
+              # Flux's release has nothing to be held to.
+              flux = {
+                  f"Flux {kind} {o['metadata']['namespace']}/{o['metadata']['name']}"
+                  for kind, plural in [("Kustomization", "kustomizations"), ("HelmRelease", "helmreleases"),
+                                       ("GitRepository", "gitrepositories"), ("OCIRepository", "ocirepositories")]
+                  for o in items(plural)
+              }
+              certificates = {f"certificate {c['metadata']['namespace']}/{c['metadata']['name']}" for c in items("certificates")}
+              assert flux and certificates, (flux, certificates)
               assert findings.keys() == (
-                  before.keys() | archiving | offsite | identities | stun_findings | mesh_parts
+                  before.keys() | archiving | offsite | identities | stun_findings | mesh_parts | flux | certificates
                   | {"Ceph status", "cluster status", "etcd-snapshots", "knot-backup"}
               ), findings
               assert all(state == "ok" for state, _ in findings.values()), findings
+              # One that Flux reconciles just then is ready again before its hour is up.
+              assert all(findings[key][1] == "ready" or findings[key][1].startswith("Progressing since ") for key in flux), {
+                  key: findings[key] for key in flux
+              }
+              assert all(findings[key][1].startswith("renews ") for key in certificates), {key: findings[key] for key in certificates}
               # How each tenant's Kanidm ran its migrations as it started, which the checks go by once its log no longer
               # reaches back there.
               judged = json.loads(server.succeed("cat /var/lib/private/host-checks/kanidm-judged.json"))

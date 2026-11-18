@@ -1,0 +1,30 @@
+{
+  "revision": "0123456789abcdef0123456789abcdef01234567",
+  "cluster": {
+    "kustomizations": {
+      "items": [
+        {
+          "metadata": {
+            "name": "cluster",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "ArtifactFailed"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

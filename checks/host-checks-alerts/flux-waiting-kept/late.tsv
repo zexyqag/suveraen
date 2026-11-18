@@ -1,0 +1,1 @@
+cluster	Flux Kustomization flux-system/alpha-hello	late	4	Flux not ready	HealthCheckFailed since 2026-10-22T09:00:00Z (3h 0m ago), limit 1h	Flux ready again	flux

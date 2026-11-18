@@ -1,0 +1,215 @@
+{
+  "state": {
+    "since": {
+      "Flux Kustomization flux-system/alpha-hello": 1792659600,
+      "Flux Kustomization flux-system/alpha-hello-db": 1792663200,
+      "Flux Kustomization flux-system/bravo-kanidm": 1792663200
+    }
+  },
+  "cluster": {
+    "kustomizations": {
+      "items": [
+        {
+          "metadata": {
+            "name": "cluster",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "True",
+                "reason": "ReconciliationSucceeded"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "alpha-hello",
+            "namespace": "flux-system"
+          },
+          "spec": {
+            "dependsOn": [
+              {
+                "name": "policies"
+              },
+              {
+                "name": "alpha-hello-db"
+              }
+            ]
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "DependencyNotReady"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "alpha-hello-db",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "HealthCheckFailed"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "bravo-hello",
+            "namespace": "flux-system"
+          },
+          "spec": {
+            "dependsOn": [
+              {
+                "name": "policies"
+              }
+            ]
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "DependencyNotReady"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "bravo-kanidm",
+            "namespace": "flux-system"
+          },
+          "spec": {
+            "dependsOn": [
+              {
+                "name": "missing"
+              }
+            ]
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "DependencyNotReady"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "policies",
+            "namespace": "flux-system"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "True",
+                "reason": "ReconciliationSucceeded"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "helmreleases": {
+      "items": [
+        {
+          "metadata": {
+            "name": "netbird",
+            "namespace": "alpha-netbird"
+          },
+          "spec": {
+            "dependsOn": [
+              {
+                "name": "postgres",
+                "namespace": "alpha-postgres"
+              }
+            ]
+          },
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "DependencyNotReady"
+              }
+            ]
+          }
+        },
+        {
+          "metadata": {
+            "name": "postgres",
+            "namespace": "alpha-postgres"
+          },
+          "spec": {},
+          "status": {
+            "conditions": [
+              {
+                "type": "Reconciling",
+                "status": "False",
+                "reason": "Succeeded"
+              },
+              {
+                "type": "Ready",
+                "status": "False",
+                "reason": "InstallFailed"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

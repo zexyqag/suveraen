@@ -1,5 +1,8 @@
 cluster	evaluated
-cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm last checked 2026-10-22T11:45:00Z (15m ago), limit 30m: another suveraen-idm run held its lock	Kanidm checked again	kanidm
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm unchecked since 2026-10-22T11:45:00Z (15m ago), limit 30m: another suveraen-idm run held its lock	Kanidm checked again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+complete	certificates	certificate 
+complete	flux	Flux 
 hold	kanidm	
+since	state	{"Kanidm check":1792669500}
 checks	done

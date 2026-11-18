@@ -1,0 +1,20 @@
+{
+  "cluster": {
+    "certificates": {
+      "items": [
+        {
+          "metadata": {
+            "name": "alpha-hello-hello",
+            "namespace": "gateway",
+            "creationTimestamp": "2026-07-29T12:00:00Z"
+          },
+          "status": {
+            "notBefore": "2026-07-29T12:00:00Z",
+            "notAfter": "2026-10-27T12:00:00Z",
+            "renewalTime": "2026-09-27T12:00:00Z"
+          }
+        }
+      ]
+    }
+  }
+}

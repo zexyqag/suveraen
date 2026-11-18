@@ -1,6 +1,8 @@
 # Every server checks, from the status the controllers record and with an account that may read little else, how old
 # each tenant's WAL archiving, base backups, off-site copies, checks and volume copies are against what their templates
-# allow (suveraen/max-age), how old its own backup files are, and Ceph's health; whether its own addresses answer STUN;
+# allow (suveraen/max-age), how old its own backup files are, and Ceph's health; whether Flux's objects are ready and
+# applied the release the server runs, and cert-manager renews every certificate in time; whether its own addresses
+# answer STUN;
 # and as root, with no credential, each tenant's Kanidm (suveraen-idm check, idm.nix) and each tenant's mesh against
 # the operator's rules (suveraen-mesh check, mesh.nix). It alerts once when that changes, again while it lasts, and
 # when it can't read the cluster or check every tenant's Kanidm and mesh, and notes each change of who can reach what in
@@ -101,6 +103,19 @@ let
       mesh = {
         inherit (cfg.mesh) minimumClient;
         loginExpiry = seconds cfg.mesh.loginExpiry;
+      };
+      flux = {
+        # The root Kustomization, which applies the release.
+        root = config.suveraen.cluster.fluxRoot;
+        notReadyAfter = seconds cfg.flux.notReadyAfter;
+        suspendedAfter = seconds cfg.flux.suspendedAfter;
+        behindAfter = seconds cfg.flux.behindAfter;
+      };
+      certificates = {
+        renewalGrace = seconds cfg.certificates.renewalGrace;
+        inherit (cfg.certificates) urgentShare;
+        # cert-manager issues within minutes; one with no certificate an hour after it was made failed to.
+        issueGrace = 3600;
       };
     }
   );
@@ -208,6 +223,11 @@ let
       get "/api/v1/persistentvolumeclaims?labelSelector=suveraen%2Fbackup%3Dvolsync" "$run/pvcs.json"
       get /apis/volsync.backube/v1alpha1/replicationsources "$run/replicationsources.json"
       get /apis/ceph.rook.io/v1/namespaces/rook-ceph/cephclusters/rook-ceph "$run/cephcluster.json"
+      get /apis/kustomize.toolkit.fluxcd.io/v1/kustomizations "$run/kustomizations.json"
+      get /apis/helm.toolkit.fluxcd.io/v2/helmreleases "$run/helmreleases.json"
+      get /apis/source.toolkit.fluxcd.io/v1/gitrepositories "$run/gitrepositories.json"
+      get /apis/source.toolkit.fluxcd.io/v1/ocirepositories "$run/ocirepositories.json"
+      get /apis/cert-manager.io/v1/certificates "$run/certificates.json"
       : >"$run/cronjobs.json"
       cronjobs() {
         for ns in $(jq -r '.items // [] | map(.metadata.namespace) | unique[]' "$1"); do
@@ -224,12 +244,24 @@ let
       [ -s "$run/mesh.json" ] || echo null >"$run/mesh.json"
 
       args=()
-      for part in nodes clusters objectstores pvcs replicationsources cephcluster cronjobs idm mesh; do
+      for part in nodes clusters objectstores pvcs replicationsources cephcluster kustomizations helmreleases \
+        gitrepositories ocirepositories certificates cronjobs idm mesh; do
         args+=(--slurpfile "$part" "$run/$part.json")
       done
-      jq -n "''${args[@]}" '{nodes: $nodes[0], clusters: $clusters[0], objectstores: $objectstores[0], pvcs: $pvcs[0],
-        replicationsources: $replicationsources[0], cephcluster: $cephcluster[0], cronjobs: ($cronjobs | add // {}),
-        idm: $idm[0], mesh: $mesh[0]}' >"$run/cluster.json"
+      # Of Flux's objects and certificates, only what the checks judge: a chart's values and a condition's message can
+      # hold anything the release gives them.
+      jq -n "''${args[@]}" '
+        def listed(f): if . == null then null else {items: [.items[] | f]} end;
+        def flux: {metadata: (.metadata | {name, namespace}), spec: (.spec | {suspend, dependsOn}),
+          status: {conditions: [.status.conditions[]? | {type, status, reason}],
+            lastAppliedRevision: .status.lastAppliedRevision}};
+        {nodes: $nodes[0], clusters: $clusters[0], objectstores: $objectstores[0], pvcs: $pvcs[0],
+          replicationsources: $replicationsources[0], cephcluster: $cephcluster[0],
+          kustomizations: ($kustomizations[0] | listed(flux)), helmreleases: ($helmreleases[0] | listed(flux)),
+          gitrepositories: ($gitrepositories[0] | listed(flux)), ocirepositories: ($ocirepositories[0] | listed(flux)),
+          certificates: ($certificates[0] | listed({metadata: (.metadata | {name, namespace, creationTimestamp}),
+            status: (.status // {} | {notBefore, notAfter, renewalTime})})),
+          cronjobs: ($cronjobs | add // {}), idm: $idm[0], mesh: $mesh[0]}' >"$run/cluster.json"
     '';
   };
 
@@ -265,26 +297,33 @@ let
         jq -n --rawfile reason "$run/unreadable" '{unreadable: ($reason | rtrimstr("\n"))}' >"$cluster"
       fi
 
-      [ -e "$state/kanidm-checked" ] || echo "$now" >"$state/kanidm-checked"
       [ -e "$state/kanidm-judged.json" ] || echo '{}' >"$state/kanidm-judged.json"
       [ -e "$state/mesh.json" ] || echo '{}' >"$state/mesh.json"
+      [ -e "$state/since.json" ] || echo '{}' >"$state/since.json"
       [ -e "$run/stun.json" ] || echo '{}' >"$run/stun.json"
+      # The release this host's upgrade resolved last, if it has yet.
+      revision=$(cat ${config.suveraen.upgrade.revisionFile} 2>/dev/null || true)
       findings=$(jq -n --argjson now "$now" --slurpfile spec ${spec} --argjson files "$files" \
-        --slurpfile stun "$run/stun.json" \
+        --slurpfile stun "$run/stun.json" --arg revision "$revision" \
         --slurpfile seen "$state/first-seen.json" --argjson read "$(<"$state/last-read")" \
-        --argjson kanidm "$(<"$state/kanidm-checked")" --slurpfile judged "$state/kanidm-judged.json" \
-        --slurpfile mesh "$state/mesh.json" --slurpfile cluster "$cluster" \
+        --slurpfile judged "$state/kanidm-judged.json" \
+        --slurpfile mesh "$state/mesh.json" --slurpfile since "$state/since.json" --slurpfile cluster "$cluster" \
         '{$now, spec: $spec[0], $files, stun: $stun[0], cluster: $cluster[0],
-          state: {lastRead: $read, firstSeen: $seen[0], kanidmChecked: $kanidm, kanidmJudged: $judged[0],
-            mesh: $mesh[0]}}' \
+          revision: (if $revision == "" then null else $revision end),
+          state: {lastRead: $read, firstSeen: $seen[0], kanidmJudged: $judged[0],
+            mesh: $mesh[0], since: $since[0]}}' \
         | jq -r -L ${judge} -f ${judge}/main.jq)
-      if grep -qx $'kanidm\tchecked' <<<"$findings"; then echo "$now" >"$state/kanidm-checked"; fi
       judged=$(jq -R -r 'split("\t") | select(.[0:2] == ["kanidm", "judged"]) | .[2]' <<<"$findings")
       if [ -n "$judged" ]; then
         printf '%s\n' "$judged" >"$state/kanidm-judged.json.new"
         mv "$state/kanidm-judged.json.new" "$state/kanidm-judged.json"
       fi
-      jq -R -r 'split("\t") | select(.[0:2] != ["mesh", "state"])
+      # When each finding was first found wrong, while any is, kept whether or not the alert gets through.
+      since=$(jq -R -r 'split("\t") | select(.[0:2] == ["since", "state"]) | .[2]' <<<"$findings")
+      if [ -z "$since" ]; then since='{}'; fi
+      printf '%s\n' "$since" >"$state/since.json.new"
+      mv "$state/since.json.new" "$state/since.json"
+      jq -R -r 'split("\t") | select(.[0:2] != ["mesh", "state"] and .[0:2] != ["since", "state"])
         | if length == 8 then "\(.[2]) \(.[1]): \(.[5])" elif .[0] == "cluster" then "cluster scope: \(.[1])"
           elif length == 3 then "\(.[0]) \(.[1]): \(.[2])" else join(" ") end' <<<"$findings"
 
@@ -351,6 +390,44 @@ in
         type = duration;
         default = "7d";
         description = "The longest a device of a tenant's mesh may stay signed in before it signs in again.";
+      };
+    };
+
+    flux = {
+      notReadyAfter = lib.mkOption {
+        type = duration;
+        default = "1h";
+        description = "How long one of Flux's Kustomizations, HelmReleases or sources may stay unready before it alerts.";
+      };
+
+      suspendedAfter = lib.mkOption {
+        type = duration;
+        default = "1d";
+        description = "How long one of them may stay suspended before it alerts, at low priority.";
+      };
+
+      behindAfter = lib.mkOption {
+        type = duration;
+        default = "1d";
+        description = ''
+          How long the release Flux applied last may differ from the one this server's upgrade resolved last before it
+          alerts. Flux takes a new release within minutes and the server the next night, so this is longer than from
+          one upgrade to the next.
+        '';
+      };
+    };
+
+    certificates = {
+      renewalGrace = lib.mkOption {
+        type = duration;
+        default = "1d";
+        description = "How long past the time cert-manager meant to renew a certificate it may stay unrenewed before it alerts.";
+      };
+
+      urgentShare = lib.mkOption {
+        type = lib.types.ints.between 1 99;
+        default = 10;
+        description = "The share of a certificate's lifetime, in percent, below which one late to renew alerts at top priority.";
       };
     };
 
@@ -422,13 +499,16 @@ in
       api = ./host-checks/api.jq;
       backups = ./host-checks/backups.jq;
       ceph = ./host-checks/ceph.jq;
+      certificates = ./host-checks/certificates.jq;
+      flux = ./host-checks/flux.jq;
       kanidm = ./host-checks/kanidm.jq;
       mesh = ./host-checks/mesh.jq;
       stun = ./host-checks/stun.jq;
     };
 
-    # It may read the status it judges, by name where the kind holds more, and nothing else: no Secrets, pods, logs or
-    # jobs.
+    # It may read the status it judges, by name where the kind holds more, and nothing else: no Secrets, ConfigMaps,
+    # pods, logs or jobs. Flux's objects hold what the release gives them, which a Secret's values never reach
+    # (checks/render.sh).
     services.k3s.manifests.host-checks.content = [
       {
         apiVersion = "v1";
@@ -484,6 +564,29 @@ in
             resourceNames = [ "rook-ceph" ];
             verbs = [ "get" ];
           }
+          {
+            apiGroups = [ "kustomize.toolkit.fluxcd.io" ];
+            resources = [ "kustomizations" ];
+            verbs = [ "list" ];
+          }
+          {
+            apiGroups = [ "helm.toolkit.fluxcd.io" ];
+            resources = [ "helmreleases" ];
+            verbs = [ "list" ];
+          }
+          {
+            apiGroups = [ "source.toolkit.fluxcd.io" ];
+            resources = [
+              "gitrepositories"
+              "ocirepositories"
+            ];
+            verbs = [ "list" ];
+          }
+          {
+            apiGroups = [ "cert-manager.io" ];
+            resources = [ "certificates" ];
+            verbs = [ "list" ];
+          }
         ];
       }
       {
@@ -506,7 +609,7 @@ in
     ];
 
     systemd.services.host-checks = {
-      description = "Check how old the backups are, and Ceph's health";
+      description = "Check how old the backups are, Ceph's health, Flux and the certificates";
       # Not ordered after k3s: one that never gets ready would hold the check back with it, where prepare and read
       # report it as unreadable.
       serviceConfig = {

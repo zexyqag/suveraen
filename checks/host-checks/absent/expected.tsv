@@ -1,6 +1,7 @@
 cluster	evaluated
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
-kanidm	checked
+complete	certificates	certificate 
+complete	flux	Flux 
 kanidm	judged	{}
 checks	done

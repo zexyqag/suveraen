@@ -5,7 +5,21 @@
     "unreadableAfter": 1800,
     "cephStaleAfter": 1800,
     "missingGrace": 3600,
-    "files": {}
+    "files": {},
+    "flux": {
+      "root": {
+        "name": "cluster",
+        "namespace": "flux-system"
+      },
+      "notReadyAfter": 3600,
+      "suspendedAfter": 86400,
+      "behindAfter": 86400
+    },
+    "certificates": {
+      "renewalGrace": 86400,
+      "urgentShare": 10,
+      "issueGrace": 3600
+    }
   },
   "files": {},
   "state": {

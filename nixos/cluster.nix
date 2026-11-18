@@ -347,6 +347,17 @@ in
       description = "The Services' address ranges, fixed when the cluster is created.";
     };
 
+    fluxRoot = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      readOnly = true;
+      internal = true;
+      default = {
+        name = "cluster";
+        namespace = "flux-system";
+      };
+      description = "The name and namespace of the Kustomization that applies the release's cluster directory.";
+    };
+
     nodeServices = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       readOnly = true;
@@ -493,10 +504,7 @@ in
         flux-sync.content = {
           apiVersion = "kustomize.toolkit.fluxcd.io/v1";
           kind = "Kustomization";
-          metadata = {
-            name = "cluster";
-            namespace = "flux-system";
-          };
+          metadata = cfg.fluxRoot;
           spec = {
             interval = "10m";
             sourceRef = {

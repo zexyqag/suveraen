@@ -1,0 +1,6 @@
+{
+  "title": "Flux not ready",
+  "priority": 4,
+  "body": "New:\nFlux GitRepository flux-system/suveraen: GitOperationFailed since 2026-10-22T10:00:00Z (2h 0m ago), limit 1h",
+  "late": "cluster\tFlux GitRepository flux-system/suveraen\tlate\t4\tFlux not ready\tGitOperationFailed since 2026-10-22T10:00:00Z (2h 0m ago), limit 1h\tFlux ready again\tflux\n"
+}
