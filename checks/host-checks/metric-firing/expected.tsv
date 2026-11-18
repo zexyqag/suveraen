@@ -1,0 +1,13 @@
+cluster	evaluated
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric memory low	late	4	memory low	6.2% available	memory available again	metrics
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
+host	metric units failed k3s.service	late	4	units failed	in the failed state	units no longer failed	metrics
+host	metric units failed sshd@.service	late	4	units failed	in the failed state	units no longer failed	metrics
+complete	certificates	certificate 
+complete	edges	edge 
+complete	flux	Flux 
+kanidm	judged	{}
+complete	metrics	metric 
+checks	done

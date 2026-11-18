@@ -1,0 +1,50 @@
+# The rules nixos/metrics.nix holds on the metrics themselves: the Watchdog, and a target that answers no scrape, or
+# that no scrape reaches at all.
+rule_files:
+  - rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{job="node", instance="127.0.0.1:9100"}'
+        values: '1x10 0x30 1x30'
+    alert_rule_test:
+      - eval_time: 5m
+        groupname: metrics
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels: {}
+      - eval_time: 20m
+        groupname: metrics
+        alertname: target down
+        exp_alerts: []
+      - eval_time: 30m
+        groupname: metrics
+        alertname: target down
+        exp_alerts:
+          - &node
+            exp_labels: {job: node, priority: "4"}
+            exp_annotations:
+              title: metric target down
+              cleared: metric targets up again
+              detail: no answer to the scrape
+              key: node
+              lost: node
+      # It stands for as long again as it is held for, then clears.
+      - eval_time: 50m
+        groupname: metrics
+        alertname: target down
+        exp_alerts: [*node]
+      - eval_time: 58m
+        groupname: metrics
+        alertname: target down
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'up{job="node", instance="127.0.0.1:9100"}'
+        values: '1x10 _x30'
+    alert_rule_test:
+      - eval_time: 30m
+        groupname: metrics
+        alertname: target down
+        exp_alerts: [*node]

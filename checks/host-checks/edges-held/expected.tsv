@@ -7,9 +7,11 @@ cluster	edge alpha-hello-hello	unknown	4	edge unanswered	held while certificate 
 cluster	edge alpha-kanidm-idm	unknown	4	edge unanswered	held while certificate alpha-kanidm/tls isn't valid: tls over IPv4: certificate not valid for its host; tls over IPv6: certificate not valid for its host	edges answering again	edges
 cluster	edge bravo-hello-hello	late	4	edge unanswered	unanswered since 2026-10-22T11:00:00Z (1h 0m ago), limit 30m: https over IPv4: certificate not valid for its host; https over IPv6: certificate not valid for its host	edges answering again	edges
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
 complete	certificates	certificate 
 complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
+complete	metrics	metric 
 since	state	{"edge alpha-hello-hello":1792666800,"edge alpha-kanidm-idm":1792584000,"edge bravo-hello-hello":1792666800}
 checks	done

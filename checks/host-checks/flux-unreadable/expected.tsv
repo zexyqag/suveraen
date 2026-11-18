@@ -1,4 +1,6 @@
 cluster	unreadable
 host	cluster status	ok	4	cluster status unreadable	last read 2026-10-22T12:00:00Z (0m ago), limit 30m: /apis/kustomize.toolkit.fluxcd.io/v1/kustomizations: HTTP 503	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
+complete	metrics	metric 
 since	state	{"edge alpha-hello-hello":1792666800,"Flux GitRepository flux-system/suveraen":1792663200,"Flux release":1792584000,"Kanidm check":1792670400}
 checks	done

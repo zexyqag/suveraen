@@ -1027,7 +1027,7 @@ runTest {
               prefixes = server.succeed("secret-prefixes").split()
               assert prefixes == ["k8s:enc:secretbox:v1:secretboxkey:"], prefixes
 
-          with subtest("Every workload runs, and Pod Security refused nothing"):
+          with subtest("Every workload runs, Pod Security refused nothing, and no rule on the server's own metrics, which it keeps on loopback behind a password, fires"):
               def items(kind):
                   return parsed(f"kubectl get {kind} -A -o json")["items"]
 
@@ -1056,6 +1056,13 @@ runTest {
               assert classes == ["ceph-block", "ceph-bucket"], classes
               # The Barman plugin's certificates for its connection with the operator, from its own namespace's CA.
               server.succeed("kubectl -n cloudnative-pg wait certificate --all --for=condition=Ready --timeout=0")
+              for port, path in [(8428, "/api/v1/query?query=up"), (8880, "/api/v1/rules"), (9100, "/metrics")]:
+                  server.succeed(f"test $(curl -s -o /dev/null -w '%{{http_code}}' http://127.0.0.1:{port}{path}) = 401")
+              # Every rule is evaluated, and none but the Watchdog fires, so none of the server's checks find late.
+              rules = parsed("suveraen-metrics check")["rules"]
+              assert rules and all(r["health"] == "ok" for r in rules), rules
+              fired = {(r["name"], a["annotations"].get("key")) for r in rules for a in r["alerts"] if a["state"] == "firing"}
+              assert fired == {("Watchdog", None)}, rules
 
           with subtest("The platform's pods run at its priority, tenants' at theirs, and Ceph's monitors, OSDs and CSI node plugin at the node's, which a shutdown stops last"):
               labels = {n["metadata"]["name"]: n["metadata"].get("labels", {}) for n in items("namespaces")}
@@ -3321,7 +3328,7 @@ runTest {
           # any, each by those it names, so that another finding alerted with them changes nothing here.
           def checks_said(*titles):
               named = "${nodes.server.networking.hostName}: "
-              ours = ("backups ", "Ceph ", "certificate", "cluster status ", "edge", "Flux ", "Kanidm ", "STUN ", "mesh ", "still: ")
+              ours = ("backups ", "Ceph ", "certificate", "cluster status ", "edge", "Flux ", "Kanidm ", "metric", "STUN ", "mesh ", "still: ")
               heard = []
               for a in alerts():
                   title = a.get("title", "").removeprefix(named)
@@ -3354,7 +3361,7 @@ runTest {
                       refused_at(n, server_keys, f"s3api list-objects-v2 --bucket {bucket_at(n, tenant)}")
                       refused_at(n, keys_of(tenant, n), f"s3api list-objects-v2 --bucket {platform}")
 
-          with subtest("The server finds every backup's last good copy where its controller records it, judges Flux's objects and every certificate, reaches every edge through the gateway, and none is late"):
+          with subtest("The server finds every backup's last good copy where its controller records it, judges Flux's objects, every certificate and the rules on its own metrics, reaches every edge through the gateway, and none is late"):
               # When each backup was last good, as the controllers record it, under the name the server gives it.
               def recorded():
                   stores = {(o["metadata"]["namespace"], o["metadata"]["name"]): o for o in items("objectstores")}
@@ -3421,7 +3428,7 @@ runTest {
               assert flux and certificates and edges, (flux, certificates, edges)
               assert findings.keys() == (
                   before.keys() | archiving | offsite | identities | stun_findings | mesh_parts | flux | certificates | edges
-                  | {"Ceph status", "cluster status", "etcd-snapshots", "knot-backup"}
+                  | {"Ceph status", "cluster status", "etcd-snapshots", "knot-backup", "metric rules"}
               ), findings
               assert all(state == "ok" for state, _ in findings.values()), findings
               # One that Flux reconciles just then is ready again before its hour is up.

@@ -2,11 +2,11 @@
 # each tenant's WAL archiving, base backups, off-site copies, checks and volume copies are against what their templates
 # allow (suveraen/max-age), how old its own backup files are, and Ceph's health; whether Flux's objects are ready and
 # applied the release the server runs, cert-manager renews every certificate in time, and each of the gateway's edges
-# answers the server through the gateway; whether its own addresses answer STUN;
-# and as root, with no credential, each tenant's Kanidm (suveraen-idm check, idm.nix) and each tenant's mesh against
-# the operator's rules (suveraen-mesh check, mesh.nix). It alerts once when that changes, again while it lasts, and
-# when it can't read the cluster or check every tenant's Kanidm and mesh, and notes each change of who can reach what in
-# a mesh once.
+# answers the server through the gateway; whether its own addresses answer STUN; what other modules tell it
+# (suveraen.checks.told), such as what the rules on its own metrics find; and as root, with no credential, each tenant's
+# Kanidm (suveraen-idm check, idm.nix) and each tenant's mesh against the operator's rules (suveraen-mesh check,
+# mesh.nix). It alerts once when that changes, again while it lasts, and when it can't read the cluster, or check every
+# tenant's Kanidm and mesh, and notes each change of who can reach what in a mesh once.
 {
   config,
   lib,
@@ -26,23 +26,20 @@ let
   # The edges are asked all at once, each for no longer than maxTime: room to start them all.
   edgeCap = cfg.edges.maxTime + 10;
   ca = if gatewayCA == null then config.security.pki.caBundle else gatewayCA;
-  # Room for STUN's answers, suveraen-idm and suveraen-mesh check, the edges', and suveraen-alert to try both channels.
-  timeout = stunSeconds * stunProbes + edgeCap + 2 * config.suveraen.alerts.retrySeconds + 540;
+  # How long each part that tells the checks something may take.
+  toldSeconds = 120;
+  # Room for STUN's answers, what other modules tell the checks, suveraen-idm and suveraen-mesh check, the edges',
+  # and suveraen-alert to try both channels.
+  timeout =
+    stunSeconds * stunProbes
+    + toldSeconds * lib.length (lib.attrNames cfg.told)
+    + edgeCap
+    + 2 * config.suveraen.alerts.retrySeconds
+    + 540;
   bootDelay = 600;
 
-  duration = lib.types.strMatching "[1-9][0-9]*[mhd]";
-  seconds =
-    s:
-    let
-      m = builtins.match "([0-9]+)([mhd])" s;
-    in
-    lib.toInt (lib.head m)
-    * {
-      m = 60;
-      h = 3600;
-      d = 86400;
-    }
-    .${lib.last m};
+  inherit (import ./duration.nix lib) seconds;
+  duration = (import ./duration.nix lib).type;
 
   # What the report runs: the judge on every family declared, each a jq module whose check gives its rows
   # (host-checks/judge.jq, host-checks/rows.jq), and the alert's grammar.
@@ -210,7 +207,8 @@ let
 
   # Run by root after prepare: suveraen-idm reads the apps' copies of their secrets to probe Kanidm with, and
   # suveraen-mesh each mesh's database by exec into its PostgreSQL, which the account below may not, and keep them to
-  # themselves. A check that fails says why, and alerts once it keeps failing.
+  # themselves; and before it, so whether the cluster can be read or not, what other modules tell. A check that fails
+  # says why, and alerts once it keeps failing.
   told =
     part: command:
     pkgs.writeShellApplication {
@@ -223,10 +221,11 @@ let
         run=$RUNTIME_DIRECTORY
         if [ -e "$run/unreadable" ]; then exit 0; fi
         status=0
-        timeout 120 ${lib.getExe command} check >"$run/${part}.json" 2>"$run/${part}.err" || status=$?
+        timeout ${toString toldSeconds} ${lib.getExe command} check >"$run/${part}.json" 2>"$run/${part}.err" \
+          || status=$?
         if [ "$status" != 0 ]; then
           why=$(tail -n 1 "$run/${part}.err")
-          if [ "$status" = 124 ]; then why="no answer within 120 seconds"; fi
+          if [ "$status" = 124 ]; then why="no answer within ${toString toldSeconds} seconds"; fi
           echo "${command.name} check: ''${why:-exit status $status}"
           jq -n --arg why "''${why:-exit status $status}" '{failed: $why}' >"$run/${part}.json"
         fi
@@ -347,15 +346,23 @@ let
       [ -e "$state/mesh.json" ] || echo '{}' >"$state/mesh.json"
       [ -e "$state/since.json" ] || echo '{}' >"$state/since.json"
       [ -e "$run/stun.json" ] || echo '{}' >"$run/stun.json"
+      # What other modules told, by name, null for one that told nothing.
+      told='{}'
+      ${lib.concatMapStrings (name: ''
+        [ -s "$run/told-${name}.json" ] || echo null >"$run/told-${name}.json"
+        told=$(jq -c --arg name ${lib.escapeShellArg name} --argjson told "$told" '$told + {($name): .}' \
+          "$run/told-${name}.json")
+      '') (lib.attrNames cfg.told)}
       [ -e "$run/edges.tsv" ] || : >"$run/edges.tsv"
       # The release this host's upgrade resolved last, if it has yet.
       revision=$(cat ${config.suveraen.upgrade.revisionFile} 2>/dev/null || true)
       findings=$(jq -n --argjson now "$now" --slurpfile spec ${spec} --argjson files "$files" \
-        --slurpfile stun "$run/stun.json" --rawfile edges "$run/edges.tsv" --arg revision "$revision" \
+        --slurpfile stun "$run/stun.json" --argjson told "$told" --rawfile edges "$run/edges.tsv" \
+        --arg revision "$revision" \
         --slurpfile seen "$state/first-seen.json" --argjson read "$(<"$state/last-read")" \
         --slurpfile judged "$state/kanidm-judged.json" \
         --slurpfile mesh "$state/mesh.json" --slurpfile since "$state/since.json" --slurpfile cluster "$cluster" \
-        '{$now, spec: $spec[0], $files, stun: $stun[0], cluster: $cluster[0],
+        '{$now, spec: $spec[0], $files, stun: $stun[0], $told, cluster: $cluster[0],
           edges: [$edges | split("\n")[] | select(. != "") | split("\t")
             | {gateway: .[0], listener: .[1], address: .[2], code: (.[3] | tonumber), exit: (.[4] | tonumber)}],
           revision: (if $revision == "" then null else $revision end),
@@ -503,6 +510,23 @@ in
       };
     };
 
+    told = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options.command = lib.mkOption {
+            type = lib.types.package;
+            description = "A program whose `check` prints what it tells, as JSON.";
+          };
+        }
+      );
+      default = { };
+      description = ''
+        What other modules tell the checks, by name: each a command the checks run as root before they read the
+        cluster, whether or not it can be read, for two minutes at most, whose output the families find as
+        $c.told.<name>, as {failed: why} when it failed, or as null when it told nothing.
+      '';
+    };
+
     families = lib.mkOption {
       type = lib.types.attrsOf lib.types.path;
       default = { };
@@ -546,6 +570,11 @@ in
         # They name findings beside the cluster's, which all hold a slash or a space.
         assertion = lib.all (name: builtins.match "[a-z0-9-]+" name != null) (lib.attrNames cfg.files);
         message = "suveraen.checks.files are named [a-z0-9-]+.";
+      }
+      {
+        # Each names a file and a step of the checks.
+        assertion = lib.all (name: builtins.match "[a-z][a-z0-9-]*" name != null) (lib.attrNames cfg.told);
+        message = "suveraen.checks.told are named [a-z][a-z0-9-]*.";
       }
       {
         assertion = lib.all (f: lib.hasPrefix "/" f.path) (lib.attrValues cfg.files);
@@ -688,7 +717,7 @@ in
     ];
 
     systemd.services.host-checks = {
-      description = "Check how old the backups are, Ceph's health, Flux, the certificates and the edges";
+      description = "Check how old the backups are, Ceph's health, Flux, the certificates, the edges and what other modules tell";
       # Not ordered after k3s: one that never gets ready would hold the check back with it, where prepare and read
       # report it as unreadable.
       serviceConfig = {
@@ -703,11 +732,14 @@ in
           "AF_UNIX"
         ];
         TimeoutStartSec = timeout;
-        ExecStartPre = lib.optional (stun.port != null) (lib.getExe stunProbe) ++ [
-          "+${lib.getExe prepare}"
-          "+${lib.getExe (told "idm" config.suveraen.idm.command)}"
-          "+${lib.getExe (told "mesh" config.suveraen.mesh.command)}"
-        ];
+        ExecStartPre =
+          lib.optional (stun.port != null) (lib.getExe stunProbe)
+          ++ lib.mapAttrsToList (name: t: "+${lib.getExe (told "told-${name}" t.command)}") cfg.told
+          ++ [
+            "+${lib.getExe prepare}"
+            "+${lib.getExe (told "idm" config.suveraen.idm.command)}"
+            "+${lib.getExe (told "mesh" config.suveraen.mesh.command)}"
+          ];
         ExecStart = lib.getExe read;
         # Whatever the edges answer, or don't, within the cap, the report judges.
         ExecStartPost = [

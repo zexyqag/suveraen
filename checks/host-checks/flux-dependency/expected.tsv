@@ -11,9 +11,11 @@ cluster	Flux Kustomization flux-system/cluster	ok	4	Flux not ready	ready	Flux re
 cluster	Flux Kustomization flux-system/policies	ok	4	Flux not ready	ready	Flux ready again	flux
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
 complete	certificates	certificate 
 complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
+complete	metrics	metric 
 since	state	{"Flux Kustomization flux-system/alpha-hello":1792659600,"Flux Kustomization flux-system/alpha-hello-db":1792663200,"Flux Kustomization flux-system/bravo-hello":1792670400,"Flux Kustomization flux-system/bravo-kanidm":1792663200,"Flux HelmRelease alpha-postgres/postgres":1792670400}
 checks	done

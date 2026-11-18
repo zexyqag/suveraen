@@ -121,6 +121,19 @@
           inherit pkgs;
           inherit (server.suveraen.checks) judge;
         };
+        metrics-rules = import ./checks/metrics-rules.nix {
+          inherit pkgs;
+          inherit (server.suveraen.metrics) rulesFile;
+          refused = map (a: a.message) (
+            pkgs.lib.filter (a: !a.assertion)
+              (config {
+                imports = [
+                  ./checks/server.nix
+                  ./checks/metrics/refused.nix
+                ];
+              }).assertions
+          );
+        };
         test-scripts = import ./checks/test-scripts.nix {
           inherit pkgs;
           tests =

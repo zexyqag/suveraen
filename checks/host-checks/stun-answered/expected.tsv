@@ -3,8 +3,10 @@ cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm 
 host	STUN 2001:db8::2	ok	4	STUN unanswered	answered on UDP 3478	STUN answered again	stun
 host	STUN 203.0.113.10	ok	4	STUN unanswered	answered on UDP 3478	STUN answered again	stun
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
 complete	certificates	certificate 
 complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
+complete	metrics	metric 
 checks	done

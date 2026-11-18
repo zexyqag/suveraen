@@ -3,9 +3,11 @@ cluster	Flux Kustomization flux-system/cluster	ok	4	Flux not ready	ready	Flux re
 cluster	Flux release	late	4	Flux and the host on different releases	Flux on fedcba987654, the host on 0123456789ab, since 2026-10-20T12:00:00Z (2d 0h ago), limit 1d	Flux and the host on one release again	flux
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
 complete	certificates	certificate 
 complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
+complete	metrics	metric 
 since	state	{"Flux release":1792497600}
 checks	done

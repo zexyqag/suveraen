@@ -3,9 +3,11 @@ cluster	Ceph POOL_NEAR_FULL	late	4	Ceph HEALTH_WARN: POOL_NEAR_FULL	1 pool(s) ne
 cluster	Ceph status	ok	4	Ceph status not updated	HEALTH_WARN, checked 2026-10-22T11:59:00Z (1m ago), limit 30m	Ceph status updated again	ceph
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
 complete	ceph	Ceph 
 complete	certificates	certificate 
 complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
+complete	metrics	metric 
 checks	done

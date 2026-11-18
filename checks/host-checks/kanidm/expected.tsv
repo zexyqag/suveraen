@@ -20,9 +20,11 @@ cluster	corgi-kanidm admin accounts	unknown	4	Kanidm admin accounts enabled	no a
 cluster	corgi-kanidm migrations	unknown	4	Kanidm migrations failed	no start of a running container read	Kanidm migrations applied again	kanidm
 cluster	delta-kanidm	unknown	4	Kanidm unchecked	ConfigMap kanidm in delta-kanidm names no single origin	Kanidm checked again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
 complete	certificates	certificate 
 complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{"alpha":{"started":"2026-10-20T08:00:00Z","migrations":{"version":"1.11.2","upgrade":null,"failed":[],"denied":0},"upgrade":[]},"bravo":{"started":"2026-10-21T08:00:00Z","migrations":{"version":"1.11.2","upgrade":null,"failed":["50-hello.json: AccessDenied"],"denied":2},"upgrade":[]}}
+complete	metrics	metric 
 since	state	{"Kanidm check":1792667700}
 checks	done

@@ -1,0 +1,5 @@
+suveraen.metrics.rules are named in letters, digits and spaces, apart from the metrics' own, and none begins another as a word: Watchdog, disk, disk full, target down.
+suveraen.metrics.rules print nothing but their value and the labels the sources of what they read may print (job, family), and in their detail alone: prints a query, prints an instance, prints by dot, prints half, titled by a label.
+suveraen.metrics.rules are keyed only by labels the sources of what they read may print: keyed by an instance.
+suveraen.metrics.rules read only families a job keeps: reads nowhere.
+suveraen.metrics.jobs keep only families a rule reads: unread_total.

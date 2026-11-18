@@ -14,6 +14,7 @@
     ./source.nix
     ./upgrade.nix
     ./host-checks.nix
+    ./metrics.nix
     ./idm.nix
     ./mesh.nix
     ./offsite.nix

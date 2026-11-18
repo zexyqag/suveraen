@@ -1,0 +1,13 @@
+cluster	evaluated
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric memory low	unknown	4	memory low	held, as node can't be read	memory available again	metrics
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
+host	metric target down node	late	4	metric target down	no answer to the scrape	metric targets up again	metrics
+host	metric units failed	unknown	4	units failed	held, as node can't be read	units no longer failed	metrics
+complete	certificates	certificate 
+complete	edges	edge 
+complete	flux	Flux 
+kanidm	judged	{}
+complete	metrics	metric 
+checks	done

@@ -1,0 +1,22 @@
+{
+  "told": {
+    "metrics": {
+      "checked": 1792669800,
+      "rules": [
+        {
+          "name": "Watchdog",
+          "health": "ok",
+          "evaluated": 1792669770,
+          "annotations": null,
+          "alerts": [
+            {
+              "state": "firing",
+              "priority": null,
+              "annotations": {}
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

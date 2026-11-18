@@ -1,0 +1,72 @@
+{
+  "told": {
+    "metrics": {
+      "interval": 60,
+      "rules": [
+        {
+          "name": "Watchdog",
+          "health": "ok",
+          "evaluated": 1792670370,
+          "annotations": null,
+          "alerts": [
+            {
+              "state": "firing",
+              "priority": null,
+              "annotations": {}
+            }
+          ]
+        },
+        {
+          "name": "target down",
+          "health": "ok",
+          "evaluated": 1792670370,
+          "annotations": {
+            "title": "metric target down",
+            "cleared": "metric targets up again",
+            "detail": "no answer to the scrape",
+            "key": "{{ $labels.job }}",
+            "lost": "{{ $labels.job }}"
+          },
+          "alerts": [
+            {
+              "state": "firing",
+              "priority": "4",
+              "annotations": {
+                "title": "metric target down",
+                "cleared": "metric targets up again",
+                "detail": "no answer to the scrape",
+                "key": "node",
+                "lost": "node"
+              }
+            }
+          ]
+        },
+        {
+          "name": "units failed",
+          "health": "ok",
+          "evaluated": 1792670370,
+          "annotations": {
+            "title": "units failed",
+            "cleared": "units no longer failed",
+            "detail": "in the failed state",
+            "key": "{{ $labels.name }}",
+            "inputs": "node node_systemd_unit_state"
+          },
+          "alerts": []
+        },
+        {
+          "name": "memory low",
+          "health": "ok",
+          "evaluated": 1792670370,
+          "annotations": {
+            "title": "memory low",
+            "cleared": "memory available again",
+            "detail": "{{ $value | humanizePercentage }} available",
+            "inputs": "node node_memory_MemAvailable_bytes node_memory_MemTotal_bytes"
+          },
+          "alerts": []
+        }
+      ]
+    }
+  }
+}

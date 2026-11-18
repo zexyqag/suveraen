@@ -1,0 +1,11 @@
+cluster	evaluated
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	late	4	metric rules unchecked	rules unchecked since 2026-10-22T11:15:00Z (45m ago), limit 30m: suveraen-metrics check: curl: (7) Failed to connect to 127.0.0.1 port 8880 after 0 ms: Could not connect to server	metric rules checked again	metrics
+complete	certificates	certificate 
+complete	edges	edge 
+complete	flux	Flux 
+kanidm	judged	{}
+hold	metrics	metric 
+since	state	{"metric rules":1792667700}
+checks	done

@@ -3,8 +3,10 @@ cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm 
 cluster	certificate cloudnative-pg/barman-cloud-server	late	4	certificate renewal late	renewal due 2026-08-03T12:00:00Z (80d 0h ago), grace 1d; expires 2026-11-01T12:00:00Z	certificates renewed	certificates
 cluster	certificate gateway/alpha-hello-hello	late	4	certificate renewal late	renewal due 2026-10-19T12:00:00Z (3d 0h ago), grace 1d; expires 2026-11-18T12:00:00Z	certificates renewed	certificates
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
 complete	certificates	certificate 
 complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
+complete	metrics	metric 
 checks	done

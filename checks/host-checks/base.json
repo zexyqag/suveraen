@@ -31,6 +31,27 @@
     }
   },
   "files": {},
+  "told": {
+    "metrics": {
+      "checked": 1792670400,
+      "interval": 60,
+      "rules": [
+        {
+          "name": "Watchdog",
+          "health": "ok",
+          "evaluated": 1792670370,
+          "annotations": null,
+          "alerts": [
+            {
+              "state": "firing",
+              "priority": null,
+              "annotations": {}
+            }
+          ]
+        }
+      ]
+    }
+  },
   "state": {
     "lastRead": 1792670400,
     "firstSeen": {}

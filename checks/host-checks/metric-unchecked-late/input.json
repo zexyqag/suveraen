@@ -1,0 +1,12 @@
+{
+  "told": {
+    "metrics": {
+      "failed": "curl: (7) Failed to connect to 127.0.0.1 port 8880 after 0 ms: Could not connect to server"
+    }
+  },
+  "state": {
+    "since": {
+      "metric rules": 1792667700
+    }
+  }
+}

@@ -2,9 +2,9 @@
 # a volume group of their own on a partition of a RAID1 array over both system disks, which keeps a write-intent
 # bitmap, at least at their size and with nothing on them, LVM's commands reach them by an ordinary PATH, and all stay
 # readable when one disk fails; k3s's and the monitors' datasets are bounded or reserved as set and mounted outside
-# rpool/var; containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter there; the journal,
-# and a dynamic user's state declared so, lie on bounded datasets outside the snapshots of /var; and the pool's health
-# check passes.
+# rpool/var; containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter there; the journal, the
+# metrics, and a dynamic user's state declared so, lie on bounded datasets outside the snapshots of /var; and the pool's
+# health check passes.
 { lib, pkgs, ... }:
 let
   keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
@@ -59,6 +59,7 @@ in
       ];
       tokenFile = "/run/secrets/k3s-token";
     };
+    metrics.quota = "128M";
     alerts = {
       urlFile = "/run/secrets/alerts-url";
       tokenFile = "/run/secrets/alerts-token";
@@ -119,6 +120,7 @@ in
         ("log", "quota", ${mib 128}, "/var/log"),
         ("probe", "quota", ${mib 64}, "/var/lib/private/probe"),
         ("host-checks", "quota", ${mib 64}, "/var/lib/private/host-checks"),
+        ("metrics", "quota", ${mib 128}, "/var/lib/private/victoriametrics"),
     ]:
         machine.succeed(f"test $(zfs get -Hpo value {prop} rpool/{dataset}) = {value}")
         machine.succeed(f"test $(findmnt -no SOURCE {path}) = rpool/{dataset}")
@@ -129,10 +131,13 @@ in
     machine.succeed("systemctl start probe")
     machine.succeed("test $(findmnt -no SOURCE -T /var/lib/private/probe/written) = rpool/probe")
     machine.succeed("test $(stat -c %a /var/lib/private) = 700")
+    # And so do the metrics, as VictoriaMetrics keeps them.
+    machine.wait_for_unit("victoriametrics.service")
+    machine.succeed("test $(findmnt -no SOURCE -T /var/lib/private/victoriametrics/flock.lock) = rpool/metrics")
     # Snapshots of /var leave them out.
     machine.succeed("systemctl start --wait sanoid && test $(systemctl show -P Result sanoid) = success")
     machine.succeed("zfs list -Ho name -t snapshot -r rpool/var | grep -q '^rpool/var@'")
-    machine.succeed("test -z \"$(zfs list -Ho name -t snapshot -r rpool/log rpool/probe rpool/host-checks)\"")
+    machine.succeed("test -z \"$(zfs list -Ho name -t snapshot -r rpool/log rpool/probe rpool/host-checks rpool/metrics)\"")
 
     # Writes, whiteouts included, land in the upper directory on ZFS.
     probe = "/var/lib/rancher/k3s/agent/containerd/overlay-probe"

@@ -1,0 +1,58 @@
+{
+  "told": {
+    "metrics": {
+      "interval": 60,
+      "rules": [
+        {
+          "name": "Watchdog",
+          "health": "ok",
+          "evaluated": 1792670370,
+          "annotations": null,
+          "alerts": [
+            {
+              "state": "firing",
+              "priority": null,
+              "annotations": {}
+            }
+          ]
+        },
+        {
+          "name": "units failed",
+          "health": "err",
+          "evaluated": 1792670370,
+          "annotations": {
+            "title": "units failed",
+            "cleared": "units no longer failed",
+            "detail": "in the failed state",
+            "key": "{{ $labels.name }}",
+            "inputs": "node node_systemd_unit_state"
+          },
+          "alerts": []
+        },
+        {
+          "name": "memory low",
+          "health": "ok",
+          "evaluated": 1792670370,
+          "annotations": {
+            "title": "memory low",
+            "cleared": "memory available again",
+            "detail": "{{ $value | humanizePercentage }} available",
+            "inputs": "node node_memory_MemAvailable_bytes node_memory_MemTotal_bytes"
+          },
+          "alerts": [
+            {
+              "state": "firing",
+              "priority": "4",
+              "annotations": {
+                "title": "memory low",
+                "cleared": "memory available again",
+                "detail": "6.2% available",
+                "inputs": "node node_memory_MemAvailable_bytes node_memory_MemTotal_bytes"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

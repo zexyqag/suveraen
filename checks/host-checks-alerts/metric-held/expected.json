@@ -1,0 +1,6 @@
+{
+  "title": "metric target down",
+  "priority": 4,
+  "body": "Still late:\nmetric memory low: 6.2% available\nNew:\nmetric target down node: no answer to the scrape",
+  "late": "host\tmetric target down node\tlate\t4\tmetric target down\tno answer to the scrape\tmetric targets up again\tmetrics\nhost\tmetric memory low\tlate\t4\tmemory low\t6.2% available\tmemory available again\tmetrics\n"
+}

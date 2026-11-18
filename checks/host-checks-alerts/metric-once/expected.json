@@ -1,0 +1,6 @@
+{
+  "title": "units failed",
+  "priority": 4,
+  "body": "New:\nmetric units failed k3s.service: in the failed state",
+  "late": "host\tmetric units failed k3s.service\tlate\t4\tunits failed\tin the failed state\tunits no longer failed\tmetrics\n"
+}

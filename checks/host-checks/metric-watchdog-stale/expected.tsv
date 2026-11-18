@@ -1,0 +1,11 @@
+cluster	evaluated
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	unknown	4	metric rules unchecked	rules unchecked since 2026-10-22T12:00:00Z (0m ago), limit 30m: the Watchdog was last evaluated 2026-10-22T11:45:00Z (15m ago) when the rules were read	metric rules checked again	metrics
+complete	certificates	certificate 
+complete	edges	edge 
+complete	flux	Flux 
+kanidm	judged	{}
+hold	metrics	metric 
+since	state	{"metric rules":1792670400}
+checks	done

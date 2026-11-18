@@ -17,8 +17,10 @@ cluster	alpha-netbird share	ok	4	mesh share outside the rules	every rule from on
 cluster	alpha-netbird tokens	ok	4	mesh tokens outside the rules	no token, every setup key for one box within a day	mesh tokens within the rules again	mesh
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
 host	mesh STUN port	late	4	mesh STUN port wrong	the cluster's STUN_PORT is 3478, where this server answers no STUN	mesh STUN port right again	mesh
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
 complete	certificates	certificate 
 complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
+complete	metrics	metric 
 checks	done

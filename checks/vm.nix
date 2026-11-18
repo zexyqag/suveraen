@@ -16,12 +16,13 @@
 # channel when the watcher is gone, and says there when the watcher's ntfy stops answering; a daily publish the way its
 # alerts go tells the watcher when that way is broken. The server and its Flux only take commits signed by a release
 # signer, the server never goes back to an older one, and it alerts when its configuration, or the nixpkgs its release
-# locks, gets old. The server's checks read how old the backups the cluster records are, Ceph's health, Flux's objects,
-# the certificates and the Gateways with an account that reads nothing else, ask the node's addresses for STUN, and
-# alert once per change, also when the cluster can't be read. Its etcd snapshots reach both providers encrypted to
-# recovery keys, under a prefix its key can neither leave nor empty; with one provider down they still reach the other,
-# and the phone hears of it. Wiped, the server comes back from a provider's copy through its restore command, with its
-# token file alone; another token leaves a running server's own database in place.
+# locks, gets old. The server keeps its metrics on loopback behind a password, and its daemons reach nothing else. The
+# server's checks read how old the backups the cluster records are, Ceph's health, Flux's objects, the certificates and
+# the Gateways with an account that reads nothing else, ask the node's addresses for STUN, read what the rules on its
+# metrics find, and alert once per change, also when the cluster or the rules can't be read. Its etcd snapshots reach
+# both providers encrypted to recovery keys, under a prefix its key can neither leave nor empty; with one provider down
+# they still reach the other, and the phone hears of it. Wiped, the server comes back from a provider's copy through its
+# restore command, with its token file alone; another token leaves a running server's own database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -267,7 +268,7 @@ pkgs.testers.runNixOSTest {
         ];
 
         virtualisation = {
-          memorySize = 2048;
+          memorySize = 2560;
           diskSize = 4096;
           cores = 2;
         };
@@ -1323,6 +1324,44 @@ pkgs.testers.runNixOSTest {
                   " && grep -Eq '^server .* nts$' $conf && ! grep '^server ' $conf | grep -vq ' nts$'"
               )
 
+      with subtest("The server's metrics stay on loopback behind a password, and its daemons reach nothing else"):
+          password = "/var/lib/suveraen-metrics/password"
+          server.succeed(f"test $(stat -c %a {password}) = 600 && test $(stat -c %a $(dirname {password})) = 700")
+          ports = {"victoriametrics": 8428, "vmalert": 8880, "prometheus-node-exporter": 9100}
+          for unit, port in ports.items():
+              server.wait_for_unit(f"{unit}.service")
+              deny = server.succeed(f"systemctl show {unit} -p IPAddressDeny --value").split()
+              assert {"0.0.0.0/0", "::/0"} <= set(deny), (unit, deny)
+              allow = server.succeed(f"systemctl show {unit} -p IPAddressAllow --value").split()
+              assert allow and all(ipaddress.ip_network(a).is_loopback for a in allow), (unit, allow)
+              listening = server.succeed(f"ss -Hltn sport = :{port}").split("\n")
+              assert [line.split()[3] for line in listening if line] == [f"127.0.0.1:{port}"], (unit, listening)
+              # What no other test measures: how much of the server's memory each takes.
+              print(unit, server.succeed(f"ps -o rss= -p $(systemctl show -p MainPID --value {unit})").strip(), "KiB resident")
+          for url in [
+              "http://127.0.0.1:8428/api/v1/query?query=up", "http://127.0.0.1:8428/vmui/", "http://127.0.0.1:8880/api/v1/rules",
+              "http://127.0.0.1:9100/metrics",
+          ]:
+              server.succeed(f"test $(curl -s -o /dev/null -w '%{{http_code}}' {url}) = 401")
+          server.succeed(
+              "test $(curl -s -o /dev/null -w '%{http_code}' --data-binary 'forged 1' http://127.0.0.1:8428/api/v1/import/prometheus) = 401"
+          )
+          # With the password, the node's own metrics are there.
+          server.wait_until_succeeds(
+              f"curl -fsS -u metrics:$(cat {password}) http://127.0.0.1:8428/api/v1/query --data-urlencode 'query=up{{job=\"node\"}}'"
+              " | jq -e '.data.result | length == 1 and .[0].value[1] == \"1\"'",
+              timeout=300,
+          )
+          # Once the rules are evaluated, none fires but the Watchdog: nothing they find is late from the start.
+          server.wait_until_succeeds(
+              "suveraen-metrics check | jq -e 'any(.rules[]; .name == \"Watchdog\" and any(.alerts[]; .state == \"firing\"))'",
+              timeout=180,
+          )
+          checked = json.loads(server.succeed("suveraen-metrics check"))["rules"]
+          assert all(r["health"] == "ok" for r in checked), checked
+          fired = {(r["name"], a["annotations"].get("key")) for r in checked for a in r["alerts"] if a["state"] == "firing"}
+          assert fired == {("Watchdog", None)}, checked
+
       with subtest("ntfy only takes messages from known publishers"):
           server.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d spam http://alerts.test/ops) = 403")
           server.succeed("test $(curl -s -o /dev/null -w '%{http_code}' ${phone} -d spam http://alerts.test/ops) = 403")
@@ -1633,6 +1672,24 @@ pkgs.testers.runNixOSTest {
               server.wait_until_succeeds(f"kubectl get --raw {path}", timeout=300)
           server.succeed("systemctl start host-checks")
           assert len(sent("cluster status readable again")) == 1
+
+      with subtest("With the rule evaluator stopped, the server says so, and so does its return"):
+          server.succeed("systemctl stop vmalert")
+          # As if the rules had last been checked an hour ago.
+          found_wrong({"metric rules": 3600})
+          server.succeed("systemctl start host-checks")
+          [unchecked] = sent("metric rules unchecked")
+          assert keys(unchecked["message"]) == {"New:", "metric rules"}, unchecked
+          server.succeed("systemctl start host-checks")
+          assert len(sent("metric rules unchecked")) == 1
+          server.succeed("systemctl start vmalert")
+          server.wait_until_succeeds(
+              "suveraen-metrics check | jq -e 'any(.rules[]; .name == \"Watchdog\" and any(.alerts[]; .state == \"firing\"))'",
+              timeout=180,
+          )
+          server.succeed("systemctl start host-checks")
+          [back] = sent("metric rules checked again")
+          assert back.get("priority", 3) == 3, back
 
       snapshots = "/var/lib/rancher/k3s/server/db/snapshots"
       platform = "${platformBucket}"

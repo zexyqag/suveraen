@@ -6,9 +6,11 @@ cluster	Flux Kustomization flux-system/tenant-alpha suspended	late	3	Flux suspen
 cluster	Flux Kustomization flux-system/tenant-bravo	ok	4	Flux not ready	ready	Flux ready again	flux
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
 complete	certificates	certificate 
 complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
+complete	metrics	metric 
 since	state	{"Flux Kustomization flux-system/tenant-alpha suspended":1792497600,"Flux Kustomization flux-system/tenant-alpha":1792411200,"Flux HelmRelease alpha-hello/hello suspended":1792666800}
 checks	done

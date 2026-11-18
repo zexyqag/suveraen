@@ -5,8 +5,10 @@ cluster	certificate gateway/alpha-hello-hello	ok	4	certificate renewal late	rene
 cluster	edge alpha-hello-hello	ok	4	edge unanswered	answered	edges answering again	edges
 cluster	edge alpha-kanidm-idm	ok	4	edge unanswered	answered	edges answering again	edges
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
 complete	certificates	certificate 
 complete	edges	edge 
 complete	flux	Flux 
 kanidm	judged	{}
+complete	metrics	metric 
 checks	done

@@ -1,4 +1,6 @@
 cluster	skipped
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
 kanidm	judged	{}
+complete	metrics	metric 
 checks	done
