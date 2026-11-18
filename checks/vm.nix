@@ -471,6 +471,21 @@ pkgs.testers.runNixOSTest {
           # Flux's own pods are created, so they meet the standard too.
           server.wait_until_succeeds("test $(kubectl -n flux-system get pods --no-headers | wc -l) -ge 4", timeout=120)
 
+      # What an account may do in a namespace beside what every account may, as it asks, so no grant joins these unseen.
+      def rules_of(account, namespace):
+          review = {"apiVersion": "authorization.k8s.io/v1", "kind": "SelfSubjectRulesReview"}
+          review["spec"] = {"namespace": namespace}
+          answer = json.loads(server.succeed(
+              f"echo {shlex.quote(json.dumps(review))}"
+              # Validating it would have kubectl list the CRDs as the account, which it rightly may not.
+              f" | kubectl create -f - -o json --validate=false --as=system:serviceaccount:{account}"
+          ))
+          return sorted(
+              (r["apiGroups"], r["resources"], r.get("resourceNames", []), r["verbs"])
+              for r in answer["status"]["resourceRules"]
+              if not set(r["apiGroups"]) <= {"authorization.k8s.io", "authentication.k8s.io"}
+          )
+
       with subtest("An app's charts reach only its namespace, and can't widen who may act there or publish ports"):
           server.succeed(
               "kubectl apply -f ${../kubernetes/platform/policies/app/flux-app.yaml}"
@@ -485,8 +500,21 @@ pkgs.testers.runNixOSTest {
           )
           deployer = "-n app --as=system:serviceaccount:app:flux-deployer"
           server.wait_until_succeeds(f"kubectl auth can-i create deployments {deployer}")
-          for allowed in ["create secrets", "create services", "create roles", "create rolebindings", "create poddisruptionbudgets"]:
-              server.succeed(f"kubectl auth can-i {allowed} {deployer}")
+          rules = rules_of("app:flux-deployer", "app")
+          every =["get", "list", "watch", "create", "update", "patch", "delete"]
+          assert rules == sorted([
+              ([""], ["configmaps", "secrets", "services", "serviceaccounts", "persistentvolumeclaims", "pods"], [], every),
+              ([""], ["pods/log", "endpoints"], [], ["get", "list", "watch"]),
+              (["", "events.k8s.io"], ["events"], [], ["get", "list", "watch", "create", "patch"]),
+              (["discovery.k8s.io"], ["endpointslices"], [], ["get", "list", "watch"]),
+              (["apps"], ["deployments", "statefulsets"], [], every),
+              (["apps"], ["replicasets", "controllerrevisions"], [], ["get", "list", "watch"]),
+              (["batch"], ["jobs", "cronjobs"], [], every),
+              (["autoscaling"], ["horizontalpodautoscalers"], [], every),
+              (["policy"], ["poddisruptionbudgets"], [], every),
+              (["coordination.k8s.io"], ["leases"], [], every),
+              (["rbac.authorization.k8s.io"], ["roles", "rolebindings"], [], every),
+          ]), rules
           for denied in [
               "create networkpolicies",
               "create ingresses",
@@ -1344,17 +1372,7 @@ pkgs.testers.runNixOSTest {
           server.succeed("systemctl start host-checks")
           server.succeed("systemctl show host-checks -p DynamicUser --value | grep -x yes")
           checker = "--as=system:serviceaccount:kube-system:host-checks"
-          review = json.loads(server.succeed(
-              """echo '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"default"}}'"""
-              # Validating it would have kubectl list the CRDs as the account, which it rightly may not.
-              f" | kubectl create -f - -o json --validate=false {checker}"
-          ))
-          # Beside what every account may do: ask what it may do.
-          rules = sorted(
-              (r["apiGroups"], r["resources"], r.get("resourceNames", []), r["verbs"])
-              for r in review["status"]["resourceRules"]
-              if not set(r["apiGroups"]) <= {"authorization.k8s.io", "authentication.k8s.io"}
-          )
+          rules = rules_of("kube-system:host-checks", "default")
           assert rules == sorted([
               ([""], ["nodes"], [], ["list"]),
               ([""], ["persistentvolumeclaims"], [], ["list"]),
