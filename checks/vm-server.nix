@@ -137,6 +137,7 @@ in
     };
     # "en*" would also match eth1, the test network, through its alternative names.
     network.interface = "eth0";
+    alerts.smart = false;
     cluster = {
       enable = true;
       tokenFile = toString (pkgs.writeText "k3s-token" "suveraen-test-token");
