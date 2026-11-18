@@ -3546,8 +3546,9 @@ runTest {
                   | {"Ceph status", "cluster status", "etcd-snapshots", "knot-backup"}
               ), findings
               assert all(state == "ok" for key, (state, _) in findings.items() if key not in metric | waiting), findings
+              # One whose dependencies are ready again still says it waits for them until its next retry.
               assert all(
-                  findings[key][1] == "ready" or findings[key][1].startswith("Progressing since ")
+                  findings[key][1] == "ready" or findings[key][1].startswith(("Progressing since ", "DependencyNotReady since "))
                   for key in flux - waiting
               ), {key: findings[key] for key in flux}
               assert all(findings[key][1].startswith("renews ") for key in certificates), {key: findings[key] for key in certificates}
