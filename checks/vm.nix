@@ -1552,7 +1552,12 @@ pkgs.testers.runNixOSTest {
               " '. + ($ago | map_values(now - . | floor))' since.json > since.json.new && mv since.json.new since.json"
           )
 
-      flux_ready = {"conditions": [{"type": "Ready", "status": "True", "reason": "Succeeded"}]}
+      # As Flux's own CRDs have a condition, each field required.
+      flux_ready = {
+          "conditions": [
+              {"type": "Ready", "status": "True", "reason": "Succeeded", "message": "", "lastTransitionTime": at("now")}
+          ]
+      }
 
       with subtest("An unready Flux source, and Flux on another release than the host's, reach the phone once, and so does their recovery"):
           # The test runs none of Flux's controllers, so its objects hold no status but what it gives them: none is
