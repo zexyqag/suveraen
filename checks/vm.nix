@@ -1487,7 +1487,7 @@ pkgs.testers.runNixOSTest {
 
       # The server's alerts so far with this title, as the phone reads them.
       def sent(title):
-          out = server.succeed(f"${ops} | jq -c --arg t 'server: {title}' 'select(.title == $t)'")
+          out = server.succeed(f"${ops} | jq -c --arg t {shlex.quote(f'server: {title}')} 'select(.title == $t)'")
           return [json.loads(line) for line in out.splitlines()]
 
       def keys(lines):
