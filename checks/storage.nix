@@ -2,7 +2,8 @@
 # a volume group of their own on a partition of a RAID1 array over both system disks, which keeps a write-intent
 # bitmap, at least at their size and with nothing on them, LVM's commands reach them by an ordinary PATH, and all stay
 # readable when one disk fails; k3s's and the monitors' datasets are bounded or reserved as set and mounted outside
-# rpool/var; and containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter there.
+# rpool/var; containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter there; and the pool's
+# health check passes.
 { lib, pkgs, ... }:
 let
   keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
@@ -70,6 +71,8 @@ in
   # Runs on the installed system once it has booted, from vda and vdb.
   disko.tests.extraChecks = ''
     machine.succeed("zpool status rpool | grep -qw mirror-0")
+    # Healthy, so its check passes without alerting, which has no channel here.
+    machine.succeed("systemctl start zfs-health")
     machine.succeed("mdadm --detail /dev/md/osd-db | grep -Eq 'Raid Level : raid1'")
     machine.succeed("mdadm --detail /dev/md/osd-db | grep -q 'Intent Bitmap : Internal'")
     volumes = [f"/dev/disk/by-osd/osd{slot}-db" for slot in range(4)]

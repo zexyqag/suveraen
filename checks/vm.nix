@@ -1331,9 +1331,12 @@ pkgs.testers.runNixOSTest {
               server.succeed(f"test $(curl -s -o /dev/null -w '%{{http_code}}' ${phone} http://alerts.test{p}) = 404")
 
       with subtest("A failing check on the server reaches the phone"):
-          # The VM has no ZFS pools, so the health check fails.
-          server.fail("systemctl start zfs-health.service")
-          server.wait_until_succeeds("${ops} | grep 'server: ZFS pool unhealthy'")
+          # The VM boots from a disk image of the test's, without the pool, so it runs none of the pool's checks.
+          for unit in ["zfs-health", "zfs-scrub", "sanoid"]:
+              server.fail(f"systemctl cat {unit}.service")
+          server.succeed("systemd-run --unit=failing-check -p OnFailure=alert@failing-check.service.service false")
+          server.wait_until_succeeds("${ops} | grep 'server: failing-check.service failed'")
+          server.succeed("systemctl reset-failed failing-check")
 
       with subtest("Long alerts arrive as plain text, not as an attachment"):
           server.succeed("suveraen-alert big \"$(head -c 20000 /dev/zero | tr '\\0' x)\"")

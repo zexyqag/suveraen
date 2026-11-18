@@ -10,6 +10,11 @@ let
   zfs = config.boot.zfs.package;
   mirrored = lib.length cfg.systemDisks == 2;
 
+  # Whether the host runs from rpool. A NixOS test's VM boots from a disk image of the test's instead, without it.
+  pooled = lib.any (fs: fs.fsType == "zfs" && lib.hasPrefix "rpool/" fs.device) (
+    lib.attrValues config.fileSystems
+  );
+
   member = {
     type = "zfs";
     pool = "rpool";
@@ -518,12 +523,12 @@ in
     );
 
     services.zfs = {
-      autoScrub.enable = true;
-      trim.enable = true;
+      autoScrub.enable = pooled;
+      trim.enable = pooled;
     };
 
     services.sanoid = {
-      enable = true;
+      enable = pooled;
       templates.local = {
         hourly = 24;
         daily = 14;
@@ -543,7 +548,7 @@ in
       };
     };
 
-    systemd.services.zfs-health = {
+    systemd.services.zfs-health = lib.mkIf pooled {
       description = "Check that every ZFS pool is healthy";
       serviceConfig.Type = "oneshot";
       script = ''
@@ -551,16 +556,18 @@ in
         if [ "$status" != "all pools are healthy" ]; then
           echo "$status"
           ${lib.getExe config.suveraen.alerts.command} "ZFS pool unhealthy" "$status" 5
-          exit 1
         fi
       '';
     };
-    systemd.timers.zfs-health = {
+    systemd.timers.zfs-health = lib.mkIf pooled {
       wantedBy = [ "timers.target" ];
       timerConfig.OnCalendar = "hourly";
     };
 
-    # zfs-health alerts by itself, at top priority.
-    suveraen.alerts.units = [ "zfs-scrub" ];
+    # zfs-health alerts on what it finds by itself, at top priority, so failing means the check, or its alert, broke.
+    suveraen.alerts.units = lib.mkIf pooled [
+      "zfs-scrub"
+      "zfs-health"
+    ];
   };
 }
