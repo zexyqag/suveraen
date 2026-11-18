@@ -1,2 +1,2 @@
-cluster	Ceph POOL_NEAR_FULL	late	5	Ceph HEALTH_ERR: POOL_NEAR_FULL	1 pool(s) nearfull; ceph health detail says more	Ceph healthy again	ceph
+cluster	Ceph POOL_NEAR_FULL	late	4	Ceph HEALTH_WARN: POOL_NEAR_FULL	1 pool(s) nearfull; ceph health detail says more	Ceph healthy again	ceph
 cluster	Ceph PG_DAMAGED	late	5	Ceph HEALTH_ERR: PG_DAMAGED	Possible data damage: 1 pg inconsistent; ceph health detail says more	Ceph healthy again	ceph

@@ -18,10 +18,12 @@ def check($c):
           finding("cluster"; "Ceph \($health)"; true; (if $health == "HEALTH_ERR" then 5 else 4 end); "Ceph \($health)";
             "nothing but muted checks: \($s.details // {} | keys | join(", "))"; "Ceph healthy again")
         else
+          # Each check by its own severity, so one that breaks leaves the others as they were.
           $found[]
+          | .value.severity as $severity
           | finding("cluster"; "Ceph \(.key)"; true;
-              (if $health == "HEALTH_ERR" or (.key | IN("POOL_FULL", "OSD_FULL")) then 5 else 4 end);
-              "Ceph \($health): \(.key)"; "\(.value.message // .value.severity); ceph health detail says more";
+              (if $severity == "HEALTH_ERR" or (.key | IN("POOL_FULL", "OSD_FULL")) then 5 else 4 end);
+              "Ceph \($severity): \(.key)"; "\(.value.message // .value.severity); ceph health detail says more";
               "Ceph healthy again")
         end),
     # Each check Ceph no longer raises has cleared.
