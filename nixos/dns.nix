@@ -759,6 +759,13 @@ in
         };
 
         suveraen.alerts.units = [ "knot-backup" ];
+        # The servers' checks run on cluster hosts alone, so another signer's backups go unjudged.
+        suveraen.checks.files = lib.mkIf config.suveraen.cluster.enable {
+          knot-backup = {
+            path = "/var/lib/knot-backup";
+            maxAge = "26h";
+          };
+        };
       })
 
       (lib.mkIf (signing && acme) {

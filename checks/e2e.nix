@@ -3408,7 +3408,7 @@ runTest {
               ]} | {"mesh STUN port"}
               assert findings.keys() == (
                   before.keys() | archiving | offsite | identities | stun_findings | mesh_parts
-                  | {"Ceph status", "cluster status", "etcd-snapshots"}
+                  | {"Ceph status", "cluster status", "etcd-snapshots", "knot-backup"}
               ), findings
               assert all(state == "ok" for state, _ in findings.values()), findings
               # How each tenant's Kanidm ran its migrations as it started, which the checks go by once its log no longer
