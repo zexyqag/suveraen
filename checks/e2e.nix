@@ -3421,6 +3421,27 @@ runTest {
                       heard.append((named + title, a.get("priority", 3)))
               return heard
 
+          # That of the alerts the phone got after the first `heard`, one alone names any of titles or clears any of
+          # keys, and it clears them all: titled as title, by what cleared, at priority 3; or, when its run found
+          # anything newly late, which then titles it and leaves what cleared to its body, with nothing new but what the
+          # workload's rules find, and naming nothing of titles but what title does.
+          def checks_cleared(heard, keys, title, *titles):
+              named = "${nodes.server.networking.hostName}: "
+              told = []
+              for a in alerts()[heard:]:
+                  parts = tells(a)
+                  back = parts.get("Cleared", [])
+                  said = [t for t in a.get("title", "").removeprefix(named).split("; ") if t in titles]
+                  if said or set(keys) & set(back):
+                      told.append(("; ".join(said), a.get("priority", 3), back, parts.get("New", [])))
+              assert len(told) == 1 and set(keys) <= set(told[0][2]), (keys, told)
+              [(said, priority, _, new)] = told
+              if new:
+                  assert all(strains(key) for key in new), (title, told)
+                  assert set(said.split("; ")) <= set(title.split("; ")) | {""}, (title, told)
+              else:
+                  assert (said, priority) == (title, 3), (title, told)
+
           # A new etcd snapshot, as if k3s had made it a while ago: the copy leaves out one younger than a minute, which
           # may still be being written.
           def etcd_snapshot(name):
@@ -3612,6 +3633,7 @@ runTest {
                   (f"{host}: mesh exit open; mesh leaver still in; mesh tokens outside the rules; mesh access changed", 4),
               ], checks_said(*mesh_said)[said:]
               assert left in alerts()[-1]["message"], alerts()[-1]
+              heard = len(alerts())
               nb("DELETE", f"/api/networks/{nb_network['id']}/resources/{nb_ids['anywhere']}")
               nb("DELETE", f"/api/users/{nb_op['uuid']}/tokens/{nb_ids['token']}")
               nb("PUT", f"/api/users/{nb_bob['uuid']}", {"role": "user", "auto_groups": [nb_bob["own"]], "is_blocked": True})
@@ -3626,9 +3648,10 @@ runTest {
               assert [findings[f"{nb_ns} {part}"][0] for part in ["exit", "tokens", "leaver", "changed"]] == [
                   "ok", "ok", "ok", "notice",
               ], findings
-              assert checks_said(*mesh_said)[said + 1:] == [
-                  (f"{host}: mesh exits closed; mesh leavers out; mesh tokens within the rules again; mesh access changed", 3),
-              ], checks_said(*mesh_said)[said + 1:]
+              checks_cleared(
+                  heard, [f"{nb_ns} {part}" for part in ["exit", "tokens", "leaver"]],
+                  "mesh exits closed; mesh leavers out; mesh tokens within the rules again; mesh access changed", *mesh_said,
+              )
 
           with subtest("A pool past its quota's warning reaches the phone, one more pool still fits, and the alert clears"):
               apply({
@@ -3669,15 +3692,14 @@ runTest {
               assert checks_said(*ceph_said)[said:] == [
                   ("${nodes.server.networking.hostName}: Ceph HEALTH_WARN: POOL_NEAR_FULL", 4)
               ], checks_said(*ceph_said)[said:]
+              heard = len(alerts())
               server.succeed("kubectl -n rook-ceph delete cephblockpool probe --timeout=300s")
               server.wait_until_succeeds(
                   "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph.health}' | grep -x HEALTH_OK",
                   timeout=300,
               )
               host_checks()
-              assert checks_said(*ceph_said)[said + 1:] == [
-                  ("${nodes.server.networking.hostName}: Ceph healthy again", 3)
-              ], checks_said(*ceph_said)[said + 1:]
+              checks_cleared(heard, ["Ceph POOL_NEAR_FULL"], "Ceph healthy again", *ceph_said)
 
           with subtest("An app whose copy of its client's secret is wrong, and one with no pod behind its edges, reach the phone once, and so do their sync and return"):
               sync_said = ["Kanidm clients out of sync", "Kanidm clients in sync again"]
@@ -3713,6 +3735,7 @@ runTest {
               assert checks_said(*edges_said)[edges_before:] == [
                   (f"${nodes.server.networking.hostName}: {unanswered}", 4)
               ], checks_said(*edges_said)[edges_before:]
+              heard = len(alerts())
               server.succeed(f"suveraen-idm sync {first}")
               server.succeed(f"kubectl -n {first}-hello scale deployment hello --replicas=1")
               server.succeed(f"kubectl -n {first}-hello rollout status deployment hello --timeout=300s")
@@ -3722,12 +3745,8 @@ runTest {
               _, findings = host_checks()
               assert findings[f"{first}-kanidm/hello-oidc"][0] == "ok", findings
               assert all(findings[key] == ("ok", "answered") for key in outage), {key: findings[key] for key in outage}
-              assert checks_said(*sync_said)[said + 1:] == [
-                  ("${nodes.server.networking.hostName}: Kanidm clients in sync again", 3)
-              ], checks_said(*sync_said)[said + 1:]
-              assert checks_said(*edges_said)[edges_before + 1:] == [
-                  ("${nodes.server.networking.hostName}: edges answering again", 3)
-              ], checks_said(*edges_said)[edges_before + 1:]
+              checks_cleared(heard, [f"{first}-kanidm/hello-oidc"], "Kanidm clients in sync again", *sync_said)
+              checks_cleared(heard, outage, "edges answering again", *edges_said)
 
           with subtest("The standby CA issues too, with our external account there"):
               standby = {
