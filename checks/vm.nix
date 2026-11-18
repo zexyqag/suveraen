@@ -1412,12 +1412,14 @@ pkgs.testers.runNixOSTest {
           ]:
               server.fail(f"kubectl auth can-i {denied} {reader}")
           server.succeed(f"kubectl auth can-i get nodes --subresource=metrics {reader}")
-          # As the store asks the kubelet, with the token and the CA it was given.
-          store = "/run/victoriametrics"
-          server.wait_until_succeeds(f"test -s {store}/token && test -s {store}/server-ca.crt", timeout=300)
+          # As the store asks the kubelet, with the token and the CA it was given, which no one else may read.
+          token_file = "${nodes.server.suveraen.metrics.credentials.kubelet-token.file}"
+          ca_file = "${nodes.server.suveraen.metrics.credentials.kubelet-ca.file}"
+          server.wait_until_succeeds(f"test -s {token_file} && test -s {ca_file}", timeout=300)
+          server.succeed(f"setpriv --reuid=nobody --regid=nogroup --clear-groups cat {token_file} 2>&1 | grep -q 'Permission denied'")
           kubelet = (
-              f"curl -s -o /dev/null -w '%{{http_code}}' --cacert {store}/server-ca.crt"
-              f" -H \"Authorization: Bearer $(cat {store}/token)\" https://127.0.0.1:10250"
+              f"curl -s -o /dev/null -w '%{{http_code}}' --cacert {ca_file}"
+              f" -H \"Authorization: Bearer $(cat {token_file})\" https://127.0.0.1:10250"
           )
           assert server.succeed(f"{kubelet}/pods") == "403"
           assert server.succeed(f"{kubelet}/metrics/resource") == "200"

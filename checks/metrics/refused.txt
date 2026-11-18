@@ -6,3 +6,4 @@ suveraen.metrics.jobs and textfiles keep and write only families a rule reads: a
 suveraen.metrics.jobs aggregate only families they keep, and may lack only those they store: astray.
 suveraen.metrics.textfiles are named [a-z][a-z0-9-]*, other than a job: unread.
 suveraen.metrics.textfiles write families of their own, which no job keeps, and may lack only those: stray.
+suveraen.metrics.credentials are named [a-z][a-z0-9-]*: Bad name.

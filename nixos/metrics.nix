@@ -37,6 +37,12 @@ let
   # A writer's file is stale once three of its runs are due.
   staleAfter = 3 * seconds cfg.textfileInterval;
 
+  # What the store reads its targets with, each <name>, readable by root and, through a group of their own, the store.
+  credentials = "/run/suveraen-metrics-credentials";
+  credentialsGroup = baseNameOf credentials;
+  # The units credentials are made after, and again whenever one starts.
+  following = lib.unique (lib.concatMap (c: c.after) (lib.attrValues cfg.credentials));
+
   # The family a selector keeps, as node_systemd_unit_state of node_systemd_unit_state{state="failed"}.
   family = selector: lib.head (builtins.match "([a-zA-Z_:][a-zA-Z0-9_:]*).*" selector);
   # What a job stores: each family it keeps but those it aggregates, and what it makes of those.
@@ -281,6 +287,47 @@ let
     IPAddressAllow = "localhost";
   };
   password = [ "suveraen-metrics-password.service" ];
+
+  # Where the scripts modules declare run: each in turn and within its own timeout, so one that hangs or fails leaves
+  # the others' files fresh, and its own as it was; as root, but on a read-only system and reaching nothing beyond
+  # loopback.
+  scripted =
+    scripts:
+    confined
+    // {
+      Type = "oneshot";
+      TimeoutStartSec = lib.foldl' (sum: t: sum + t.timeout) 30 (lib.attrValues scripts);
+      MemoryMax = "256M";
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      PrivateTmp = true;
+      NoNewPrivileges = true;
+      ProtectClock = true;
+      ProtectControlGroups = true;
+      ProtectHostname = true;
+      ProtectKernelLogs = true;
+      ProtectKernelModules = true;
+      ProtectKernelTunables = true;
+      LockPersonality = true;
+      RestrictNamespaces = true;
+      RestrictRealtime = true;
+      RestrictSUIDSGID = true;
+      SystemCallArchitectures = "native";
+      RestrictAddressFamilies = [
+        "AF_UNIX"
+        "AF_INET"
+        "AF_INET6"
+      ];
+    };
+  program =
+    kind: name: t:
+    lib.getExe (
+      pkgs.writeShellApplication {
+        name = "metrics-${kind}-${name}";
+        runtimeInputs = t.path;
+        text = t.script;
+      }
+    );
 in
 {
   options.suveraen.metrics = {
@@ -386,6 +433,63 @@ in
         textfileInterval, in turn and each within its own timeout, as root, but on a read-only system and reaching
         nothing beyond loopback, and whose file the node's target reads. One whose file goes stale alerts, and holds the
         findings of the rules reading it.
+      '';
+    };
+
+    credentialInterval = lib.mkOption {
+      type = duration;
+      default = "5m";
+      description = "How often the credentials are made again, well within the time any of them lasts.";
+    };
+
+    credentials = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule (
+          { name, ... }:
+          {
+            options = {
+              script = lib.mkOption {
+                type = lib.types.lines;
+                description = ''
+                  A bash script, run by root, that prints the credential, which becomes its file once the script has
+                  run to its end. If it fails, the last line it prints on stderr goes to the journal; if it runs out of
+                  time, that it did.
+                '';
+              };
+              path = lib.mkOption {
+                type = lib.types.listOf lib.types.package;
+                default = [ ];
+                description = "Packages whose programs the script runs.";
+              };
+              timeout = lib.mkOption {
+                type = lib.types.ints.positive;
+                default = 60;
+                description = "How many seconds it may run.";
+              };
+              after = lib.mkOption {
+                type = lib.types.listOf lib.types.str;
+                default = [ ];
+                description = "The units it is made after, and made again whenever one of them starts.";
+              };
+              file = lib.mkOption {
+                type = lib.types.str;
+                readOnly = true;
+                internal = true;
+                default = "${credentials}/${name}";
+                description = "Where the store reads it, as a job's bearer_token_file or tls_config.ca_file.";
+              };
+            };
+          }
+        )
+      );
+      default = { };
+      description = ''
+        What the store reads targets with, such as a token or a CA, by name, each made by a script: the metrics'
+        credentials unit runs them after the units they follow, again whenever one of those starts and every
+        credentialInterval, in turn and each within its own timeout, as root, but on a read-only system and reaching
+        nothing beyond loopback. A credential's file, which root and the store alone may read, is replaced once its
+        script has run to its end, and the store reads it again at each scrape; one whose script fails keeps it as it
+        was.
       '';
     };
 
@@ -599,6 +703,9 @@ in
           )
           "suveraen.metrics.textfiles write families of their own, which no job keeps, and may lack only those"
         )
+        (checking cfg.credentials (
+          c: _: builtins.match "[a-z][a-z0-9-]*" c != null
+        ) "suveraen.metrics.credentials are named [a-z][a-z0-9-]*")
       ];
 
     suveraen.metrics.jobs.node.scrape = {
@@ -686,9 +793,14 @@ in
     systemd.services.victoriametrics = {
       wants = password;
       after = password;
-      serviceConfig = confined // {
-        MemoryMax = "1G";
-      };
+      serviceConfig =
+        confined
+        // {
+          MemoryMax = "1G";
+        }
+        // lib.optionalAttrs (cfg.credentials != { }) {
+          SupplementaryGroups = [ credentialsGroup ];
+        };
     };
 
     services.vmalert.instances."" = {
@@ -831,57 +943,22 @@ in
       };
     };
 
-    # Each writer in turn, so one that hangs or fails leaves the others' files fresh, and its own as it was.
     systemd.services.suveraen-metrics-textfiles = lib.mkIf (writers != [ ]) {
       description = "Write what modules measure for this server's metrics";
-      serviceConfig = {
-        Type = "oneshot";
+      serviceConfig = scripted cfg.textfiles // {
         RuntimeDirectory = baseNameOf textfiles;
         RuntimeDirectoryMode = "0755";
         RuntimeDirectoryPreserve = true;
-        TimeoutStartSec = lib.foldl' (sum: t: sum + t.timeout) 30 (lib.attrValues cfg.textfiles);
-        MemoryMax = "256M";
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        PrivateTmp = true;
-        NoNewPrivileges = true;
-        ProtectClock = true;
-        ProtectControlGroups = true;
-        ProtectHostname = true;
-        ProtectKernelLogs = true;
-        ProtectKernelModules = true;
-        ProtectKernelTunables = true;
-        LockPersonality = true;
-        RestrictNamespaces = true;
-        RestrictRealtime = true;
-        RestrictSUIDSGID = true;
-        SystemCallArchitectures = "native";
-        RestrictAddressFamilies = [
-          "AF_UNIX"
-          "AF_INET"
-          "AF_INET6"
-        ];
-      }
-      // confined;
+      };
       script = lib.concatStrings (
-        lib.mapAttrsToList (
-          name: t:
-          let
-            writer = pkgs.writeShellApplication {
-              name = "metrics-textfile-${name}";
-              runtimeInputs = t.path;
-              text = t.script;
-            };
-          in
-          ''
-            if ${pkgs.coreutils}/bin/timeout ${toString t.timeout} ${lib.getExe writer} >${textfile name}.new; then
-              mv ${textfile name}.new ${textfile name}
-            else
-              echo "${name}: exit status $?"
-              rm -f ${textfile name}.new
-            fi
-          ''
-        ) cfg.textfiles
+        lib.mapAttrsToList (name: t: ''
+          if ${pkgs.coreutils}/bin/timeout ${toString t.timeout} ${program "textfile" name t} >${textfile name}.new; then
+            mv ${textfile name}.new ${textfile name}
+          else
+            echo "${name}: exit status $?"
+            rm -f ${textfile name}.new
+          fi
+        '') cfg.textfiles
       );
     };
     systemd.timers.suveraen-metrics-textfiles = lib.mkIf (writers != [ ]) {
@@ -889,6 +966,49 @@ in
       timerConfig = {
         OnBootSec = "30s";
         OnUnitActiveSec = cfg.textfileInterval;
+      };
+    };
+
+    users.groups = lib.mkIf (cfg.credentials != { }) { ${credentialsGroup} = { }; };
+    systemd.services.suveraen-metrics-credentials = lib.mkIf (cfg.credentials != { }) {
+      description = "Make what this server's metrics read their targets with";
+      wantedBy = following;
+      after = following;
+      serviceConfig = scripted cfg.credentials // {
+        # Each file root's and the group's, which only the store has.
+        Group = credentialsGroup;
+        UMask = "0027";
+        RuntimeDirectory = baseNameOf credentials;
+        RuntimeDirectoryMode = "0750";
+        RuntimeDirectoryPreserve = true;
+      };
+      script = ''
+        err=$(mktemp)
+        # credential <name> <file> <seconds> <script>
+        credential() {
+          local status=0 why
+          timeout "$3" "$4" >"$2.new" 2>"$err" || status=$?
+          if [ "$status" = 0 ]; then
+            mv "$2.new" "$2"
+            return
+          fi
+          rm -f "$2.new"
+          why=$(tail -n 1 "$err")
+          if [ "$status" = 124 ]; then why="no end within $3 seconds"; fi
+          echo "$1 not made again: ''${why:-exit status $status}"
+        }
+      ''
+      + lib.concatStrings (
+        lib.mapAttrsToList (name: c: ''
+          credential ${name} ${c.file} ${toString c.timeout} ${program "credential" name c}
+        '') cfg.credentials
+      );
+    };
+    systemd.timers.suveraen-metrics-credentials = lib.mkIf (cfg.credentials != { }) {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "30s";
+        OnUnitActiveSec = cfg.credentialInterval;
       };
     };
 

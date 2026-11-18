@@ -1,7 +1,7 @@
-# Rules, jobs and writers of a server's metrics that its evaluation refuses (refused.txt): each prints, or is keyed by,
-# what may not leave the server, is named so that its findings' keys could be another's, or an input's a job's, reads
-# what nothing keeps or writes, keeps or writes what no rule reads, aggregates what it doesn't keep, or may lack what it
-# doesn't store or write.
+# Rules, jobs, writers and credentials of a server's metrics that its evaluation refuses (refused.txt): each prints, or
+# is keyed by, what may not leave the server, is named so that its findings' keys could be another's, or an input's a
+# job's, or in other than lowercase letters, digits and dashes, reads what nothing keeps or writes, keeps or writes what
+# no rule reads, aggregates what it doesn't keep, or may lack what it doesn't store or write.
 let
   rule = detail: {
     expr = "vector(1)";
@@ -40,6 +40,7 @@ in
         optional = [ "elsewhere_written" ];
       };
     };
+    credentials."Bad name".script = "true";
     rules = {
       "prints an instance" = rule "{{ $labels.instance }} found";
       "prints by dot" = rule "{{ .Labels.name }} found";

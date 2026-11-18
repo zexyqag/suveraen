@@ -104,9 +104,6 @@ let
     "kubelet_volume_stats_inodes_free"
     "kubelet_volume_stats_inodes"
   ];
-  # Where the metrics' token for the kubelet and the CA its certificate is from go: the store's own runtime directory,
-  # gone when it stops.
-  store = "/run/victoriametrics";
   # Which namespaces are a tenant's, and where its ID and its app are in their names, as the tenant-namespaces policy
   # tells, which admits no other.
   tenancy =
@@ -660,65 +657,40 @@ in
       ];
     };
 
-    # A token for that account, valid for an hour, and the CA the kubelet's certificate is from, in the store's runtime
-    # directory, each time k3s or the store starts and every 5 minutes, so one that ran out while the cluster couldn't
-    # be read is soon replaced once it can. One that can't be had leaves the kubelet's targets down, which stands while
-    # the cluster can't be read.
-    systemd.services.suveraen-metrics-token = lib.mkIf metrics.enable {
-      description = "Give this server's metrics a token to read the kubelet's metrics with";
-      wantedBy = [
-        "k3s.service"
-        "victoriametrics.service"
-      ];
-      after = [
-        "k3s.service"
-        "victoriametrics.service"
-      ];
-      path = [
-        config.services.k3s.package
-        pkgs.coreutils
-      ];
-      serviceConfig = {
-        Type = "oneshot";
-        RuntimeDirectory = "suveraen-metrics-token";
-        RuntimeDirectoryMode = "0700";
-        UMask = "0077";
-        PrivateTmp = true;
-        ProtectHome = true;
-        NoNewPrivileges = true;
-      };
-      script = ''
-        [ -d ${store} ] || exit 0
-        run=$RUNTIME_DIRECTORY
-        # The API server may take a while to serve the account once k3s is up.
-        for _ in $(seq 12); do
-          if token=$(kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml --request-timeout=20s --cache-dir "$run/cache" \
-            -n kube-system create token metrics --duration=1h 2>"$run/err"); then
-            owner=$(stat -c %u ${store})
-            printf '%s' "$token" >${store}/token.new
-            cp /var/lib/rancher/k3s/server/tls/server-ca.crt ${store}/server-ca.crt.new
-            chown "$owner" ${store}/token.new ${store}/server-ca.crt.new
-            mv ${store}/token.new ${store}/token
-            mv ${store}/server-ca.crt.new ${store}/server-ca.crt
-            exit 0
-          fi
-          sleep 10
-        done
-        echo "no token: $(tail -n 1 "$run/err")"
-      '';
-    };
-    systemd.timers.suveraen-metrics-token = lib.mkIf metrics.enable {
-      wantedBy = [ "timers.target" ];
-      timerConfig = {
-        OnBootSec = "5min";
-        OnUnitActiveSec = "5min";
-      };
-    };
-
     # What k3s serves of the kubelet's and etcd's metrics, on loopback: of the kubelet, its volumes' use, and of its
     # pods, as only sums per namespace, how much CPU they take and how long they stall on I/O; etcd's size against its
     # quota. Each is lost while k3s is, which the cluster's own finding tells of.
     suveraen.metrics = lib.mkIf metrics.enable {
+      # What the kubelet's are read with: a token for the account above, valid for an hour, made again each time k3s
+      # starts and every credentialInterval of the metrics', so one that ran out while the cluster couldn't be read is
+      # soon replaced once it can; and the CA the kubelet's certificate is from. One that can't be had leaves the
+      # kubelet's targets down, which stands while the cluster can't be read.
+      credentials = {
+        kubelet-token = {
+          path = [ config.services.k3s.package ];
+          after = [ "k3s.service" ];
+          # Twelve tries, of up to half a minute each.
+          timeout = 420;
+          script = ''
+            cache=$(mktemp -d)
+            # The API server may take a while to serve the account once k3s is up.
+            for _ in $(seq 12); do
+              if token=$(kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml --request-timeout=20s --cache-dir "$cache" \
+                -n kube-system create token metrics --duration=1h); then
+                printf '%s' "$token"
+                exit 0
+              fi
+              sleep 10
+            done
+            exit 1
+          '';
+        };
+        kubelet-ca = {
+          after = [ "k3s.service" ];
+          script = "cat /var/lib/rancher/k3s/server/tls/server-ca.crt";
+        };
+      };
+
       jobs =
         let
           kubelet = path: {
@@ -726,9 +698,9 @@ in
               scheme = "https";
               metrics_path = path;
               static_configs = [ { targets = [ "127.0.0.1:${toString kubeletPort}" ]; } ];
-              bearer_token_file = "${store}/token";
+              bearer_token_file = metrics.credentials.kubelet-token.file;
               # k3s signs the kubelet's certificate, for 127.0.0.1 too, with the server CA.
-              tls_config.ca_file = "${store}/server-ca.crt";
+              tls_config.ca_file = metrics.credentials.kubelet-ca.file;
             };
             relabel = kubeletLabels;
             needsCluster = true;
