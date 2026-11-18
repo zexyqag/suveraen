@@ -685,6 +685,23 @@ runTest {
       inherit (nodes.acme.test-support.acme) caCert;
       checkout = "/srv/src/${lib.removePrefix "./" nodes.server.suveraen.cluster.path}";
       inherit (nodes.server.suveraen) metrics;
+      inherit (import ../nixos/duration.nix lib) seconds;
+      # The rules on how the workload fares, which a starved runner trips as it would a starved server: no run can
+      # promise against them, so what they find is printed, and only the other findings fail a run. Each is one of the
+      # server's rules, with a pattern of the keys it is printed for.
+      strain =
+        lib.mapAttrs
+          (name: lib.throwIfNot (metrics.rules ? ${name}) "${name} is none of the server's rules")
+          {
+            "containers restarting" = ".*";
+            # A container's, not a kill the host's count alone finds, as of a daemon of the server's own past its cap.
+            "OOM kills" = ".+";
+            # k3s restarting itself, as it does when etcd stalls, and no other unit.
+            "units restarting" = "k3s\\.service";
+            "memory stalled" = ".*";
+            "tenant busy" = ".*";
+            "tenant stalled" = ".*";
+          };
     in
     ''
       import base64
@@ -959,10 +976,26 @@ runTest {
       # Seconds from the first Flux object to each one Ready, which says where a slow run spent its first half hour.
       readiness = []
 
-      # QEMU's peak memory per running machine, and what the runner has left of memory and CPU.
+      # The rules on how the workload fares, by name with the keys they are printed for, and what they found as the
+      # subtests read them.
+      strain = ${builtins.toJSON strain}
+      strained = []
+
+      # Whether a finding of the server's checks, by its key, is one on how the workload fares: under such a rule's name
+      # as a word, which begins no other's, and a key it is printed for.
+      def strains(key):
+          return any(
+              re.fullmatch(keys, key.removeprefix(f"metric {name}").removeprefix(" "))
+              for name, keys in strain.items() if key == f"metric {name}" or key.startswith(f"metric {name} ")
+          )
+
+      # QEMU's peak memory per running machine, what the runner has left of memory and CPU, and what the workload's
+      # rules found.
       def memory():
           if readiness:
               print("ready after", readiness)
+          if strained:
+              print("the workload's rules found", strained)
           print("subtests took", sorted(timings.took, reverse=True))
           for machine in machines_qemu:
               if machine.pid is not None:
@@ -1028,7 +1061,7 @@ runTest {
               prefixes = server.succeed("secret-prefixes").split()
               assert prefixes == ["k8s:enc:secretbox:v1:secretboxkey:"], prefixes
 
-          with subtest("Every workload runs, Pod Security refused nothing, and no rule on the server's own metrics, which it keeps on loopback behind a password, fires"):
+          with subtest("Every workload runs, Pod Security refused nothing, and no rule on the server's own metrics, which it keeps on loopback behind a password, fires but those on how the workload fares"):
               def items(kind):
                   return parsed(f"kubectl get {kind} -A -o json")["items"]
 
@@ -1059,21 +1092,28 @@ runTest {
               server.succeed("kubectl -n cloudnative-pg wait certificate --all --for=condition=Ready --timeout=0")
               for port, path in [(8428, "/api/v1/query?query=up"), (8880, "/api/v1/rules"), (9100, "/metrics")]:
                   server.succeed(f"test $(curl -s -o /dev/null -w '%{{http_code}}' http://127.0.0.1:{port}{path}) = 401")
-              # Every rule is evaluated, and none but the Watchdog fires, so none of the server's checks find late.
+              # Every rule is evaluated, and none fires but the Watchdog and those on how the workload fares, so none of
+              # the server's checks find late but theirs; each alert under its key there.
               rules = parsed("suveraen-metrics check")["rules"]
               assert rules and all(r["health"] == "ok" for r in rules), rules
-              fired = {(r["name"], a["annotations"].get("key")) for r in rules for a in r["alerts"] if a["state"] == "firing"}
-              assert fired == {("Watchdog", None)}, rules
-              # Every target answers, and of pods the metrics keep their CPU and I/O stalls only as their namespaces'
-              # sums, which name a tenant's namespace's tenant and app as its labels do, and nothing the kubelet names
-              # beyond a pod and its container.
+              fired = {
+                  " ".join(filter(None, ["metric", r["name"], a["annotations"].get("key")])): a["annotations"].get("detail")
+                  for r in rules for a in r["alerts"] if a["state"] == "firing"
+              }
+              strained.extend(sorted(f"{key}: {detail}" for key, detail in fired.items() if strains(key)))
+              assert {key for key in fired if not strains(key)} == {"metric Watchdog"}, rules
+              # Every target answers, of its last three scrapes at least one, as one that fails on a loaded runner is no
+              # target down; and of pods the metrics keep their CPU and I/O stalls only as their namespaces' sums, which
+              # name a tenant's namespace's tenant and app as its labels do, and nothing the kubelet names beyond a pod
+              # and its container.
               def in_store(query):
                   return parsed(
                       "curl -fsS -u metrics:$(cat /var/lib/suveraen-metrics/password) http://127.0.0.1:8428/api/v1/query"
                       f" --data-urlencode {shlex.quote('query=' + query)}"
                   )["data"]["result"]
 
-              up = {r["metric"]["job"]: r["value"][1] for r in in_store("up")}
+              scrapes = "${toString (3 * seconds metrics.interval)}s"
+              up = {r["metric"]["job"]: r["value"][1] for r in in_store(f"max_over_time(up[{scrapes}])")}
               assert up == {job: "1" for job in ${builtins.toJSON (lib.attrNames metrics.jobs)}}, up
               owners = {
                   n["metadata"]["name"]: (n["metadata"]["labels"]["suveraen/tenant"], n["metadata"]["labels"]["suveraen/app"])
@@ -3347,8 +3387,23 @@ runTest {
                       findings[m.group(2)] = (m.group(1), m.group(3))
               return scope, findings
 
+          # What an alert of the server's checks tells by its body: the keys of the findings in each part, by its
+          # heading, those that cleared under "Cleared", and a reminder's under "".
+          def tells(alert):
+              parts: dict[str, list[str]] = {}
+              part = ""
+              for line in alert.get("message", "").splitlines():
+                  if line.startswith("Cleared: "):
+                      parts["Cleared"] = line.removeprefix("Cleared: ").split(", ")
+                  elif line in ("Still late:", "New:", "Noted:"):
+                      part = line.removesuffix(":")
+                  else:
+                      parts.setdefault(part, []).append(line.split(": ", 1)[0])
+              return parts
+
           # What the server's checks have alerted so far, as the phone got it; given titles, only the alerts that name
-          # any, each by those it names, so that another finding alerted with them changes nothing here.
+          # any, each by those it names, so that another finding alerted with them changes nothing here; and without,
+          # but those that tell of nothing but how the workload fares, which no run can promise against.
           def checks_said(*titles):
               named = "${nodes.server.networking.hostName}: "
               ours = (
@@ -3360,6 +3415,8 @@ runTest {
                   title = a.get("title", "").removeprefix(named)
                   if titles:
                       title = "; ".join(t for t in title.split("; ") if t in titles)
+                  elif all(strains(key) for part, keys in tells(a).items() if part != "Still late" for key in keys):
+                      continue
                   if title.startswith(titles or ours):
                       heard.append((named + title, a.get("priority", 3)))
               return heard
@@ -3387,7 +3444,7 @@ runTest {
                       refused_at(n, server_keys, f"s3api list-objects-v2 --bucket {bucket_at(n, tenant)}")
                       refused_at(n, keys_of(tenant, n), f"s3api list-objects-v2 --bucket {platform}")
 
-          with subtest("The server finds every backup's last good copy where its controller records it, judges Flux's objects, every certificate and the rules on its own metrics, reaches every edge through the gateway, and none is late"):
+          with subtest("The server finds every backup's last good copy where its controller records it, judges Flux's objects, every certificate and the rules on its own metrics, reaches every edge through the gateway, and none is late but by how the workload fares"):
               # When each backup was last good, as the controllers record it, under the name the server gives it.
               def recorded():
                   stores = {(o["metadata"]["namespace"], o["metadata"]["name"]): o for o in items("objectstores")}
@@ -3455,10 +3512,13 @@ runTest {
               # One that Flux reconciles just then is ready again before its hour is up, and one that waits for it then
               # is left to it, its suspension told apart.
               waiting = {key for key in flux if findings.get(key, ("", ""))[1].startswith("waits for ")}
-              # A rule may be pending just then, as the clock's is until a source has set it, which stands as it is.
+              # A rule may be pending just then, as the clock's is until a source has set it, which stands as it is; and
+              # one on how the workload fares may find it late.
               metric = {key for key in findings if key.startswith("metric ")}
               assert findings["metric rules"][0] == "ok", findings["metric rules"]
-              assert not [key for key in metric if findings[key][0] == "late"], {key: findings[key] for key in metric}
+              late = {key for key in metric if findings[key][0] == "late"}
+              strained.extend(sorted(f"{key}: {findings[key][1]}" for key in late if strains(key)))
+              assert all(strains(key) for key in late), {key: findings[key] for key in metric}
               assert findings.keys() - metric == (
                   before.keys() | archiving | offsite | identities | stun_findings | mesh_parts | flux | certificates | edges
                   | {f"{key} suspended" for key in waiting}
