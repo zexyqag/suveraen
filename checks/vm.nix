@@ -13,13 +13,14 @@
 # clocks use NTS. The watcher's ntfy only takes known publishers and keeps its account API, stats and attachments
 # closed; the server's alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops, when its
 # checks do and while its boot-time SSH port is open, and says when each ends; and the server falls back to a second
-# channel when the watcher is gone. The server and its Flux only take commits signed by a release signer, the server
-# never goes back to an older one, and it alerts when its configuration gets old. The server's checks read how old the
-# backups the cluster records are and Ceph's health with an account that reads nothing else, ask the node's addresses
-# for STUN, and alert once per change, also when the cluster can't be read. Its etcd snapshots reach both providers
-# encrypted to recovery keys, under a prefix its key can neither leave nor empty; with one provider down they still
-# reach the other, and the phone hears of it. Wiped, the server comes back from a provider's copy through its restore
-# command, with its token file alone; another token leaves a running server's own database in place.
+# channel when the watcher is gone, and says there when the watcher's ntfy stops answering. The server and its Flux only
+# take commits signed by a release signer, the server never goes back to an older one, and it alerts when its
+# configuration gets old. The server's checks read how old the backups the cluster records are and Ceph's health with an
+# account that reads nothing else, ask the node's addresses for STUN, and alert once per change, also when the cluster
+# can't be read. Its etcd snapshots reach both providers encrypted to recovery keys, under a prefix its key can neither
+# leave nor empty; with one provider down they still reach the other, and the phone hears of it. Wiped, the server comes
+# back from a provider's copy through its restore command, with its token file alone; another token leaves a running
+# server's own database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -1687,6 +1688,25 @@ pkgs.testers.runNixOSTest {
               unlock_said.format("resolved after passing successfully 1 time(s) in a row with the following description"),
               timeout=180,
           )
+
+      # What reached the second channel with this title, as the phone reads it there.
+      def fell_back(title):
+          out = server.succeed(
+              "curl -fsS 'http://127.0.0.1:2587/fallback/json?poll=1'"
+              f" | jq -c --arg t {shlex.quote(f'server: {title}')} 'select(.title == $t)'"
+          )
+          return [json.loads(line) for line in out.splitlines()]
+
+      with subtest("The server tells through its second channel when the watcher's ntfy stops answering, and says so once it answers"):
+          unanswered = "watcher's ntfy not answering"
+          told = len(fell_back(unanswered))
+          watcher.succeed("systemctl stop ntfy-sh")
+          retry(lambda _: len(fell_back(unanswered)) > told, timeout_seconds=300)
+          assert fell_back(unanswered)[-1].get("priority") == 5, fell_back(unanswered)
+          watcher.succeed("systemctl start ntfy-sh")
+          watcher.wait_until_succeeds("curl -fsS http://127.0.0.1:2586/v1/health")
+          retry(lambda _: len(sent("watcher's ntfy answering again")) == 1, timeout_seconds=120)
+          assert sent("watcher's ntfy answering again")[0].get("priority", 3) == 3
 
       with subtest("The server falls back to its second channel when the watcher is gone"):
           watcher.succeed("systemctl stop nginx")

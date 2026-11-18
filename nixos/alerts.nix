@@ -90,7 +90,7 @@ in
       urlFile = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "File holding a second ntfy topic URL, tried when the first can't be reached, so a dead watcher doesn't silence alerts. Best on another machine.";
+        description = "File holding a second ntfy topic URL, tried when the first can't be reached, so a dead watcher doesn't silence alerts. Best on another machine. The heartbeat also says there when the watcher's ntfy stops answering.";
       };
 
       tokenFile = lib.mkOption {
@@ -248,6 +248,28 @@ in
           if ${authorized cfg.heartbeat.tokenFile} -fsS --connect-timeout 10 --max-time 30 -X POST -G "''${report[@]}" \
             ${lib.escapeShellArg cfg.heartbeat.url}; then
             echo 0 > "$misses"
+          ${lib.optionalString (cfg.fallback.urlFile != null) ''
+            # Gatus took it, so the watcher is up, and its ntfy, whose host the topic's URL names, should answer too.
+            # Gatus alerts through that ntfy alone.
+            url=$(< ${lib.escapeShellArg cfg.urlFile})
+            if curl -fsS --connect-timeout 10 --max-time 30 "''${url%/*}/v1/health" | grep -q '"healthy": *true'; then
+              # Once it answers again after the alert that it didn't.
+              if [ "$(cat /run/heartbeat/ntfy-misses 2>/dev/null || echo 0)" -ge 3 ]; then
+                ${lib.getExe alert} "watcher's ntfy answering again" \
+                  "The watcher's ntfy answers again: the servers' alerts and Gatus's reach the phone through it." 3
+              fi
+              echo 0 > /run/heartbeat/ntfy-misses
+            else
+              n=$(( $(cat /run/heartbeat/ntfy-misses 2>/dev/null || echo 0) + 1 ))
+              echo "$n" > /run/heartbeat/ntfy-misses
+              echo "The watcher's ntfy didn't answer ($n in a row)."
+              # Once, on the third miss in a row; it reaches the second channel.
+              if [ "$n" -eq 3 ]; then
+                ${lib.getExe alert} "watcher's ntfy not answering" \
+                  "The watcher took the heartbeat, but its ntfy didn't answer three times in a row. Neither the servers' alerts nor Gatus's reach the phone through it." 5
+              fi
+            fi
+          ''}
           else
             n=$(( $(cat "$misses" 2>/dev/null || echo 0) + 1 ))
             echo "$n" > "$misses"
