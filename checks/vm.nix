@@ -489,8 +489,11 @@ pkgs.testers.runNixOSTest {
 
       # What an account may do in a namespace beside what every account may, as it asks, so no grant joins these unseen.
       def rules_of(account, namespace):
-          review = {"apiVersion": "authorization.k8s.io/v1", "kind": "SelfSubjectRulesReview"}
-          review["spec"] = {"namespace": namespace}
+          review = {
+              "apiVersion": "authorization.k8s.io/v1",
+              "kind": "SelfSubjectRulesReview",
+              "spec": {"namespace": namespace},
+          }
           answer = json.loads(server.succeed(
               f"echo {shlex.quote(json.dumps(review))}"
               # Validating it would have kubectl list the CRDs as the account, which it rightly may not.

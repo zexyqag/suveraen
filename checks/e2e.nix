@@ -1067,24 +1067,24 @@ runTest {
               # Every target answers, and of pods the metrics keep their CPU and I/O stalls only as their namespaces'
               # sums, which name a tenant's namespace's tenant and app as its labels do, and nothing the kubelet names
               # beyond a pod and its container.
-              def stored(query):
+              def in_store(query):
                   return parsed(
                       "curl -fsS -u metrics:$(cat /var/lib/suveraen-metrics/password) http://127.0.0.1:8428/api/v1/query"
                       f" --data-urlencode {shlex.quote('query=' + query)}"
                   )["data"]["result"]
 
-              up = {r["metric"]["job"]: r["value"][1] for r in stored("up")}
+              up = {r["metric"]["job"]: r["value"][1] for r in in_store("up")}
               assert up == {job: "1" for job in ${builtins.toJSON (lib.attrNames metrics.jobs)}}, up
               owners = {
                   n["metadata"]["name"]: (n["metadata"]["labels"]["suveraen/tenant"], n["metadata"]["labels"]["suveraen/app"])
                   for n in items("namespaces") if "suveraen/tenant" in n["metadata"].get("labels", {})
               }
               for family in ["namespace:pod_cpu_usage_seconds:rate_sum", "namespace:container_pressure_io_stalled_seconds:rate_avg"]:
-                  sums = {r["metric"]["namespace"]: (r["metric"].get("tenant"), r["metric"].get("app")) for r in stored(family)}
+                  sums = {r["metric"]["namespace"]: (r["metric"].get("tenant"), r["metric"].get("app")) for r in in_store(family)}
                   assert sums.keys() & owners.keys(), (family, sums)
                   assert all(owner == owners.get(ns, (None, None)) for ns, owner in sums.items()), (family, sums, owners)
-              assert stored('{__name__=~"pod_cpu_usage_seconds_total|container_pressure_io_stalled_seconds_total"}') == []
-              named = {label for r in stored('{job=~"kubelet|cadvisor|resource"}') for label in r["metric"]}
+              assert in_store('{__name__=~"pod_cpu_usage_seconds_total|container_pressure_io_stalled_seconds_total"}') == []
+              named = {label for r in in_store('{job=~"kubelet|cadvisor|resource"}') for label in r["metric"]}
               assert not named & {"id", "image", "name", "uid", "boot_id", "machine_id", "system_uuid"}, named
 
           with subtest("The platform's pods run at its priority, tenants' at theirs, and Ceph's monitors, OSDs and CSI node plugin at the node's, which a shutdown stops last"):
