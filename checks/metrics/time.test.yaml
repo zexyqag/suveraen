@@ -1,0 +1,75 @@
+# The clock's rules (nixos/time.nix), on what chrony tells: unsynchronised, or synchronised once but set no more, for
+# six hours, and off by more than a second. vmalert-tool's time starts in 2000.
+rule_files:
+  - rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'chrony_tracking_leap_status{job="node", instance="127.0.0.1:9100"}'
+        values: '3x480'
+      - series: 'chrony_tracking_reference_timestamp_seconds{job="node", instance="127.0.0.1:9100"}'
+        values: '0x480'
+    alert_rule_test:
+      - eval_time: 5h
+        groupname: metrics
+        alertname: clock unsynchronised
+        exp_alerts: []
+      - eval_time: 6h10m
+        groupname: metrics
+        alertname: clock unsynchronised
+        exp_alerts:
+          - &unsynchronised
+            exp_labels: {priority: "4"}
+            exp_annotations:
+              title: clock unsynchronised
+              cleared: clock synchronised again
+              detail: no time source has set the clock for six hours or more
+              inputs: node chrony chrony_tracking_leap_status chrony_tracking_reference_timestamp_seconds
+  - interval: 1m
+    input_series:
+      # Synchronised, and set each minute.
+      - series: 'chrony_tracking_leap_status{job="node", instance="127.0.0.1:9100"}'
+        values: '0x480'
+      - series: 'chrony_tracking_reference_timestamp_seconds{job="node", instance="127.0.0.1:9100"}'
+        values: '946684800+60x480'
+    alert_rule_test:
+      - eval_time: 7h30m
+        groupname: metrics
+        alertname: clock unsynchronised
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      # Still synchronised, it says, but set no more since it started.
+      - series: 'chrony_tracking_leap_status{job="node", instance="127.0.0.1:9100"}'
+        values: '0x480'
+      - series: 'chrony_tracking_reference_timestamp_seconds{job="node", instance="127.0.0.1:9100"}'
+        values: '946684800x480'
+    alert_rule_test:
+      - eval_time: 6h50m
+        groupname: metrics
+        alertname: clock unsynchronised
+        exp_alerts: []
+      - eval_time: 7h10m
+        groupname: metrics
+        alertname: clock unsynchronised
+        exp_alerts: [*unsynchronised]
+  - interval: 1m
+    input_series:
+      - series: 'chrony_tracking_system_time_seconds{job="node", instance="127.0.0.1:9100"}'
+        values: '0.001x10 -1.5x30'
+    alert_rule_test:
+      - eval_time: 20m
+        groupname: metrics
+        alertname: clock off
+        exp_alerts: []
+      - eval_time: 30m
+        groupname: metrics
+        alertname: clock off
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, priority: "4"}
+            exp_annotations:
+              title: clock off
+              cleared: clock right again
+              detail: 1.5s off the time sources'
+              inputs: node chrony chrony_tracking_system_time_seconds

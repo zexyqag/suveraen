@@ -53,7 +53,7 @@ tests:
       - series: 'up{job="node", instance="127.0.0.1:9100"}'
         values: '1x60'
       # Written each minute for the first ten, then no more, in vmalert-tool's time, which starts in 2000; the other
-      # writer's file was never there.
+      # writers' files were never there.
       - series: 'node_textfile_mtime_seconds{job="node", instance="127.0.0.1:9100", file="/run/suveraen-metrics-textfiles/pools.prom"}'
         values: '946684800+60x10 946685400x50'
     alert_rule_test:
@@ -61,6 +61,15 @@ tests:
         groupname: metrics
         alertname: input stale
         exp_alerts:
+          - &chrony
+            exp_labels: {writer: chrony, priority: "4"}
+            exp_annotations:
+              title: metric input stale
+              cleared: metric inputs fresh again
+              detail: not written by its last three runs, or unreadable
+              key: chrony
+              inputs: node
+              lost: chrony
           - &datasets
             exp_labels: {writer: datasets, priority: "4"}
             exp_annotations:
@@ -74,6 +83,7 @@ tests:
         groupname: metrics
         alertname: input stale
         exp_alerts:
+          - *chrony
           - *datasets
           - exp_labels: {writer: pools, priority: "4"}
             exp_annotations:

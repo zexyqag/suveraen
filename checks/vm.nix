@@ -16,14 +16,14 @@
 # channel when the watcher is gone, and says there when the watcher's ntfy stops answering; a daily publish the way its
 # alerts go tells the watcher when that way is broken. The server and its Flux only take commits signed by a release
 # signer, the server never goes back to an older one, and it alerts when its configuration, or the nixpkgs its release
-# locks, gets old. The server keeps its metrics on loopback behind a password, and its daemons reach nothing else. The
-# server's checks read how old the backups the cluster records are, Ceph's health, Flux's objects, the certificates and
-# the Gateways with an account that reads nothing else, ask the node's addresses for STUN, read what the rules on its
-# metrics find, such as a failed unit or a dataset filling, and alert once per change, also when the cluster or the
-# rules can't be read. Its etcd snapshots reach both providers encrypted to recovery keys, under a prefix its key can
-# neither leave nor empty; with one provider down they still reach the other, and the phone hears of it. Wiped, the
-# server comes back from a provider's copy through its restore command, with its token file alone; another token leaves
-# a running server's own database in place.
+# locks, gets old. The server keeps its metrics on loopback behind a password, and its daemons reach nothing else; they
+# read the clock from chrony. The server's checks read how old the backups the cluster records are, Ceph's health,
+# Flux's objects, the certificates and the Gateways with an account that reads nothing else, ask the node's addresses
+# for STUN, read what the rules on its metrics find, such as a failed unit or a dataset filling, and alert once per
+# change, also when the cluster or the rules can't be read. Its etcd snapshots reach both providers encrypted to
+# recovery keys, under a prefix its key can neither leave nor empty; with one provider down they still reach the other,
+# and the phone hears of it. Wiped, the server comes back from a provider's copy through its restore command, with its
+# token file alone; another token leaves a running server's own database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -1334,6 +1334,26 @@ pkgs.testers.runNixOSTest {
                   "conf=$(systemctl show chronyd -p ExecStart --value | grep -o '/nix/store/[^ ;]*chrony.conf')"
                   " && grep -Eq '^server .* nts$' $conf && ! grep '^server ' $conf | grep -vq ' nts$'"
               )
+
+      with subtest("The server's metrics read the clock from chrony itself, synchronised and then not"):
+          tracked = "/run/suveraen-metrics-textfiles/chrony.prom"
+
+          # What the writer reads of chrony now.
+          def tracking():
+              server.succeed("systemctl start suveraen-metrics-textfiles")
+              return dict(line.split() for line in server.succeed(f"grep -v '^#' {tracked}").splitlines())
+
+          # The test's VMs reach no time server.
+          assert tracking()["chrony_tracking_leap_status"] == "3", tracking()
+          # As if a source had set the clock just now.
+          server.succeed("chronyc local stratum 10")
+          server.wait_until_succeeds("chronyc -c tracking | grep -q ',Normal$'")
+          found = tracking()
+          now = int(server.succeed("date +%s"))
+          assert found["chrony_tracking_leap_status"] == "0", found
+          assert abs(now - float(found["chrony_tracking_reference_timestamp_seconds"])) < 120, (now, found)
+          server.succeed("chronyc local off")
+          assert tracking()["chrony_tracking_leap_status"] == "3", tracking()
 
       with subtest("The server's metrics stay on loopback behind a password, and its daemons reach nothing else"):
           password = "/var/lib/suveraen-metrics/password"
