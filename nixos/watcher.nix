@@ -19,6 +19,10 @@ let
       send-on-resolved = true;
     }
     // extra;
+
+  # Where systemd keeps the state of a dynamic user's, as ntfy and Gatus run, by the StateDirectory their modules give.
+  # Read from their units, it would depend on the file systems it is one of.
+  private = name: "/var/lib/private/${name}";
 in
 {
   options.suveraen.watcher = {
@@ -65,6 +69,18 @@ in
       type = lib.types.listOf (lib.types.strMatching "[a-z0-9-]+");
       default = [ ];
       description = "Hosts that report a heartbeat, each with its own token. Each gets the external endpoint `servers_<name>`.";
+    };
+
+    ntfyQuota = lib.mkOption {
+      type = lib.types.str;
+      default = "1G";
+      description = "Most space ntfy's cache of alerts and its accounts may take.";
+    };
+
+    gatusQuota = lib.mkOption {
+      type = lib.types.str;
+      default = "1G";
+      description = "Most space Gatus's results may take.";
     };
 
     heartbeatTimeout = lib.mkOption {
@@ -134,6 +150,8 @@ in
         upstream-base-url = "https://ntfy.sh";
         # Phones fetch and catch up from this cache; the default 12 hours is too short for a phone left off over a weekend.
         cache-duration = "72h";
+        # SQLite otherwise leaves what the cache expires in the file's free pages, readable until they are reused.
+        cache-file = "/var/lib/ntfy-sh/cache-file.db?_secure_delete=on";
         # Alerts are short text. Attachments would be downloadable without logging in, and the phone apps don't need the web app.
         attachment-cache-dir = lib.mkForce "";
         web-root = "disable";
@@ -142,6 +160,18 @@ in
     systemd.services.ntfy-sh.serviceConfig = {
       Restart = "on-failure";
       RestartSec = 5;
+    };
+    # The alerts' texts stay for the cache's 72 hours, and Gatus's results for as long as it keeps them, not for as long
+    # as the snapshots of /var.
+    suveraen.storage.unsnapshotted = {
+      ntfy = {
+        path = private "ntfy-sh";
+        quota = cfg.ntfyQuota;
+      };
+      gatus = {
+        path = private "gatus";
+        quota = cfg.gatusQuota;
+      };
     };
 
     services.gatus = {

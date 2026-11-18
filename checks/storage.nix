@@ -2,8 +2,9 @@
 # a volume group of their own on a partition of a RAID1 array over both system disks, which keeps a write-intent
 # bitmap, at least at their size and with nothing on them, LVM's commands reach them by an ordinary PATH, and all stay
 # readable when one disk fails; k3s's and the monitors' datasets are bounded or reserved as set and mounted outside
-# rpool/var; containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter there; and the pool's
-# health check passes.
+# rpool/var; containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter there; the journal,
+# and a dynamic user's state declared so, lie on bounded datasets outside the snapshots of /var; and the pool's health
+# check passes.
 { lib, pkgs, ... }:
 let
   keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
@@ -40,6 +41,12 @@ in
       kubeletQuota = "256M";
       etcdReservation = "128M";
       rookReservation = "64M";
+      logQuota = "128M";
+      # A dynamic user's state on a dataset of its own, as the watcher keeps ntfy's.
+      unsnapshotted.probe = {
+        path = "/var/lib/private/probe";
+        quota = "64M";
+      };
     };
     network.interface = "eth0";
     source.repository = "https://example.org/suveraen.git";
@@ -66,6 +73,13 @@ in
         credentialsFile = "/run/secrets/offsite-${n}";
       });
     };
+  };
+
+  systemd.services.probe.serviceConfig = {
+    Type = "oneshot";
+    DynamicUser = true;
+    StateDirectory = "probe";
+    ExecStart = "${pkgs.coreutils}/bin/touch /var/lib/probe/written";
   };
 
   # Runs on the installed system once it has booted, from vda and vdb.
@@ -102,9 +116,23 @@ in
         ("kubelet", "quota", ${mib 256}, "/var/lib/kubelet"),
         ("etcd", "reservation", ${mib 128}, "/var/lib/rancher/k3s/server/db"),
         ("rook", "reservation", ${mib 64}, "/var/lib/rook"),
+        ("log", "quota", ${mib 128}, "/var/log"),
+        ("probe", "quota", ${mib 64}, "/var/lib/private/probe"),
+        ("host-checks", "quota", ${mib 64}, "/var/lib/private/host-checks"),
     ]:
         machine.succeed(f"test $(zfs get -Hpo value {prop} rpool/{dataset}) = {value}")
         machine.succeed(f"test $(findmnt -no SOURCE {path}) = rpool/{dataset}")
+
+    # The journal is kept there, and a dynamic user's state, under the private directory as systemd wants it.
+    machine.succeed("journalctl --flush")
+    machine.succeed("test $(findmnt -no SOURCE -T /var/log/journal/$(cat /etc/machine-id)) = rpool/log")
+    machine.succeed("systemctl start probe")
+    machine.succeed("test $(findmnt -no SOURCE -T /var/lib/private/probe/written) = rpool/probe")
+    machine.succeed("test $(stat -c %a /var/lib/private) = 700")
+    # Snapshots of /var leave them out.
+    machine.succeed("systemctl start --wait sanoid && test $(systemctl show -P Result sanoid) = success")
+    machine.succeed("zfs list -Ho name -t snapshot -r rpool/var | grep -q '^rpool/var@'")
+    machine.succeed("test -z \"$(zfs list -Ho name -t snapshot -r rpool/log rpool/probe rpool/host-checks)\"")
 
     # Writes, whiteouts included, land in the upper directory on ZFS.
     probe = "/var/lib/rancher/k3s/agent/containerd/overlay-probe"

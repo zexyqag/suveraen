@@ -103,6 +103,7 @@ makeDiskoTest {
     volumes = sorted(machine.succeed(f"lsblk -ndo TYPE,NAME {member}").strip() for member in members)
     assert volumes == ["crypt crypt-system0", "crypt crypt-system1"], volumes
     machine.succeed("zpool status rpool | grep -qw mirror-0")
+    machine.succeed("test $(findmnt -no SOURCE /var/log) = rpool/log")
 
     machine.succeed("mdadm --detail /dev/md/boot | grep -Eq 'Raid Level : raid1'")
     machine.succeed("test $(findmnt -no SOURCE /boot) = $(readlink -f /dev/md/boot)")

@@ -222,6 +222,21 @@ let
   };
 
   diskNames = prefix: disks: lib.imap0 (i: _: "${prefix}${toString i}") disks;
+
+  # Apart from rpool/var and bounded, so a full disk of images or pods can't stop etcd or the monitors. Images and
+  # pods' state go without snapshots.
+  own = {
+    root = mounted "/" { };
+    nix = mounted "/nix" { };
+    var = mounted "/var" { };
+  }
+  // lib.optionalAttrs config.suveraen.cluster.enable {
+    containerd = mounted "/var/lib/rancher/k3s/agent/containerd" { quota = cfg.containerdQuota; };
+    kubelet = mounted "/var/lib/kubelet" { quota = cfg.kubeletQuota; };
+    etcd = mounted "/var/lib/rancher/k3s/server/db" { reservation = cfg.etcdReservation; };
+    rook = mounted "/var/lib/rook" { reservation = cfg.rookReservation; };
+  };
+  ownDatasets = lib.attrNames own ++ [ "reserved" ];
 in
 {
   options.suveraen.storage = {
@@ -340,6 +355,35 @@ in
       description = "Space kept for the Ceph monitors' stores under /var/lib/rook, which also hold the OSDs' disk keys.";
     };
 
+    logQuota = lib.mkOption {
+      type = lib.types.str;
+      default = "16G";
+      description = "Most space the journal and pods' logs under /var/log may take.";
+    };
+
+    unsnapshotted = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options = {
+            path = lib.mkOption {
+              type = lib.types.str;
+              description = "Where the dataset is mounted.";
+            };
+            quota = lib.mkOption {
+              type = lib.types.str;
+              description = "Most space it may take.";
+            };
+          };
+        }
+      );
+      default = { };
+      description = ''
+        Datasets of rpool by name, each mounted at its path and bounded, outside the snapshots, which keep what lies
+        under /var for three months: for what has to be gone once its own time is up, such as logs. disko makes them
+        at install.
+      '';
+    };
+
     arcMax = lib.mkOption {
       type = lib.types.ints.positive;
       default = 4 * 1024 * 1024 * 1024;
@@ -372,6 +416,16 @@ in
       {
         assertion = lib.all (lib.hasPrefix "/dev/disk/") cfg.ceph.disks;
         message = "suveraen.storage.ceph.disks names disks by a stable link under /dev/disk/, such as by-id.";
+      }
+      {
+        assertion = lib.all (name: builtins.match "[a-z0-9-]+" name != null && !lib.elem name ownDatasets) (
+          lib.attrNames cfg.unsnapshotted
+        );
+        message = "suveraen.storage.unsnapshotted are named [a-z0-9-]+, other than ${lib.concatStringsSep ", " ownDatasets}.";
+      }
+      {
+        assertion = lib.all (d: lib.hasPrefix "/" d.path) (lib.attrValues cfg.unsnapshotted);
+        message = "suveraen.storage.unsnapshotted's paths are absolute.";
       }
       {
         # Encrypted OSDs with their DB elsewhere are LVM volumes, which come back after a reboot only with lvm2's udev
@@ -421,21 +475,15 @@ in
         ) slots
       );
 
-      # Apart from rpool/var and bounded, so a full disk of images or pods can't stop etcd or the monitors. Images and
-      # pods' state go without snapshots.
       zpool.rpool = pool (
-        {
-          root = mounted "/" { };
-          nix = mounted "/nix" { };
-          var = mounted "/var" { };
-        }
-        // lib.optionalAttrs config.suveraen.cluster.enable {
-          containerd = mounted "/var/lib/rancher/k3s/agent/containerd" { quota = cfg.containerdQuota; };
-          kubelet = mounted "/var/lib/kubelet" { quota = cfg.kubeletQuota; };
-          etcd = mounted "/var/lib/rancher/k3s/server/db" { reservation = cfg.etcdReservation; };
-          rook = mounted "/var/lib/rook" { reservation = cfg.rookReservation; };
-        }
+        own // lib.mapAttrs (_: d: mounted d.path { inherit (d) quota; }) cfg.unsnapshotted
       );
+    };
+
+    # Logs last as long as the journal and the kubelet keep them, not as long as the snapshots of /var.
+    suveraen.storage.unsnapshotted.log = {
+      path = "/var/log";
+      quota = cfg.logQuota;
     };
 
     services.udev.extraRules =
@@ -568,6 +616,7 @@ in
     suveraen.alerts.units = lib.mkIf pooled [
       "zfs-scrub"
       "zfs-health"
+      "sanoid"
     ];
   };
 }

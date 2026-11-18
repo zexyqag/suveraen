@@ -18,6 +18,8 @@ let
   # How long a STUN binding request may wait for its answer.
   stunSeconds = 5;
   stunProbes = if stun.port == null then 0 else lib.length nodeIP;
+  # What the checks keep from one run to the next, by the name systemd keeps it under.
+  state = "host-checks";
 
   duration = lib.types.strMatching "[1-9][0-9]*[mhd]";
   seconds =
@@ -326,6 +328,12 @@ in
       description = "How often to alert again while something stays late.";
     };
 
+    stateQuota = lib.mkOption {
+      type = lib.types.str;
+      default = "64M";
+      description = "Most space what the checks keep from one run to the next may take.";
+    };
+
     mesh = {
       minimumClient = lib.mkOption {
         type = lib.types.strMatching "[0-9]+\\.[0-9]+\\.[0-9]+";
@@ -500,7 +508,7 @@ in
         DynamicUser = true;
         RuntimeDirectory = "host-checks";
         RuntimeDirectoryMode = "0700";
-        StateDirectory = "host-checks";
+        StateDirectory = state;
         RestrictAddressFamilies = [
           "AF_INET"
           "AF_INET6"
@@ -516,6 +524,12 @@ in
         ExecStart = lib.getExe read;
         ExecStartPost = "+${lib.getExe report}";
       };
+    };
+    # What the checks keep names people of the tenants' meshes, and goes with the findings, not with the snapshots of
+    # /var. They run as a dynamic user, whose state systemd keeps under /var/lib/private.
+    suveraen.storage.unsnapshotted.host-checks = {
+      path = "/var/lib/private/${state}";
+      quota = cfg.stateQuota;
     };
     systemd.timers.host-checks = {
       wantedBy = [ "timers.target" ];

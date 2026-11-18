@@ -48,10 +48,12 @@ in
 
     zramSwap.enable = true;
     time.timeZone = lib.mkDefault "UTC";
-    # Logs hold visitors' and attackers' addresses; two weeks is enough to look into a problem.
+    # Logs hold visitors' and attackers' addresses; two weeks is enough to look into a problem. journald deletes only
+    # whole files it has moved on from, by when they began, so it moves on daily.
     services.journald.extraConfig = ''
       SystemMaxUse=2G
       MaxRetentionSec=14day
+      MaxFileSec=1day
     '';
   };
 }
