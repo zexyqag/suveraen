@@ -313,11 +313,34 @@ chain="on every route the gateway limits each client by its own address, then gi
 refuses gateway-middlewares-swapped "$chain" \
   "yq -i '.spec.values.ports.websecure.http.middlewares = [\"pseudonym@file\", \"ratelimit@file\"]' $G"
 refuses gateway-no-pseudonym "$chain" "yq -i 'del(.spec.values.ports.websecure.http.middlewares[1])' $G"
-trusts="the gateway trusts no address a client names, and takes no arguments of its own for its logs, entry points,"
-refuses gateway-trusted-ips "$trusts providers or plugins: ports.websecure" \
+trusts="the gateway trusts no address a client names, and takes no arguments of its own for its logs, metrics, traces,"
+trusts+=" entry points, providers or plugins:"
+refuses gateway-trusted-ips "$trusts ports.websecure" \
   "yq -i '.spec.values.ports.websecure.forwardedHeaders.trustedIPs = [\"10.42.0.0/16\"]' $G"
-refuses gateway-log-argument "$trusts providers or plugins: --accesslog=true" \
-  "yq -i '.spec.values.additionalArguments = [\"--accesslog=true\"]' $G"
+refuses gateway-log-argument "$trusts --accesslog=true" "yq -i '.spec.values.additionalArguments = [\"--accesslog=true\"]' $G"
+refuses gateway-tracing-argument "$trusts --tracing.otlp=true" \
+  "yq -i '.spec.values.additionalArguments = [\"--tracing.otlp=true\"]' $G"
+refuses gateway-metrics-argument "$trusts --metrics.otlp=true" \
+  "yq -i '.spec.values.additionalArguments = [\"--metrics.otlp=true\"]' $G"
+telemetry="the gateway traces nothing, sends no metrics or logs out, and labels its metrics with no header or router:"
+refuses gateway-tracing "$telemetry tracing" "yq -i '.spec.values.tracing.otlp.enabled = true' $G"
+refuses gateway-metrics-otlp "$telemetry metrics.otlp" "yq -i '.spec.values.metrics.otlp.enabled = true' $G"
+refuses gateway-metrics-datadog "$telemetry metrics.datadog" \
+  "yq -i '.spec.values.metrics.datadog.address = \"127.0.0.1:8125\"' $G"
+refuses gateway-metrics-influxdb2 "$telemetry metrics.influxdb2" \
+  "yq -i '.spec.values.metrics.influxdb2.address = \"localhost:8086\"' $G"
+refuses gateway-metrics-statsd "$telemetry metrics.statsd" \
+  "yq -i '.spec.values.metrics.statsd.address = \"localhost:8125\"' $G"
+refuses gateway-header-labels "$telemetry metrics.prometheus.headerLabels" \
+  "yq -i '.spec.values.metrics.prometheus.headerLabels.agent = \"User-Agent\"' $G"
+refuses gateway-router-labels "$telemetry metrics.prometheus.addRoutersLabels" \
+  "yq -i '.spec.values.metrics.prometheus.addRoutersLabels = true' $G"
+renders gateway-no-router-labels "yq -i '.spec.values.metrics.prometheus.addRoutersLabels = false' $G"
+refuses gateway-log-otlp "$telemetry log.otlp" "yq -i '.spec.values.log.otlp.enabled = true' $G"
+refuses gateway-otlp-logs "$telemetry experimental.otlpLogs" "yq -i '.spec.values.experimental.otlpLogs = true' $G"
+ownvalues="a HelmRelease takes its values from itself alone, and only VolSync's changes what its chart renders:"
+refuses gateway-values-from "$ownvalues traefik" \
+  "yq -i '.spec.valuesFrom = [{\"kind\": \"ConfigMap\", \"name\": \"traefik-extra\"}]' $G"
 refuses gateway-remote-plugin "the gateway runs no plugin from elsewhere" \
   "yq -i '.spec.values.experimental.plugins.x = {\"moduleName\": \"github.com/example/x\", \"version\": \"v1.0.0\"}' $G"
 refuses gateway-plugin-edited "the gateway's pods are annotated suveraen/pseudonym" \
@@ -372,6 +395,26 @@ refuses kanidm-domain "$config" \
   "sed -i 's|    domain = \"\${HOST}.\${TENANT_DOMAIN}\"|    domain = \"\${TENANT_DOMAIN}\"|' apps/kanidm/app/configmap.yaml"
 refuses kanidm-migrations-elsewhere "$config" \
   "yq -i '.spec.values.persistence.migrations.globalMounts[0].path = \"/etc/migrations\"' $I"
+settings="logs nothing below info:"
+server=.spec.values.controllers.kanidm.containers.app
+refuses kanidm-otel-setting "$settings kanidm/app:env:KANIDM_OTEL_GRPC_ENDPOINT" \
+  "yq -i '$server.env.KANIDM_OTEL_GRPC_ENDPOINT = \"http://collector.example.test:4317\"' $I"
+refuses kanidm-otel-env "$settings kanidm/app:env:OTEL_EXPORTER_OTLP_ENDPOINT" \
+  "yq -i '$server.env = [{\"name\": \"KANIDM_CONFIG\", \"value\": \"/config/server.toml\"},
+   {\"name\": \"OTEL_EXPORTER_OTLP_ENDPOINT\", \"value\": \"http://collector.example.test:4318\"}]' $I"
+renders kanidm-env-list "yq -i '$server.env = [{\"name\": \"KANIDM_CONFIG\", \"value\": \"/config/server.toml\"}]' $I"
+refuses kanidm-config-elsewhere "$settings kanidm/app:env:KANIDM_CONFIG" \
+  "yq -i '$server.env.KANIDM_CONFIG = \"/data/server.toml\"' $I"
+refuses kanidm-default-env "$settings kanidm/defaultContainerOptions:env:KANIDM_LOG_LEVEL" \
+  "yq -i '.spec.values.controllers.kanidm.defaultContainerOptions.env.KANIDM_LOG_LEVEL = \"trace\"' $I"
+refuses kanidm-env-from "$settings kanidm/app:envFrom" \
+  "yq -i '$server.envFrom = [{\"configMapRef\": {\"name\": \"kanidm\"}}]' $I"
+refuses kanidm-arguments "$settings kanidm/app:args" \
+  "yq -i '$server.args = [\"server\", \"-c\", \"/data/server.toml\"]' $I"
+refuses kanidm-command "$settings kanidm/app:command" \
+  "yq -i '$server.command = [\"/sbin/kanidmd\", \"server\", \"-c\", \"/data/server.toml\"]' $I"
+refuses kanidm-post-renderer "$ownvalues kanidm" \
+  "yq -i '.spec.postRenderers = [{\"kustomize\": {\"patches\": []}}]' $I"
 refuses kanidm-configmaps-quota "the quota's count/configmaps, 3, holds every ConfigMap made in the namespace" \
   "sed -i 's/QUOTA_CONFIGMAPS: \"12\"/QUOTA_CONFIGMAPS: \"3\"/' apps/kanidm/ks.yaml"
 refuses sso-other-dependency "an app's sign-in is \${TENANT}-hello-sso from ./kubernetes/apps/hello/sso" \

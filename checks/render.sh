@@ -54,8 +54,9 @@ privileged+=,pod-security.kubernetes.io/warn=privileged
 # reads no request: an identity server, which must see its users' passwords and passkeys where nothing else does, and
 # a mesh's control plane, whose streams and relayed connections outlive any request timeout.
 passthroughapps='kanidm netbird'
-# Traefik's options that could log or trust clients' addresses, or bypass the gateway's own settings for them.
-options='(?i)^--?(accesslog|log|entrypoints|forwardedheaders|proxyprotocol|experimental|providers)([.=]|$)'
+# Traefik's options that could log, measure or trace clients, or trust their addresses, or bypass the gateway's own
+# settings for them.
+options='(?i)^--?(accesslog|log|metrics|tracing|entrypoints|forwardedheaders|proxyprotocol|experimental|providers)([.=]|$)'
 export options
 # Prints each of the gateway's settings in cluster-settings (JSON on stdin) that the plugin or Traefik won't take.
 gatewaysettings='
@@ -95,8 +96,8 @@ for f in files:
     with open(os.path.join(sys.argv[1], f), "rb") as source:
         assert data[f].encode() == source.read(), f
 '
-# Prints the settings of Kanidm's server.toml that are wrong for the host given, from the rendered app (a JSON list on
-# stdin).
+# Prints the settings of Kanidm's server.toml that are wrong for the host given, and what else could set any, from the
+# rendered app (a JSON list on stdin).
 kanidmconfig='
 import json, sys, tomllib
 docs = [d for d in json.load(sys.stdin) if isinstance(d, dict)]
@@ -110,6 +111,23 @@ bad = [k for k in ("ldapbindaddress", "http_client_address_info", "ldap_client_a
 bad += [k for k, v in (("domain", host), ("origin", "https://" + host)) if c.get(k) != v]
 if [m.get("path") for m in mounts] != [c.get("migration_path")]:
     bad.append("migration_path")
+# Kanidm takes each setting from its environment too, as KANIDM_<SETTING>, and OpenTelemetry where to send to as
+# OTEL_*: it runs the command its image gives, with no environment but where server.toml is mounted.
+values = release[0]["spec"]["values"] if release else {}
+toml = [m.get("path", "").rstrip("/") + "/server.toml" for p in (values.get("persistence") or {}).values()
+        if p.get("type") == "configMap" and p.get("name") == "kanidm" for m in p.get("globalMounts") or []
+        if not m.get("subPath")]
+for name, ctl in (values.get("controllers") or {}).items():
+    containers = {f"{name}/{n}": x for g in ("initContainers", "containers") for n, x in (ctl.get(g) or {}).items()}
+    containers[f"{name}/defaultContainerOptions"] = ctl.get("defaultContainerOptions") or {}
+    for n, x in containers.items():
+        e = x.get("env") or {}
+        if isinstance(e, list):
+            e = {v.get("name"): {k: w for k, w in v.items() if k != "name"} for v in e}
+        e = {k: v["value"] if isinstance(v, dict) and list(v) == ["value"] else v for k, v in e.items()}
+        want = {"KANIDM_CONFIG": toml[0] if len(toml) == 1 else None} if n == "kanidm/app" else {}
+        bad += [f"{n}:env:{k}" for k in sorted(set(map(str, e)) | set(want)) if e.get(k) != want.get(k)]
+        bad += [f"{n}:{k}" for k in ("envFrom", "command", "args") if x.get(k)]
 print(" ".join(bad))
 '
 # Prints what the pods of an app's charts need at their most beyond its namespace's quota, from the rendered app (a JSON
@@ -1399,8 +1417,9 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
               "as it has one, from one projected volume: $(cat "$w/$name.sources")"
           bad=$(yq ea -o=json -I=0 '[.]' "$file" | python3 -I -c "$kanidmconfig" "$passhost")
           [ -z "$bad" ] || fail "$cluster/$name: Kanidm serves the host passed through to it, as its domain and" \
-            "origin, reads its migrations where they are mounted, trusts no address a client names, speaks no LDAP," \
-            "replicates nothing, sends nothing out, and logs nothing below info: $bad"
+            "origin, takes its settings from the server.toml it mounts alone and its migrations from where they are" \
+            "mounted, trusts no address a client names, speaks no LDAP, replicates nothing, sends nothing out, and" \
+            "logs nothing below info: $bad"
           python3 -I -c "$migrationsource" "$cluster" "$t" kanidm-migrations kanidm \
             <(yq ea -o=json -I=0 '[select(.kind == "ConfigMap" and .metadata.name == "kanidm-migrations")] | .[0]' \
               "$file") <(echo '[]') <(echo '[]') >>"$work/migrations.jsonl"
@@ -1683,6 +1702,12 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       done)
     [ -z "$bad" ] || fail "$cluster/$name: only an app that terminates TLS itself holds a public certificate of its" \
       "own (suveraen/passthrough): $bad"
+    # What render holds a chart to, it reads in the values here: none may come from elsewhere, nor what the chart
+    # renders be patched, but for the platform's VolSync, whose controller gets the platform's priority so.
+    bad=$(yq ea '[select(.kind == "HelmRelease" and ((.spec | has("valuesFrom")) or ((.spec | has("postRenderers"))
+      and (.metadata.namespace + "/" + .metadata.name) != "flux-system/volsync"))) | .metadata.name] | .[]' "$file")
+    [ -z "$bad" ] || fail "$cluster/$name: a HelmRelease takes its values from itself alone, and only VolSync's" \
+      "changes what its chart renders: $bad"
     # Images in what is rendered here, the PostgreSQL images clusters take from catalogs, Ceph's, and the tags charts
     # are given.
     bad=$({
@@ -1742,7 +1767,7 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
   # Apps see a pseudonym in place of each client's address (platform/gateway). Traefik gets each client's own address
   # on the node it reached, takes routes from the Gateway API alone and trusts no address a client names; on every
   # route it limits each client by its own address, then replaces it with the plugin as it is here; and it logs no
-  # client.
+  # client and sends no telemetry out.
   yq ea -o=json -I=0 '[select(.kind == "ConfigMap" and .metadata.name == "cluster-settings")] | .[0].data // {}' \
     "$rendered/cluster.yaml" >"$w/settings.json"
   bad=$(python3 -I -c "$gatewaysettings" <"$w/settings.json" | paste -sd' ')
@@ -1764,7 +1789,20 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       | select(.value | has(\"forwardedHeaders\") or has(\"proxyProtocol\")) | \"ports.\" + .key),
     (.additionalArguments // [] | .[] | select(test(strenv(options))))] | .[]" "$rendered"/*.yaml | paste -sd' ')
   [ -z "$bad" ] || fail "$cluster: the gateway trusts no address a client names, and takes no arguments of its own for" \
-    "its logs, entry points, providers or plugins: $bad"
+    "its logs, metrics, traces, entry points, providers or plugins: $bad"
+  # Spans carry clients' addresses and paths, labels the headers of requests or the routes of tenants, and OTLP and
+  # the push exporters send what they measure out.
+  bad=$(yq ea "$traefik | [(keys | .[] | select(. == \"tracing\")),
+    (.metrics // {} | keys | .[] | select(. == \"otlp\" or . == \"datadog\" or . == \"influxdb2\" or . == \"statsd\")
+      | \"metrics.\" + .),
+    (.metrics.prometheus // {} | to_entries | .[]
+      | select(.key == \"headerLabels\" or (.key == \"addRoutersLabels\" and (.value | tostring) == \"true\"))
+      | \"metrics.prometheus.\" + .key),
+    (.log // {} | keys | .[] | select(. == \"otlp\") | \"log.\" + .),
+    (.experimental // {} | keys | .[] | select(. == \"otlpLogs\") | \"experimental.\" + .)] | .[]" "$rendered"/*.yaml \
+    | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: the gateway traces nothing, sends no metrics or logs out, and labels its metrics with" \
+    "no header or router: $bad"
   read -r average burst v4 v6 period <<<"$(yq -p=json -oy '[.GATEWAY_RATE_AVERAGE, .GATEWAY_RATE_BURST,
     .GATEWAY_PSEUDONYM_V4, .GATEWAY_PSEUDONYM_V6, .GATEWAY_PSEUDONYM_PERIOD] | join(" ")' "$w/settings.json")"
   want='[["ratelimit@file","pseudonym@file"],"delete","delete",{"content":{"http":{"middlewares":{"pseudonym":{"plugin":'
