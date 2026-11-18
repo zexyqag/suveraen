@@ -17,13 +17,15 @@
 # alerts go tells the watcher when that way is broken. The server and its Flux only take commits signed by a release
 # signer, the server never goes back to an older one, and it alerts when its configuration, or the nixpkgs its release
 # locks, gets old. The server keeps its metrics on loopback behind a password, and its daemons reach nothing else; they
-# read the clock from chrony. The server's checks read how old the backups the cluster records are, Ceph's health,
-# Flux's objects, the certificates and the Gateways with an account that reads nothing else, ask the node's addresses
-# for STUN, read what the rules on its metrics find, such as a failed unit or a dataset filling, and alert once per
-# change, also when the cluster or the rules can't be read. Its etcd snapshots reach both providers encrypted to
-# recovery keys, under a prefix its key can neither leave nor empty; with one provider down they still reach the other,
-# and the phone hears of it. Wiped, the server comes back from a provider's copy through its restore command, with its
-# token file alone; another token leaves a running server's own database in place.
+# read the clock from chrony, and the kubelet with an account that may read its metrics alone, of whose pods they keep
+# only sums per namespace. The server's checks read how old the backups the cluster records are, Ceph's health, Flux's
+# objects, the certificates and the Gateways with an account that reads nothing else, ask the node's addresses for
+# STUN, read what the rules on its metrics find, such as a failed unit, a dataset filling, a tenant's container that
+# keeps restarting or one the kernel kills for memory, and alert once per change, also when the cluster or the rules
+# can't be read. Its etcd snapshots reach both providers encrypted to recovery keys, under a prefix its key can neither
+# leave nor empty; with one provider down they still reach the other, and the phone hears of it. Wiped, the server comes
+# back from a provider's copy through its restore command, with its token file alone; another token leaves a running
+# server's own database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -1393,6 +1395,47 @@ pkgs.testers.runNixOSTest {
           fired = {(r["name"], a["annotations"].get("key")) for r in checked for a in r["alerts"] if a["state"] == "firing"}
           assert fired == {("Watchdog", None)}, checked
 
+      with subtest("The metrics account reads node metrics and nothing else"):
+          reader = "--as=system:serviceaccount:kube-system:metrics"
+          rules = rules_of("kube-system:metrics", "default")
+          assert rules == [([""], ["nodes/metrics"], [], ["get"])], rules
+          for denied in [
+              "get nodes --subresource=proxy",
+              "get nodes --subresource=stats",
+              "get nodes --subresource=log",
+              "create pods --subresource=exec -n default",
+              "list pods -A",
+              "list secrets -A",
+          ]:
+              server.fail(f"kubectl auth can-i {denied} {reader}")
+          server.succeed(f"kubectl auth can-i get nodes --subresource=metrics {reader}")
+          # As the store asks the kubelet, with the token and the CA it was given.
+          store = "/run/victoriametrics"
+          server.wait_until_succeeds(f"test -s {store}/token && test -s {store}/server-ca.crt", timeout=300)
+          kubelet = (
+              f"curl -s -o /dev/null -w '%{{http_code}}' --cacert {store}/server-ca.crt"
+              f" -H \"Authorization: Bearer $(cat {store}/token)\" https://127.0.0.1:10250"
+          )
+          assert server.succeed(f"{kubelet}/pods") == "403"
+          assert server.succeed(f"{kubelet}/metrics/resource") == "200"
+
+          def stored(query):
+              return json.loads(server.succeed(
+                  f"curl -fsS -u metrics:$(cat {password}) http://127.0.0.1:8428/api/v1/query"
+                  f" --data-urlencode {shlex.quote('query=' + query)}"
+              ))["data"]["result"]
+
+          jobs = ${builtins.toJSON (builtins.attrNames nodes.server.suveraen.metrics.jobs)}
+          retry(lambda _: sorted(r["metric"]["job"] for r in stored("up == 1")) == jobs, timeout_seconds=300)
+          # The pods' CPU and I/O stalls only as their namespaces' sums, which the platform's pods give here.
+          aggregated = ["namespace:pod_cpu_usage_seconds:rate_sum", "namespace:container_pressure_io_stalled_seconds:rate_avg"]
+          for family in aggregated:
+              retry(lambda _, f=family: any(r["metric"].get("namespace") == "kube-system" for r in stored(f)), timeout_seconds=300)
+          assert stored('{__name__=~"pod_cpu_usage_seconds_total|container_pressure_io_stalled_seconds_total"}') == []
+          # Nothing that names cgroups, images or the machine.
+          named = {label for r in stored('{job=~"kubelet|cadvisor|resource"}') for label in r["metric"]}
+          assert not named & {"id", "image", "name", "uid", "boot_id", "machine_id", "system_uuid"}, named
+
       with subtest("ntfy only takes messages from known publishers"):
           server.succeed("test $(curl -s -o /dev/null -w '%{http_code}' -d spam http://alerts.test/ops) = 403")
           server.succeed("test $(curl -s -o /dev/null -w '%{http_code}' ${phone} -d spam http://alerts.test/ops) = 403")
@@ -1684,12 +1727,26 @@ pkgs.testers.runNixOSTest {
           [answered] = sent("STUN answered again")
           assert answered.get("priority", 3) == 3, answered
 
+      # What a rule on the server's metrics finds now: each alert's state and key.
+      def found_by(rule):
+          out = server.succeed(
+              f"suveraen-metrics check | jq -c --arg rule {shlex.quote(rule)}"
+              " '.rules[] | select(.name == $rule) | .alerts[] | {state, key: .annotations.key}'"
+          )
+          return [json.loads(line) for line in out.splitlines()]
+
       with subtest("With the cluster down, the server says so"):
           server.succeed("systemctl stop k3s")
+          # What k3s serves the metrics goes with it, which stands while the cluster can't be read.
+          retry(lambda _: {"state": "firing", "key": "kubelet"} in found_by("target down"), timeout_seconds=300)
           # As if the last good read were an hour ago.
           server.succeed("echo $(( $(date +%s) - 3600 )) > /var/lib/private/host-checks/last-read")
           server.succeed("systemctl start host-checks")
           assert len(sent("cluster status unreadable")) == 1
+          server.succeed(
+              "journalctl -u host-checks -o cat"
+              " | grep -qF \"unknown metric target down kubelet: held, as the cluster can't be read\""
+          )
           server.succeed("systemctl start k3s")
           # Ready doesn't mean the custom resources are served yet: until their caches fill they answer 429.
           for path in [
@@ -1701,8 +1758,16 @@ pkgs.testers.runNixOSTest {
               "/apis/gateway.networking.k8s.io/v1/namespaces/gateway/gateways",
           ]:
               server.wait_until_succeeds(f"kubectl get --raw {path}", timeout=300)
+          # Read again, and what k3s serves the metrics, which may not answer yet, stands.
           server.succeed("systemctl start host-checks")
           assert len(sent("cluster status readable again")) == 1
+          # And answers before the later subtests' checks, by when the cluster has been read again for longer than a rule
+          # holds.
+          server.wait_until_succeeds(
+              "suveraen-metrics check | jq -e '[.rules[] | select(.name == \"target down\") | .alerts[]"
+              " | select(.state == \"firing\" and (.stabilizing | not))] == []'",
+              timeout=300,
+          )
 
       with subtest("With the rule evaluator stopped, the server says so, and so does its return"):
           server.succeed("systemctl stop vmalert")
@@ -1721,14 +1786,6 @@ pkgs.testers.runNixOSTest {
           server.succeed("systemctl start host-checks")
           [back] = sent("metric rules checked again")
           assert back.get("priority", 3) == 3, back
-
-      # What a rule on the server's metrics finds now: each alert's state and key.
-      def found_by(rule):
-          out = server.succeed(
-              f"suveraen-metrics check | jq -c --arg rule {shlex.quote(rule)}"
-              " '.rules[] | select(.name == $rule) | .alerts[] | {state, key: .annotations.key}'"
-          )
-          return [json.loads(line) for line in out.splitlines()]
 
       with subtest("A failed unit reaches the phone once, and so does its reset"):
           server.succeed("systemd-run --unit=probe false")
@@ -1760,6 +1817,61 @@ pkgs.testers.runNixOSTest {
           [back] = sent("datasets have room again")
           assert back.get("priority", 3) == 3, back
           server.succeed(f"umount {dataset}")
+
+      # A pod of a tenant's, as the restricted standard has it, that runs busybox's command.
+      def tenant_pod(name, command, restart="Always", memory=None):
+          obj = pod("alpha-hello")
+          obj["metadata"]["name"] = name
+          obj["spec"]["restartPolicy"] = restart
+          [container] = obj["spec"]["containers"]
+          container |= {"name": name, "image": busybox, "imagePullPolicy": "Never", "command": command}
+          if memory:
+              container["resources"] = {"limits": {"memory": memory}}
+          return obj
+
+      # Whether a rule finds a key firing, once the metrics' writer has read the containers again.
+      def fires(rule, key):
+          server.succeed("systemctl start suveraen-metrics-textfiles")
+          return {"state": "firing", "key": key} in found_by(rule)
+
+      def gone(rule):
+          server.succeed("systemctl start suveraen-metrics-textfiles")
+          return found_by(rule) == []
+
+      with subtest("A container that keeps restarting reaches the phone once, and so does its end"):
+          create(tenant_pod("crashing", ["sh", "-c", "exit 1"]))
+          # Started again three times within a couple of minutes, as the kubelet backs off.
+          retry(lambda _: fires("containers restarting", "alpha-hello/crashing/crashing"), timeout_seconds=600)
+          server.succeed("systemctl start host-checks")
+          [crashing] = sent("containers restarting")
+          assert keys(crashing["message"]) == {"New:", "metric containers restarting alpha-hello/crashing/crashing"}, crashing
+          server.succeed("systemctl start host-checks")
+          assert len(sent("containers restarting")) == 1
+          server.succeed("kubectl -n alpha-hello delete pod crashing")
+          retry(lambda _: gone("containers restarting"), timeout_seconds=300)
+          server.succeed("systemctl start host-checks")
+          [back] = sent("containers no longer restarting")
+          assert back.get("priority", 3) == 3, back
+
+      with subtest("A container the kernel kills for memory reaches the phone once, and so does its end"):
+          create(tenant_pod("oom", ["dd", "if=/dev/zero", "of=/dev/null", "bs=64M", "count=1"], "Never", "32Mi"))
+          server.wait_until_succeeds(
+              "kubectl -n alpha-hello get pod oom -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}'"
+              " | grep -x OOMKilled",
+              timeout=120,
+          )
+          retry(lambda _: fires("OOM kills", "alpha-hello/oom/oom"), timeout_seconds=300)
+          server.succeed("systemctl start host-checks")
+          [killed] = sent("OOM kills")
+          assert keys(killed["message"]) == {"New:", "metric OOM kills alpha-hello/oom/oom"}, killed
+          server.succeed("systemctl start host-checks")
+          assert len(sent("OOM kills")) == 1
+          # With its pod gone, the kill is the host's no more, though it lies within the hour.
+          server.succeed("kubectl -n alpha-hello delete pod oom")
+          retry(lambda _: gone("OOM kills"), timeout_seconds=300)
+          server.succeed("systemctl start host-checks")
+          [back] = sent("no more OOM kills")
+          assert back.get("priority", 3) == 3, back
 
       snapshots = "/var/lib/rancher/k3s/server/db/snapshots"
       platform = "${platformBucket}"

@@ -1,0 +1,9 @@
+cluster	unreadable
+host	cluster status	ok	4	cluster status unreadable	last read 2026-10-22T11:45:00Z (15m ago), limit 30m: /api/v1/nodes?labelSelector=node-role.kubernetes.io%2Fcontrol-plane%3Dtrue: HTTP 503	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
+host	metric target down kubelet	unknown	4	metric target down	held, as the cluster can't be read: no answer to the scrape	metric targets up again	metrics
+host	metric target down node	late	4	metric target down	no answer to the scrape	metric targets up again	metrics
+host	metric volumes nearly full	unknown	4	volumes nearly full	held, as kubelet can't be read	volumes have room again	metrics
+complete	metrics	metric 
+since	state	{"Kanidm check":1792670400,"metric cluster unreadable":1792670400}
+checks	done

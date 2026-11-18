@@ -1,6 +1,6 @@
 # The node's own rules (nixos/metrics.nix): units that fail without alerting by themselves, or keep restarting, memory
-# running out, OOM kills and the connection table filling; and a family no longer in what the node's target, or a
-# writer's file, gives.
+# running out and the connection table filling; and a family no longer in what the node's target, or a writer's file,
+# gives.
 rule_files:
   - rules.yml
 evaluation_interval: 1m
@@ -114,28 +114,11 @@ tests:
               inputs: node node_pressure_memory_stalled_seconds_total
   - interval: 1m
     input_series:
-      - series: 'node_vmstat_oom_kill{job="node", instance="127.0.0.1:9100"}'
-        values: '0x10 1x150'
       - series: 'node_nf_conntrack_entries_limit{job="node", instance="127.0.0.1:9100"}'
         values: '262144x60'
       - series: 'node_nf_conntrack_entries{job="node", instance="127.0.0.1:9100"}'
         values: '1000x10 200000x50'
     alert_rule_test:
-      - eval_time: 30m
-        groupname: metrics
-        alertname: OOM kills
-        exp_alerts:
-          - exp_labels: {job: node, instance: 127.0.0.1:9100, priority: "4"}
-            exp_annotations:
-              title: OOM kills
-              cleared: no more OOM kills
-              detail: the kernel killed 1 for want of memory in the last hour
-              inputs: node node_vmstat_oom_kill
-      # An hour after the kill, and as long again as it is held for.
-      - eval_time: 90m
-        groupname: metrics
-        alertname: OOM kills
-        exp_alerts: []
       - eval_time: 30m
         groupname: metrics
         alertname: connection table filling
@@ -184,7 +167,7 @@ tests:
               cleared: metric inputs back
               detail: absent while its source answers, so no rule reading it can fire
               key: node_pressure_memory_stalled_seconds_total
-              inputs: node chrony pools
+              inputs: node containers chrony etcd pools resource cadvisor
               lost: node_pressure_memory_stalled_seconds_total
           - exp_labels: {job: node, family: pool_capacity_ratio, priority: "4"}
             exp_annotations:
@@ -192,7 +175,7 @@ tests:
               cleared: metric inputs back
               detail: absent while its source answers, so no rule reading it can fire
               key: pool_capacity_ratio
-              inputs: node chrony pools
+              inputs: node containers chrony etcd pools resource cadvisor
               lost: pool_capacity_ratio
   - interval: 1m
     input_series:

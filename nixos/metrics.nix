@@ -1,7 +1,8 @@
 # Each cluster server keeps its own metrics, on loopback behind a password: VictoriaMetrics scrapes and stores what the
-# jobs modules declare keep of their targets, on this host alone, and of what the writers modules declare measure, and
-# vmalert evaluates the rules modules declare on them and sends nothing. The servers' checks read what those rules find
-# (suveraen-metrics check, host-checks/metrics.jq) and alert on it, and when the rules can't be checked.
+# jobs modules declare keep of their targets, on this host alone, or only what they aggregate of it, and of what the
+# writers modules declare measure, and vmalert evaluates the rules modules declare on them and sends nothing. The
+# servers' checks read what those rules find (suveraen-metrics check, host-checks/metrics.jq) and alert on it, and when
+# the rules can't be checked.
 {
   config,
   lib,
@@ -38,9 +39,14 @@ let
 
   # The family a selector keeps, as node_systemd_unit_state of node_systemd_unit_state{state="failed"}.
   family = selector: lib.head (builtins.match "([a-zA-Z_:][a-zA-Z0-9_:]*).*" selector);
-  # Each family a job keeps, with the job.
+  # What a job stores: each family it keeps but those it aggregates, and what it makes of those.
+  gives =
+    j:
+    lib.subtractLists (map (a: a.input) (lib.attrValues j.aggregate)) (map family j.keep)
+    ++ lib.attrNames j.aggregate;
+  # Each family a job stores, with the job.
   kept = lib.concatLists (
-    lib.mapAttrsToList (job: j: map (s: lib.nameValuePair (family s) job) j.keep) cfg.jobs
+    lib.mapAttrsToList (job: j: map (f: lib.nameValuePair f job) (gives j)) cfg.jobs
   );
   keptBy = lib.foldl' (
     acc: f: acc // { ${f.name} = (acc.${f.name} or [ ]) ++ [ f.value ]; }
@@ -71,9 +77,8 @@ let
     ownLabels ++ lib.concatMap (s: s.labels) (lib.attrValues cfg.jobs ++ lib.attrValues cfg.textfiles)
   );
   # What a source gives whenever it answers.
-  always = lib.filter (
-    f: !(writtenBy ? ${f}) || !lib.elem f cfg.textfiles.${writtenBy.${f}}.optional
-  ) read;
+  optional = lib.concatMap (s: s.optional) (lib.attrValues cfg.jobs ++ lib.attrValues cfg.textfiles);
+  always = lib.filter (f: !lib.elem f optional) read;
 
   # What vmalert may print of an alert: one of the labels given, or its value, as is or made readable.
   printed =
@@ -99,14 +104,42 @@ let
       inherit (r) title cleared detail;
     }
     // lib.optionalAttrs (r.key != [ ]) {
-      key = lib.concatMapStringsSep "/" (label: "{{ $labels.${label} }}") r.key;
+      # A label an alert lacks is left out of its key.
+      key =
+        "{{ $labels.${lib.head r.key} }}"
+        + lib.concatMapStrings (label: "{{ with $labels.${label} }}/{{ . }}{{ end }}") (lib.tail r.key);
     }
     // lib.optionalAttrs (r.inputs != [ ]) { inputs = lib.concatStringsSep " " r.inputs; }
     // lib.optionalAttrs (r.lost != null) { inherit (r) lost; };
   };
 
+  # What jobs aggregate as VictoriaMetrics streams it in, under the names rules read; each output keeps the job, which
+  # tells its source's target down and missing families.
+  aggregated = lib.concatLists (
+    lib.mapAttrsToList (
+      job: j:
+      lib.mapAttrsToList (name: a: {
+        match = ''${a.input}{job="${job}"}'';
+        inherit (cfg) interval;
+        by = [ "job" ] ++ a.by;
+        outputs = [ a.output ];
+        output_relabel_configs = [
+          {
+            target_label = "__name__";
+            replacement = name;
+          }
+        ];
+      }) j.aggregate
+    ) cfg.jobs
+  );
+
   jobs = lib.attrNames cfg.jobs;
   writers = lib.attrNames cfg.textfiles;
+  # A source that answers only while this host's cluster does: its alert carries needs="cluster", and stands as it was
+  # while the servers' checks can't read the cluster, until they have read it again for holdFor, and once it holds no
+  # more (host-checks/metrics.jq).
+  needing =
+    source: expr: if source.needsCluster then ''label_set(${expr}, "needs", "cluster")'' else expr;
   names = lib.attrNames cfg.rules ++ lib.attrNames own;
   fresh = w: "time() - node_textfile_mtime_seconds{file=\"${textfile w}\"}";
   generated = {
@@ -118,9 +151,9 @@ let
   own = lib.mapAttrs (_: r: generated // r) (
     {
       "target down" = {
-        expr = "max by (job) (${
-          lib.concatMapStringsSep " or " (job: ''up{job="${job}"} == 0 or absent(up{job="${job}"})'') jobs
-        })";
+        expr = lib.concatMapStringsSep " or " (
+          job: needing cfg.jobs.${job} ''max by (job) (up{job="${job}"} == 0 or absent(up{job="${job}"}))''
+        ) jobs;
         title = "metric target down";
         cleared = "metric targets up again";
         detail = "no answer to the scrape";
@@ -134,9 +167,11 @@ let
       "input stale" = {
         expr = lib.concatMapStringsSep " or " (
           w:
-          "(max by (writer) (label_set(${fresh w}, \"writer\", \"${w}\") > ${toString staleAfter}"
-          + " or label_set(absent(node_textfile_mtime_seconds{file=\"${textfile w}\"}), \"writer\", \"${w}\"))"
-          + " and on() up{job=\"node\"} == 1)"
+          needing cfg.textfiles.${w} (
+            "(max by (writer) (label_set(${fresh w}, \"writer\", \"${w}\") > ${toString staleAfter}"
+            + " or label_set(absent(node_textfile_mtime_seconds{file=\"${textfile w}\"}), \"writer\", \"${w}\"))"
+            + " and on() up{job=\"node\"} == 1)"
+          )
         ) writers;
         title = "metric input stale";
         cleared = "metric inputs fresh again";
@@ -225,9 +260,11 @@ let
                    | if $t.zone[0:1] == "-" then -. else . end
                  end);
           {checked: (now | floor), interval: ${toString (seconds cfg.interval)},
+           holdFor: ${toString (seconds cfg.holdFor)},
            rules: [.data.groups[].rules[] | select(.type == "alerting")
              | {name, health, evaluated: (.lastEvaluation | epoch), annotations,
-                alerts: [.alerts[]? | {state, priority: .labels.priority, annotations}]}]}'
+                alerts: [.alerts[]?
+                  | {state, stabilizing, priority: .labels.priority, needs: .labels.needs, annotations}]}]}'
     '';
   };
 
@@ -331,6 +368,15 @@ in
                 while the script runs without it.
               '';
             };
+            needsCluster = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Whether what it reads answers only while this host's cluster does. Its file going stale then stands as
+                it was while the servers' checks can't read the cluster, until they have read it again for holdFor, and
+                once it is fresh again.
+              '';
+            };
           };
         }
       );
@@ -357,7 +403,58 @@ in
             keep = lib.mkOption {
               type = lib.types.nonEmptyListOf lib.types.str;
               example = [ ''node_systemd_unit_state{state="failed"}'' ];
-              description = "The series it keeps, by selectors; every family they name is one a rule reads.";
+              description = ''
+                The series it keeps, by selectors; every family they name is one a rule reads, or one it aggregates.
+              '';
+            };
+            relabel = lib.mkOption {
+              type = lib.types.listOf yaml.type;
+              default = [ ];
+              description = "What is done to the series it keeps once kept, as VictoriaMetrics' metric_relabel_configs.";
+            };
+            aggregate = lib.mkOption {
+              type = lib.types.attrsOf (
+                lib.types.submodule {
+                  options = {
+                    input = lib.mkOption {
+                      type = lib.types.str;
+                      description = "A family it keeps, which is stored only as this.";
+                    };
+                    by = lib.mkOption {
+                      type = lib.types.listOf lib.types.str;
+                      description = "The labels it is aggregated by, beside the job.";
+                    };
+                    output = lib.mkOption {
+                      type = lib.types.enum [
+                        "rate_sum"
+                        "rate_avg"
+                      ];
+                      description = "How, once every interval: the sum, or the average, of each series' rate.";
+                    };
+                  };
+                }
+              );
+              default = { };
+              description = ''
+                Families it makes, by name, each of one it keeps as it is scraped, whose own series are never stored.
+              '';
+            };
+            optional = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = ''
+                Those of its families that a target may lack, such as one of the volumes it has. Any other alerts as
+                missing while the target answers without it.
+              '';
+            };
+            needsCluster = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Whether its target answers only while this host's cluster does, as one k3s serves. Its target down then
+                stands as it was while the servers' checks can't read the cluster, until they have read it again for
+                holdFor, and once the target answers again.
+              '';
             };
             labels = lib.mkOption {
               type = lib.types.listOf lib.types.str;
@@ -483,6 +580,11 @@ in
             lib.concatStringsSep ", " (lib.filter (f: !(lib.elem f read)) (lib.attrNames sources))
           }.";
         }
+        (checking cfg.jobs (
+          _: j:
+          lib.all (a: lib.elem a.input (map family j.keep)) (lib.attrValues j.aggregate)
+          && lib.all (f: lib.elem f (gives j)) j.optional
+        ) "suveraen.metrics.jobs aggregate only families they keep, and may lack only those they store")
         (writing (
           w: _: builtins.match "[a-z][a-z0-9-]*" w != null && !cfg.jobs ? ${w}
         ) "suveraen.metrics.textfiles are named [a-z][a-z0-9-]*, other than a job")
@@ -572,10 +674,14 @@ in
                     [ "node_textfile_mtime_seconds" ] ++ lib.attrNames writtenBy
                   );
               }
-            ];
+            ]
+            ++ j.relabel;
           }
         ) cfg.jobs;
       };
+      extraOptions = lib.optional (
+        aggregated != [ ]
+      ) "-streamAggr.config=${yaml.generate "aggregate.yml" aggregated}";
     };
     systemd.services.victoriametrics = {
       wants = password;
@@ -632,7 +738,8 @@ in
       };
     };
 
-    # Nothing but what a rule reads: these collectors for the node's own rules below.
+    # Nothing but what a rule reads: these collectors for the node's own rules below; a module whose rules read another
+    # enables it.
     services.prometheus.exporters.node = {
       enable = true;
       listenAddress = "127.0.0.1";
@@ -640,7 +747,6 @@ in
         "systemd"
         "meminfo"
         "pressure"
-        "vmstat"
         "conntrack"
       ];
       # Off already; the module confines the exporter further for these.
@@ -667,8 +773,8 @@ in
       };
     };
 
-    # The node's own: units that fail without alerting by themselves, or keep restarting, memory running out, the
-    # kernel killing for it, and the connection table filling, which drops connections for everyone.
+    # The node's own: units that fail without alerting by themselves, or keep restarting, memory running out, and the
+    # connection table filling, which drops connections for everyone.
     suveraen.metrics.jobs.node.labels = [ "name" ];
     suveraen.metrics.jobs.node.keep = [
       ''node_systemd_unit_state{state="failed"}''
@@ -676,7 +782,6 @@ in
       "node_memory_MemAvailable_bytes"
       "node_memory_MemTotal_bytes"
       "node_pressure_memory_stalled_seconds_total"
-      "node_vmstat_oom_kill"
       "node_nf_conntrack_entries"
       "node_nf_conntrack_entries_limit"
     ];
@@ -713,13 +818,6 @@ in
         cleared = "memory no longer stalled";
         detail = "every task waited on memory {{ $value | humanizePercentage }} of the last 15 minutes";
         reads = [ "node_pressure_memory_stalled_seconds_total" ];
-      };
-      "OOM kills" = {
-        expr = "increase(node_vmstat_oom_kill[1h]) > 0";
-        title = "OOM kills";
-        cleared = "no more OOM kills";
-        detail = "the kernel killed {{ $value | humanize }} for want of memory in the last hour";
-        reads = [ "node_vmstat_oom_kill" ];
       };
       "connection table filling" = {
         expr = "node_nf_conntrack_entries / node_nf_conntrack_entries_limit > 0.75";

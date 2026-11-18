@@ -1,0 +1,6 @@
+{
+  "title": "metric target down",
+  "priority": 4,
+  "body": "Still late:\nmetric target down kubelet: no answer to the scrape\nNew:\nmetric target down node: no answer to the scrape",
+  "late": "host\tmetric target down node\tlate\t4\tmetric target down\tno answer to the scrape\tmetric targets up again\tmetrics\nhost\tmetric target down kubelet\tlate\t4\tmetric target down\tno answer to the scrape\tmetric targets up again\tmetrics\n"
+}

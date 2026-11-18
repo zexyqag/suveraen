@@ -1,0 +1,82 @@
+{
+  "told": {
+    "metrics": {
+      "interval": 60,
+      "rules": [
+        {
+          "name": "Watchdog",
+          "health": "ok",
+          "evaluated": 1792670370,
+          "annotations": null,
+          "alerts": [
+            {
+              "state": "firing",
+              "stabilizing": false,
+              "priority": null,
+              "needs": null,
+              "annotations": {}
+            }
+          ]
+        },
+        {
+          "name": "target down",
+          "health": "ok",
+          "evaluated": 1792670370,
+          "annotations": {
+            "title": "metric target down",
+            "cleared": "metric targets up again",
+            "detail": "no answer to the scrape",
+            "key": "{{ $labels.job }}",
+            "lost": "{{ $labels.job }}"
+          },
+          "alerts": [
+            {
+              "state": "firing",
+              "stabilizing": false,
+              "priority": "4",
+              "needs": "cluster",
+              "annotations": {
+                "title": "metric target down",
+                "cleared": "metric targets up again",
+                "detail": "no answer to the scrape",
+                "key": "kubelet",
+                "lost": "kubelet"
+              }
+            },
+            {
+              "state": "firing",
+              "stabilizing": false,
+              "priority": "4",
+              "needs": "cluster",
+              "annotations": {
+                "title": "metric target down",
+                "cleared": "metric targets up again",
+                "detail": "no answer to the scrape",
+                "key": "etcd",
+                "lost": "etcd"
+              }
+            }
+          ]
+        },
+        {
+          "name": "volumes nearly full",
+          "health": "ok",
+          "evaluated": 1792670370,
+          "annotations": {
+            "title": "volumes nearly full",
+            "cleared": "volumes have room again",
+            "detail": "{{ $value | humanizePercentage }} of its space or inodes free",
+            "key": "{{ $labels.namespace }}{{ with $labels.persistentvolumeclaim }}/{{ . }}{{ end }}",
+            "inputs": "kubelet kubelet_volume_stats_available_bytes kubelet_volume_stats_capacity_bytes"
+          },
+          "alerts": []
+        }
+      ]
+    }
+  },
+  "state": {
+    "since": {
+      "metric cluster unreadable": 1792666800
+    }
+  }
+}

@@ -35,6 +35,7 @@
     "metrics": {
       "checked": 1792670400,
       "interval": 60,
+      "holdFor": 900,
       "rules": [
         {
           "name": "Watchdog",

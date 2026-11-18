@@ -94,6 +94,51 @@ let
   }";
 
   inherit (cfg.nodeServices) resolver;
+  kubeletPort = 10250;
+
+  inherit (config.suveraen) metrics;
+  # What the kubelet tells of the volumes pods have mounted.
+  volumes = [
+    "kubelet_volume_stats_available_bytes"
+    "kubelet_volume_stats_capacity_bytes"
+    "kubelet_volume_stats_inodes_free"
+    "kubelet_volume_stats_inodes"
+  ];
+  # Where the metrics' token for the kubelet and the CA its certificate is from go: the store's own runtime directory,
+  # gone when it stops.
+  store = "/run/victoriametrics";
+  # Which namespaces are a tenant's, and where its ID and its app are in their names, as the tenant-namespaces policy
+  # tells, which admits no other.
+  tenancy =
+    let
+      name = "object\\.metadata\\.name";
+    in
+    builtins.match ".*${name}\\.matches\\('\\^([^']+)'\\) \\?[[:space:]]+variables\\.tenant == ${name}\\.substring\\(0, ([0-9]+)\\).*${name}\\.substring\\(([0-9]+)\\).*" (
+      builtins.readFile ../kubernetes/platform/policies/app/tenant-namespaces.yaml
+    );
+  # What the kubelet's series name beyond a pod and its container, cgroups, images and the runtime's and the machine's
+  # own IDs, goes; a tenant's namespace gets its tenant's ID and its app.
+  kubeletLabels = [
+    {
+      action = "labeldrop";
+      regex = "id|image|name|uid|boot_id|machine_id|system_uuid";
+    }
+  ]
+  ++ lib.optionals (tenancy != null) (
+    let
+      named = label: regex: {
+        "if" = ''{namespace=~"${lib.elemAt tenancy 0}.*"}'';
+        action = "replace";
+        source_labels = [ "namespace" ];
+        inherit regex;
+        target_label = label;
+      };
+    in
+    [
+      (named "tenant" "(.{${lib.elemAt tenancy 1}}).*")
+      (named "app" ".{${lib.elemAt tenancy 2}}(.*)")
+    ]
+  );
 
   inherit (cfg) edge stun;
   webPorts = lib.attrValues cfg.webPorts;
@@ -405,6 +450,10 @@ in
         assertion = lib.length (lib.attrNames config.suveraen.offsite.targets) >= 2;
         message = "suveraen.cluster needs two suveraen.offsite.targets, at independent providers: the cluster's state goes to both.";
       }
+      {
+        assertion = !metrics.enable || tenancy != null;
+        message = "kubernetes/platform/policies/app/tenant-namespaces.yaml no longer tells a tenant's namespaces as cluster.nix reads it for the metrics.";
+      }
     ];
 
     services.k3s = {
@@ -567,6 +616,312 @@ in
       inherit (snapshots) keep everyHours;
     };
 
+    # The server's metrics read the kubelet's with an account that may read its metrics and nothing else: neither the
+    # kubelet's other paths (nodes/proxy, nodes/stats, nodes/log) nor any pod or Secret.
+    services.k3s.manifests.metrics = lib.mkIf metrics.enable {
+      content = [
+        {
+          apiVersion = "v1";
+          kind = "ServiceAccount";
+          metadata = {
+            name = "metrics";
+            namespace = "kube-system";
+          };
+        }
+        {
+          apiVersion = "rbac.authorization.k8s.io/v1";
+          kind = "ClusterRole";
+          metadata.name = "suveraen-metrics";
+          rules = [
+            {
+              apiGroups = [ "" ];
+              resources = [ "nodes/metrics" ];
+              verbs = [ "get" ];
+            }
+          ];
+        }
+        {
+          apiVersion = "rbac.authorization.k8s.io/v1";
+          kind = "ClusterRoleBinding";
+          metadata.name = "suveraen-metrics";
+          roleRef = {
+            apiGroup = "rbac.authorization.k8s.io";
+            kind = "ClusterRole";
+            name = "suveraen-metrics";
+          };
+          subjects = [
+            {
+              kind = "ServiceAccount";
+              name = "metrics";
+              namespace = "kube-system";
+            }
+          ];
+        }
+      ];
+    };
+
+    # A token for that account, valid for an hour, and the CA the kubelet's certificate is from, in the store's runtime
+    # directory, each time k3s or the store starts and every 5 minutes, so one that ran out while the cluster couldn't
+    # be read is soon replaced once it can. One that can't be had leaves the kubelet's targets down, which stands while
+    # the cluster can't be read.
+    systemd.services.suveraen-metrics-token = lib.mkIf metrics.enable {
+      description = "Give this server's metrics a token to read the kubelet's metrics with";
+      wantedBy = [
+        "k3s.service"
+        "victoriametrics.service"
+      ];
+      after = [
+        "k3s.service"
+        "victoriametrics.service"
+      ];
+      path = [
+        config.services.k3s.package
+        pkgs.coreutils
+      ];
+      serviceConfig = {
+        Type = "oneshot";
+        RuntimeDirectory = "suveraen-metrics-token";
+        RuntimeDirectoryMode = "0700";
+        UMask = "0077";
+        PrivateTmp = true;
+        ProtectHome = true;
+        NoNewPrivileges = true;
+      };
+      script = ''
+        [ -d ${store} ] || exit 0
+        run=$RUNTIME_DIRECTORY
+        # The API server may take a while to serve the account once k3s is up.
+        for _ in $(seq 12); do
+          if token=$(kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml --request-timeout=20s --cache-dir "$run/cache" \
+            -n kube-system create token metrics --duration=1h 2>"$run/err"); then
+            owner=$(stat -c %u ${store})
+            printf '%s' "$token" >${store}/token.new
+            cp /var/lib/rancher/k3s/server/tls/server-ca.crt ${store}/server-ca.crt.new
+            chown "$owner" ${store}/token.new ${store}/server-ca.crt.new
+            mv ${store}/token.new ${store}/token
+            mv ${store}/server-ca.crt.new ${store}/server-ca.crt
+            exit 0
+          fi
+          sleep 10
+        done
+        echo "no token: $(tail -n 1 "$run/err")"
+      '';
+    };
+    systemd.timers.suveraen-metrics-token = lib.mkIf metrics.enable {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "5min";
+        OnUnitActiveSec = "5min";
+      };
+    };
+
+    # What k3s serves of the kubelet's and etcd's metrics, on loopback: of the kubelet, its volumes' use, and of its
+    # pods, as only sums per namespace, how much CPU they take and how long they stall on I/O; etcd's size against its
+    # quota. Each is lost while k3s is, which the cluster's own finding tells of.
+    suveraen.metrics = lib.mkIf metrics.enable {
+      jobs =
+        let
+          kubelet = path: {
+            scrape = {
+              scheme = "https";
+              metrics_path = path;
+              static_configs = [ { targets = [ "127.0.0.1:${toString kubeletPort}" ]; } ];
+              bearer_token_file = "${store}/token";
+              # k3s signs the kubelet's certificate, for 127.0.0.1 too, with the server CA.
+              tls_config.ca_file = "${store}/server-ca.crt";
+            };
+            relabel = kubeletLabels;
+            needsCluster = true;
+          };
+          # The per-pod series in, the namespace's out, keeping its tenant and app.
+          perNamespace = input: output: {
+            inherit input output;
+            by = [
+              "namespace"
+              "tenant"
+              "app"
+            ];
+          };
+        in
+        {
+          kubelet = kubelet "/metrics" // {
+            keep = volumes;
+            labels = [
+              "namespace"
+              "persistentvolumeclaim"
+            ];
+            # As many as the volumes pods have mounted.
+            optional = volumes;
+          };
+          cadvisor = kubelet "/metrics/cadvisor" // {
+            keep = [
+              # A pod's own cgroup, which unlike its containers' names no container, and unlike its sandbox's no image.
+              ''container_pressure_io_stalled_seconds_total{container="", image="", namespace!=""}''
+              "machine_cpu_cores"
+            ];
+            aggregate."namespace:container_pressure_io_stalled_seconds:rate_avg" =
+              perNamespace "container_pressure_io_stalled_seconds_total" "rate_avg";
+            labels = [ "namespace" ];
+          };
+          resource = kubelet "/metrics/resource" // {
+            keep = [ "pod_cpu_usage_seconds_total" ];
+            aggregate."namespace:pod_cpu_usage_seconds:rate_sum" =
+              perNamespace "pod_cpu_usage_seconds_total" "rate_sum";
+            labels = [ "namespace" ];
+          };
+          # k3s serves etcd's on loopback alone, without a credential.
+          etcd = {
+            scrape.static_configs = [ { targets = [ "127.0.0.1:2381" ]; } ];
+            keep = [
+              "etcd_mvcc_db_total_size_in_bytes"
+              "etcd_server_quota_backend_bytes"
+            ];
+            needsCluster = true;
+          };
+          node.keep = [ "node_vmstat_oom_kill" ];
+        };
+
+      # The kubelet's metrics tell only of containers that run, which one that exits at once never is, nor one the
+      # kernel killed for memory, whose own count goes with its cgroup; the runtime's records tell of each, of which
+      # this keeps only the names the pod gives it, its latest attempt and whether it was last killed for memory.
+      textfiles.containers = {
+        path = [
+          pkgs.cri-tools
+          pkgs.jq
+        ];
+        needsCluster = true;
+        labels = [
+          "namespace"
+          "pod"
+          "container"
+        ];
+        script = ''
+          crictl() { command crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock --timeout 20s "$@"; }
+          # Read whole first, so a runtime that can't be asked fails the writer, and its file goes stale.
+          listed=$(crictl ps -a -o json)
+          attempts=() killed=()
+          while IFS=$'\t' read -r namespace pod container attempt exited; do
+            labels="namespace=\"$namespace\",pod=\"$pod\",container=\"$container\""
+            reason=
+            if [ -n "$exited" ]; then
+              reason=$(crictl inspect -o go-template --template '{{.status.reason}}' "$exited")
+            fi
+            oom=0
+            if [ "$reason" = OOMKilled ]; then oom=1; fi
+            attempts+=("container_attempt{$labels} $attempt")
+            killed+=("container_oom_killed{$labels} $oom")
+          done < <(jq -r '
+            def named: type == "string" and test("^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$");
+            [.containers[] | {namespace: .labels["io.kubernetes.pod.namespace"], pod: .labels["io.kubernetes.pod.name"],
+              container: .labels["io.kubernetes.container.name"], attempt: (.metadata.attempt // 0),
+              exited: (.state == "CONTAINER_EXITED"), id}
+             | select((.namespace | named) and (.pod | named) and (.container | named))]
+            | group_by([.namespace, .pod, .container])[]
+            | [.[0].namespace, .[0].pod, .[0].container, (map(.attempt) | max),
+               (map(select(.exited)) | max_by(.attempt) | .id // "")]
+            | @tsv' <<<"$listed")
+          if [ "''${#attempts[@]}" -gt 0 ]; then
+            printf '%s\n' '# TYPE container_attempt gauge' "''${attempts[@]}" '# TYPE container_oom_killed gauge' "''${killed[@]}"
+          fi
+        '';
+        families = [
+          "container_attempt"
+          "container_oom_killed"
+        ];
+      };
+
+      rules =
+        let
+          # A container the kernel killed for memory last, which started again or first showed so within the hour.
+          oomed = "(container_oom_killed == 1 and on(namespace, pod, container) (increase(container_attempt[1h]) > 0 or changes(container_oom_killed[1h]) > 0))";
+          kills = "(increase(node_vmstat_oom_kill[1h]) > 0)";
+        in
+        {
+          # A crash loop of any cause, counting only the restarts seen within the hour, and the container's own while
+          # it is there.
+          "containers restarting" = {
+            expr = "(increase(container_attempt[1h]) >= 3 and max_over_time(container_attempt[1h]) - min_over_time(container_attempt[1h]) >= 3) and container_attempt";
+            title = "containers restarting";
+            cleared = "containers no longer restarting";
+            detail = "started {{ $value | humanize }} times again in the last hour";
+            key = [
+              "namespace"
+              "pod"
+              "container"
+            ];
+            reads = [ "container_attempt" ];
+          };
+          # Each kill of a container's is counted in the host's too, and found by the container killed while it is
+          # there; any other by the host alone, but while a container's was found within the hour, which went with it.
+          "OOM kills" = {
+            # Looked for at every evaluation, as the container's record may be there for a few of them only.
+            expr =
+              "${kills} * on() group_right() ${oomed}"
+              + " or (${kills} unless on() max_over_time(${oomed}[1h:${metrics.interval}]))";
+            title = "OOM kills";
+            cleared = "no more OOM kills";
+            detail = "the kernel killed {{ $value | humanize }} for want of memory in the last hour";
+            key = [
+              "namespace"
+              "pod"
+              "container"
+            ];
+            reads = [
+              "node_vmstat_oom_kill"
+              "container_oom_killed"
+              "container_attempt"
+            ];
+          };
+          # The kubelet tells only of volumes a pod on this node mounts: one that stays unmounted longer than holdFor,
+          # as with its app scaled down, clears, and alerts again once mounted.
+          "volumes nearly full" = {
+            expr = "kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes < 0.1 or kubelet_volume_stats_inodes_free / kubelet_volume_stats_inodes < 0.1";
+            title = "volumes nearly full";
+            cleared = "volumes have room again";
+            detail = "{{ $value | humanizePercentage }} of its space or inodes free";
+            key = [
+              "namespace"
+              "persistentvolumeclaim"
+            ];
+            reads = volumes;
+          };
+          # Past its quota etcd takes no more writes, and the cluster no change.
+          "etcd filling" = {
+            expr = "etcd_mvcc_db_total_size_in_bytes / etcd_server_quota_backend_bytes > 0.8";
+            priority = 5;
+            title = "etcd filling";
+            cleared = "etcd has room again";
+            detail = "{{ $value | humanizePercentage }} of its quota taken";
+            reads = [
+              "etcd_mvcc_db_total_size_in_bytes"
+              "etcd_server_quota_backend_bytes"
+            ];
+          };
+          # No pod has a CPU limit, so one tenant can slow every other.
+          "tenant busy" = {
+            expr = ''namespace:pod_cpu_usage_seconds:rate_sum{tenant!=""} / on() group_left() max(machine_cpu_cores) > 0.25'';
+            title = "tenant busy";
+            cleared = "tenant no longer busy";
+            detail = "its pods took {{ $value | humanizePercentage }} of the node's cores";
+            key = [ "namespace" ];
+            reads = [
+              "namespace:pod_cpu_usage_seconds:rate_sum"
+              "machine_cpu_cores"
+            ];
+          };
+          "tenant stalled" = {
+            expr = ''namespace:container_pressure_io_stalled_seconds:rate_avg{tenant!=""} > 0.2'';
+            title = "tenant stalled";
+            cleared = "tenant no longer stalled";
+            detail = "its pods stalled on I/O {{ $value | humanizePercentage }} of the time, on average";
+            key = [ "namespace" ];
+            reads = [ "namespace:container_pressure_io_stalled_seconds:rate_avg" ];
+          };
+        };
+    };
+    # The kernel's count of OOM kills, which "OOM kills" reads.
+    services.prometheus.exporters.node.enabledCollectors = lib.mkIf metrics.enable [ "vmstat" ];
+
     systemd.services.flux-sops-key = lib.mkIf (cfg.sopsAgeKeyFile != null) {
       description = "Give Flux the key to the repository's secrets";
       after = [ "k3s.service" ];
@@ -625,8 +980,8 @@ in
         set = cidrs: "{ ${lib.concatStringsSep ", " cidrs} }";
       in
       ''
-        ip saddr ${set v4} tcp dport { 6443, 10250 } accept
-        ip6 saddr ${set v6} tcp dport { 6443, 10250 } accept
+        ip saddr ${set v4} tcp dport { 6443, ${toString kubeletPort} } accept
+        ip6 saddr ${set v6} tcp dport { 6443, ${toString kubeletPort} } accept
         ip saddr ${set v4} ip daddr ${resolver} meta l4proto { tcp, udp } th dport 53 accept
       '';
     networking.firewall.allowedTCPPorts = webPorts;

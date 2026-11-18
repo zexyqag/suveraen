@@ -684,6 +684,7 @@ runTest {
       cluster = clusterIn nodes;
       inherit (nodes.acme.test-support.acme) caCert;
       checkout = "/srv/src/${lib.removePrefix "./" nodes.server.suveraen.cluster.path}";
+      inherit (nodes.server.suveraen) metrics;
     in
     ''
       import base64
@@ -1063,6 +1064,28 @@ runTest {
               assert rules and all(r["health"] == "ok" for r in rules), rules
               fired = {(r["name"], a["annotations"].get("key")) for r in rules for a in r["alerts"] if a["state"] == "firing"}
               assert fired == {("Watchdog", None)}, rules
+              # Every target answers, and of pods the metrics keep their CPU and I/O stalls only as their namespaces'
+              # sums, which name a tenant's namespace's tenant and app as its labels do, and nothing the kubelet names
+              # beyond a pod and its container.
+              def stored(query):
+                  return parsed(
+                      "curl -fsS -u metrics:$(cat /var/lib/suveraen-metrics/password) http://127.0.0.1:8428/api/v1/query"
+                      f" --data-urlencode {shlex.quote('query=' + query)}"
+                  )["data"]["result"]
+
+              up = {r["metric"]["job"]: r["value"][1] for r in stored("up")}
+              assert up == {job: "1" for job in ${builtins.toJSON (lib.attrNames metrics.jobs)}}, up
+              owners = {
+                  n["metadata"]["name"]: (n["metadata"]["labels"]["suveraen/tenant"], n["metadata"]["labels"]["suveraen/app"])
+                  for n in items("namespaces") if "suveraen/tenant" in n["metadata"].get("labels", {})
+              }
+              for family in ["namespace:pod_cpu_usage_seconds:rate_sum", "namespace:container_pressure_io_stalled_seconds:rate_avg"]:
+                  sums = {r["metric"]["namespace"]: (r["metric"].get("tenant"), r["metric"].get("app")) for r in stored(family)}
+                  assert sums.keys() & owners.keys(), (family, sums)
+                  assert all(owner == owners.get(ns, (None, None)) for ns, owner in sums.items()), (family, sums, owners)
+              assert stored('{__name__=~"pod_cpu_usage_seconds_total|container_pressure_io_stalled_seconds_total"}') == []
+              named = {label for r in stored('{job=~"kubelet|cadvisor|resource"}') for label in r["metric"]}
+              assert not named & {"id", "image", "name", "uid", "boot_id", "machine_id", "system_uuid"}, named
 
           with subtest("The platform's pods run at its priority, tenants' at theirs, and Ceph's monitors, OSDs and CSI node plugin at the node's, which a shutdown stops last"):
               labels = {n["metadata"]["name"]: n["metadata"].get("labels", {}) for n in items("namespaces")}
@@ -3328,7 +3351,10 @@ runTest {
           # any, each by those it names, so that another finding alerted with them changes nothing here.
           def checks_said(*titles):
               named = "${nodes.server.networking.hostName}: "
-              ours = ("backups ", "Ceph ", "certificate", "cluster status ", "edge", "Flux ", "Kanidm ", "metric", "STUN ", "mesh ", "still: ")
+              ours = (
+                  "backups ", "Ceph ", "certificate", "cluster status ", "edge", "Flux ", "Kanidm ", "metric", "STUN ", "mesh ",
+                  "still: ", *${builtins.toJSON (map (r: r.title) (lib.attrValues metrics.rules))},
+              )
               heard = []
               for a in alerts():
                   title = a.get("title", "").removeprefix(named)
@@ -3426,15 +3452,23 @@ runTest {
               certificates = {f"certificate {c['metadata']['namespace']}/{c['metadata']['name']}" for c in items("certificates")}
               edges = {f"edge {g['metadata']['name']}" for g in items("gateways") if g["metadata"]["namespace"] == "gateway"}
               assert flux and certificates and edges, (flux, certificates, edges)
-              assert findings.keys() == (
+              # One that Flux reconciles just then is ready again before its hour is up, and one that waits for it then
+              # is left to it, its suspension told apart.
+              waiting = {key for key in flux if findings.get(key, ("", ""))[1].startswith("waits for ")}
+              # A rule may be pending just then, as the clock's is until a source has set it, which stands as it is.
+              metric = {key for key in findings if key.startswith("metric ")}
+              assert findings["metric rules"][0] == "ok", findings["metric rules"]
+              assert not [key for key in metric if findings[key][0] == "late"], {key: findings[key] for key in metric}
+              assert findings.keys() - metric == (
                   before.keys() | archiving | offsite | identities | stun_findings | mesh_parts | flux | certificates | edges
-                  | {"Ceph status", "cluster status", "etcd-snapshots", "knot-backup", "metric rules"}
+                  | {f"{key} suspended" for key in waiting}
+                  | {"Ceph status", "cluster status", "etcd-snapshots", "knot-backup"}
               ), findings
-              assert all(state == "ok" for state, _ in findings.values()), findings
-              # One that Flux reconciles just then is ready again before its hour is up.
-              assert all(findings[key][1] == "ready" or findings[key][1].startswith("Progressing since ") for key in flux), {
-                  key: findings[key] for key in flux
-              }
+              assert all(state == "ok" for key, (state, _) in findings.items() if key not in metric | waiting), findings
+              assert all(
+                  findings[key][1] == "ready" or findings[key][1].startswith("Progressing since ")
+                  for key in flux - waiting
+              ), {key: findings[key] for key in flux}
               assert all(findings[key][1].startswith("renews ") for key in certificates), {key: findings[key] for key in certificates}
               # At each of the server's addresses, through ServiceLB and the gateway.
               assert all(findings[key][1] == "answered" for key in edges), {key: findings[key] for key in edges}
@@ -3460,6 +3494,17 @@ runTest {
                   assert m and moment(m.group(1)).timestamp() == stamp, (n, findings[f"etcd-offsite-{n}"], stamp)
               assert findings["Ceph status"][1].startswith("HEALTH_OK, "), findings["Ceph status"]
               assert checks_said() == [], checks_said()
+              # No label the server's metrics hold, from first to last, names a host, a client's address or a Kanidm ID
+              # this test used.
+              series = json.dumps(parsed(
+                  "curl -fsS -u metrics:$(cat /var/lib/suveraen-metrics/password) http://127.0.0.1:8428/api/v1/series"
+                  """ --data-urlencode 'match[]={__name__=~".+"}' --data-urlencode start=$(date -d '-1 day' +%s)"""
+              )["data"])
+              used = [
+                  *domains.values(), *clients, *(i for ids in held.values() for [i] in ids),
+                  *(p["uuid"] for p in nb_people.values()),
+              ]
+              assert series.count("__name__") > 100 and not [u for u in used if u in series], [u for u in used if u in series]
               # The first run that finds a mesh keeps its owner and its people's tags as it found them.
               kept = json.loads(server.succeed("cat /var/lib/private/host-checks/mesh.json"))
               assert kept[first]["owner"] == nb_people["op"]["uuid"], kept[first]

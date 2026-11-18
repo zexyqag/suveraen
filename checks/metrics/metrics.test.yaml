@@ -1,5 +1,6 @@
 # The rules nixos/metrics.nix holds on the metrics themselves: the Watchdog, a target that answers no scrape, or that no
-# scrape reaches at all, a writer's file that goes stale, or was never written, and a family a writer leaves out.
+# scrape reaches at all, one that needs the cluster as such, a writer's file that goes stale, or was never written, and
+# a family a writer leaves out.
 rule_files:
   - rules.yml
 evaluation_interval: 1m
@@ -8,6 +9,15 @@ tests:
     input_series:
       - series: 'up{job="node", instance="127.0.0.1:9100"}'
         values: '1x10 0x30 1x30'
+      # The others answer throughout.
+      - series: 'up{job="cadvisor", instance="127.0.0.1:10250"}'
+        values: '1x60'
+      - series: 'up{job="etcd", instance="127.0.0.1:2381"}'
+        values: '1x60'
+      - series: 'up{job="kubelet", instance="127.0.0.1:10250"}'
+        values: '1x60'
+      - series: 'up{job="resource", instance="127.0.0.1:10250"}'
+        values: '1x60'
     alert_rule_test:
       - eval_time: 5m
         groupname: metrics
@@ -43,11 +53,44 @@ tests:
     input_series:
       - series: 'up{job="node", instance="127.0.0.1:9100"}'
         values: '1x10 _x30'
+      - series: 'up{job="cadvisor", instance="127.0.0.1:10250"}'
+        values: '1x60'
+      - series: 'up{job="etcd", instance="127.0.0.1:2381"}'
+        values: '1x60'
+      - series: 'up{job="kubelet", instance="127.0.0.1:10250"}'
+        values: '1x60'
+      - series: 'up{job="resource", instance="127.0.0.1:10250"}'
+        values: '1x60'
     alert_rule_test:
       - eval_time: 30m
         groupname: metrics
         alertname: target down
         exp_alerts: [*node]
+  - interval: 1m
+    input_series:
+      - series: 'up{job="node", instance="127.0.0.1:9100"}'
+        values: '1x60'
+      # One that k3s serves, which says it needs the cluster.
+      - series: 'up{job="kubelet", instance="127.0.0.1:10250"}'
+        values: '1x10 0x50'
+      - series: 'up{job="cadvisor", instance="127.0.0.1:10250"}'
+        values: '1x60'
+      - series: 'up{job="etcd", instance="127.0.0.1:2381"}'
+        values: '1x60'
+      - series: 'up{job="resource", instance="127.0.0.1:10250"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 30m
+        groupname: metrics
+        alertname: target down
+        exp_alerts:
+          - exp_labels: {job: kubelet, needs: cluster, priority: "4"}
+            exp_annotations:
+              title: metric target down
+              cleared: metric targets up again
+              detail: no answer to the scrape
+              key: kubelet
+              lost: kubelet
   - interval: 1m
     input_series:
       - series: 'up{job="node", instance="127.0.0.1:9100"}'
@@ -70,6 +113,15 @@ tests:
               key: chrony
               inputs: node
               lost: chrony
+          - &containers
+            exp_labels: {writer: containers, needs: cluster, priority: "4"}
+            exp_annotations:
+              title: metric input stale
+              cleared: metric inputs fresh again
+              detail: not written by its last three runs, or unreadable
+              key: containers
+              inputs: node
+              lost: containers
           - &datasets
             exp_labels: {writer: datasets, priority: "4"}
             exp_annotations:
@@ -84,6 +136,7 @@ tests:
         alertname: input stale
         exp_alerts:
           - *chrony
+          - *containers
           - *datasets
           - exp_labels: {writer: pools, priority: "4"}
             exp_annotations:

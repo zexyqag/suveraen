@@ -1,0 +1,1 @@
+host	cluster status	late	4	cluster status unreadable	last read 2026-10-22T11:00:00Z (1h 0m ago), limit 30m: /api/v1/nodes: HTTP 503	cluster status readable again	api

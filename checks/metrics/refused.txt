@@ -1,7 +1,8 @@
 suveraen.metrics.rules are named in letters, digits and spaces, apart from the metrics' own, and none begins another as a word: Watchdog, disk, disk full, target down.
-suveraen.metrics.rules print nothing but their value and the labels the sources of what they read may print (job, writer, family, name, mountpoint, pool), and in their detail alone: prints a query, prints an instance, prints by dot, prints half, titled by a label.
+suveraen.metrics.rules print nothing but their value and the labels the sources of what they read may print (job, writer, family, namespace, persistentvolumeclaim, name, pod, container, mountpoint, pool), and in their detail alone: prints a query, prints an instance, prints by dot, prints half, titled by a label.
 suveraen.metrics.rules are keyed only by labels the sources of what they read may print: keyed by an instance.
 suveraen.metrics.rules read only families a job keeps or a writer writes: reads nowhere.
-suveraen.metrics.jobs and textfiles keep and write only families a rule reads: stray_written, unread_total, unread_written.
+suveraen.metrics.jobs and textfiles keep and write only families a rule reads: astray:rate_sum, astray_total, stray_written, unread_total, unread_written.
+suveraen.metrics.jobs aggregate only families they keep, and may lack only those they store: astray.
 suveraen.metrics.textfiles are named [a-z][a-z0-9-]*, other than a job: unread.
 suveraen.metrics.textfiles write families of their own, which no job keeps, and may lack only those: stray.

@@ -1,6 +1,7 @@
-# Rules, a job and writers of a server's metrics that its evaluation refuses (refused.txt): each prints, or is keyed by,
+# Rules, jobs and writers of a server's metrics that its evaluation refuses (refused.txt): each prints, or is keyed by,
 # what may not leave the server, is named so that its findings' keys could be another's, or an input's a job's, reads
-# what nothing keeps or writes, keeps or writes what no rule reads, or may lack what it doesn't write.
+# what nothing keeps or writes, keeps or writes what no rule reads, aggregates what it doesn't keep, or may lack what it
+# doesn't store or write.
 let
   rule = detail: {
     expr = "vector(1)";
@@ -12,9 +13,21 @@ let
 in
 {
   suveraen.metrics = {
-    jobs.unread = {
-      scrape.static_configs = [ { targets = [ "127.0.0.1:9999" ]; } ];
-      keep = [ "unread_total" ];
+    jobs = {
+      unread = {
+        scrape.static_configs = [ { targets = [ "127.0.0.1:9999" ]; } ];
+        keep = [ "unread_total" ];
+      };
+      astray = {
+        scrape.static_configs = [ { targets = [ "127.0.0.1:9998" ]; } ];
+        keep = [ "astray_total" ];
+        aggregate."astray:rate_sum" = {
+          input = "elsewhere_total";
+          by = [ "namespace" ];
+          output = "rate_sum";
+        };
+        optional = [ "nowhere_total" ];
+      };
     };
     textfiles = {
       unread = {

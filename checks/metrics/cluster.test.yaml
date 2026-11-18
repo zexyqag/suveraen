@@ -1,0 +1,199 @@
+# The cluster's rules (nixos/cluster.nix): containers restarting, as the runtime's records count them, and OOM kills,
+# by the container killed where there is one; volumes and etcd filling; and a tenant taking much of the node's CPU, or
+# stalled on I/O, as the sums per namespace tell.
+rule_files:
+  - rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      # Each there for over an hour before. One starts again four times, then goes with its pod.
+      - series: 'container_attempt{job="node", instance="127.0.0.1:9100", namespace="alpha-hello", pod="web-1", container="web"}'
+        values: '0x65 1x5 2x5 3x5 4x40 _x60'
+      # A pod made again under its name, whose container starts over.
+      - series: 'container_attempt{job="node", instance="127.0.0.1:9100", namespace="alpha-kanidm", pod="kanidm-0", container="kanidm"}'
+        values: '5x80 0x100'
+      # Restarted often, long ago.
+      - series: 'container_attempt{job="node", instance="127.0.0.1:9100", namespace="rook-ceph", pod="osd-0", container="osd"}'
+        values: '7x180'
+      # First seen having restarted before.
+      - series: 'container_attempt{job="node", instance="127.0.0.1:9100", namespace="kube-system", pod="dns-1", container="dns"}'
+        values: '_x90 4x90'
+    alert_rule_test:
+      - eval_time: 90m
+        groupname: metrics
+        alertname: containers restarting
+        exp_alerts: []
+      - eval_time: 100m
+        groupname: metrics
+        alertname: containers restarting
+        exp_alerts:
+          - exp_labels:
+              {job: node, instance: 127.0.0.1:9100, namespace: alpha-hello, pod: web-1, container: web, priority: "4"}
+            exp_annotations:
+              title: containers restarting
+              cleared: containers no longer restarting
+              detail: started 4 times again in the last hour
+              key: alpha-hello/web-1/web
+              inputs: node containers container_attempt
+      # Once its pod is gone, and as long again as it is held for.
+      - eval_time: 150m
+        groupname: metrics
+        alertname: containers restarting
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      # Killed for memory, last seen running, then gone with its pod.
+      - series: 'node_vmstat_oom_kill{job="node", instance="127.0.0.1:9100"}'
+        values: '0x70 1x110'
+      - series: 'container_oom_killed{job="node", instance="127.0.0.1:9100", namespace="alpha-hello", pod="oom", container="oom"}'
+        values: '0x70 1x30 _x80'
+      - series: 'container_attempt{job="node", instance="127.0.0.1:9100", namespace="alpha-hello", pod="oom", container="oom"}'
+        values: '0x100 _x80'
+      # Killed long ago, which counts no more.
+      - series: 'container_oom_killed{job="node", instance="127.0.0.1:9100", namespace="alpha-hello", pod="old", container="old"}'
+        values: '1x180'
+      - series: 'container_attempt{job="node", instance="127.0.0.1:9100", namespace="alpha-hello", pod="old", container="old"}'
+        values: '1x180'
+    alert_rule_test:
+      - eval_time: 90m
+        groupname: metrics
+        alertname: OOM kills
+        exp_alerts:
+          - exp_labels:
+              {job: node, instance: 127.0.0.1:9100, namespace: alpha-hello, pod: oom, container: oom, priority: "4"}
+            exp_annotations:
+              title: OOM kills
+              cleared: no more OOM kills
+              detail: the kernel killed 1 for want of memory in the last hour
+              key: alpha-hello/oom/oom
+              inputs: node node_vmstat_oom_kill containers container_oom_killed container_attempt
+      # Its pod gone, the kill isn't the host's either.
+      - eval_time: 130m
+        groupname: metrics
+        alertname: OOM kills
+        exp_alerts: []
+      - eval_time: 180m
+        groupname: metrics
+        alertname: OOM kills
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      # Killed for memory, and no container was.
+      - series: 'node_vmstat_oom_kill{job="node", instance="127.0.0.1:9100"}'
+        values: '0x10 1x110'
+    alert_rule_test:
+      - eval_time: 30m
+        groupname: metrics
+        alertname: OOM kills
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, priority: "4"}
+            exp_annotations:
+              title: OOM kills
+              cleared: no more OOM kills
+              detail: the kernel killed 1 for want of memory in the last hour
+              key: ""
+              inputs: node node_vmstat_oom_kill containers container_oom_killed container_attempt
+      # An hour after the kill, and as long again as it is held for.
+      - eval_time: 90m
+        groupname: metrics
+        alertname: OOM kills
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_capacity_bytes{job="kubelet", instance="127.0.0.1:10250", namespace="alpha-hello", persistentvolumeclaim="data", tenant="alpha", app="hello"}'
+        values: '1000x60'
+      - series: 'kubelet_volume_stats_available_bytes{job="kubelet", instance="127.0.0.1:10250", namespace="alpha-hello", persistentvolumeclaim="data", tenant="alpha", app="hello"}'
+        values: '500x10 50x50'
+      - series: 'kubelet_volume_stats_inodes{job="kubelet", instance="127.0.0.1:10250", namespace="alpha-hello", persistentvolumeclaim="data", tenant="alpha", app="hello"}'
+        values: '1000x60'
+      - series: 'kubelet_volume_stats_inodes_free{job="kubelet", instance="127.0.0.1:10250", namespace="alpha-hello", persistentvolumeclaim="data", tenant="alpha", app="hello"}'
+        values: '900x60'
+      # Room enough, but hardly an inode left.
+      - series: 'kubelet_volume_stats_capacity_bytes{job="kubelet", instance="127.0.0.1:10250", namespace="rook-ceph", persistentvolumeclaim="logs"}'
+        values: '1000x60'
+      - series: 'kubelet_volume_stats_available_bytes{job="kubelet", instance="127.0.0.1:10250", namespace="rook-ceph", persistentvolumeclaim="logs"}'
+        values: '900x60'
+      - series: 'kubelet_volume_stats_inodes{job="kubelet", instance="127.0.0.1:10250", namespace="rook-ceph", persistentvolumeclaim="logs"}'
+        values: '1000x60'
+      - series: 'kubelet_volume_stats_inodes_free{job="kubelet", instance="127.0.0.1:10250", namespace="rook-ceph", persistentvolumeclaim="logs"}'
+        values: '20x60'
+      - series: 'etcd_mvcc_db_total_size_in_bytes{job="etcd", instance="127.0.0.1:2381"}'
+        values: '1000000000x10 1700000000x50'
+      - series: 'etcd_server_quota_backend_bytes{job="etcd", instance="127.0.0.1:2381"}'
+        values: '2000000000x60'
+    alert_rule_test:
+      - eval_time: 30m
+        groupname: metrics
+        alertname: volumes nearly full
+        exp_alerts:
+          - exp_labels:
+              {job: kubelet, instance: 127.0.0.1:10250, namespace: alpha-hello, persistentvolumeclaim: data, tenant: alpha,
+               app: hello, priority: "4"}
+            exp_annotations:
+              title: volumes nearly full
+              cleared: volumes have room again
+              detail: 5% of its space or inodes free
+              key: alpha-hello/data
+              inputs: kubelet kubelet_volume_stats_available_bytes kubelet_volume_stats_capacity_bytes kubelet_volume_stats_inodes_free kubelet_volume_stats_inodes
+          - exp_labels: {job: kubelet, instance: 127.0.0.1:10250, namespace: rook-ceph, persistentvolumeclaim: logs, priority: "4"}
+            exp_annotations:
+              title: volumes nearly full
+              cleared: volumes have room again
+              detail: 2% of its space or inodes free
+              key: rook-ceph/logs
+              inputs: kubelet kubelet_volume_stats_available_bytes kubelet_volume_stats_capacity_bytes kubelet_volume_stats_inodes_free kubelet_volume_stats_inodes
+      - eval_time: 20m
+        groupname: metrics
+        alertname: etcd filling
+        exp_alerts: []
+      - eval_time: 30m
+        groupname: metrics
+        alertname: etcd filling
+        exp_alerts:
+          - exp_labels: {job: etcd, instance: 127.0.0.1:2381, priority: "5"}
+            exp_annotations:
+              title: etcd filling
+              cleared: etcd has room again
+              detail: 85% of its quota taken
+              inputs: etcd etcd_mvcc_db_total_size_in_bytes etcd_server_quota_backend_bytes
+  - interval: 1m
+    input_series:
+      - series: 'machine_cpu_cores{job="cadvisor", instance="127.0.0.1:10250"}'
+        values: '8x60'
+      # A tenant's namespace taking three of the eight cores, and the platform's taking four, which is no tenant's.
+      - series: 'namespace:pod_cpu_usage_seconds:rate_sum{job="resource", namespace="alpha-hello", tenant="alpha", app="hello"}'
+        values: '0.5x10 3x50'
+      - series: 'namespace:pod_cpu_usage_seconds:rate_sum{job="resource", namespace="rook-ceph"}'
+        values: '4x60'
+      - series: 'namespace:container_pressure_io_stalled_seconds:rate_avg{job="cadvisor", namespace="bravo-hello", tenant="bravo", app="hello"}'
+        values: '0.3x60'
+      - series: 'namespace:container_pressure_io_stalled_seconds:rate_avg{job="cadvisor", namespace="rook-ceph"}'
+        values: '0.5x60'
+    alert_rule_test:
+      - eval_time: 20m
+        groupname: metrics
+        alertname: tenant busy
+        exp_alerts: []
+      - eval_time: 30m
+        groupname: metrics
+        alertname: tenant busy
+        exp_alerts:
+          - exp_labels: {job: resource, namespace: alpha-hello, tenant: alpha, app: hello, priority: "4"}
+            exp_annotations:
+              title: tenant busy
+              cleared: tenant no longer busy
+              detail: its pods took 37.5% of the node's cores
+              key: alpha-hello
+              inputs: resource namespace:pod_cpu_usage_seconds:rate_sum cadvisor machine_cpu_cores
+      - eval_time: 30m
+        groupname: metrics
+        alertname: tenant stalled
+        exp_alerts:
+          - exp_labels: {job: cadvisor, namespace: bravo-hello, tenant: bravo, app: hello, priority: "4"}
+            exp_annotations:
+              title: tenant stalled
+              cleared: tenant no longer stalled
+              detail: its pods stalled on I/O 30% of the time, on average
+              key: bravo-hello
+              inputs: cadvisor namespace:container_pressure_io_stalled_seconds:rate_avg
