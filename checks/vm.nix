@@ -280,6 +280,7 @@ pkgs.testers.runNixOSTest {
         systemd.services.host-checks.startLimitIntervalSec = 0;
         systemd.services.offsite.startLimitIntervalSec = 0;
         systemd.services.offsite-collect.startLimitIntervalSec = 0;
+        systemd.services.suveraen-metrics-textfile-containers.startLimitIntervalSec = 0;
 
         networking.hosts = {
           ${nodes.watcher.networking.primaryIPAddress} = [
