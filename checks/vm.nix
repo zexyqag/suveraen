@@ -15,12 +15,13 @@
 # checks do and while its boot-time SSH port is open, and says when each ends; and the server falls back to a second
 # channel when the watcher is gone, and says there when the watcher's ntfy stops answering; a daily publish the way its
 # alerts go tells the watcher when that way is broken. The server and its Flux only take commits signed by a release
-# signer, the server never goes back to an older one, and it alerts when its configuration gets old. The server's checks
-# read how old the backups the cluster records are and Ceph's health with an account that reads nothing else, ask the
-# node's addresses for STUN, and alert once per change, also when the cluster can't be read. Its etcd snapshots reach
-# both providers encrypted to recovery keys, under a prefix its key can neither leave nor empty; with one provider down
-# they still reach the other, and the phone hears of it. Wiped, the server comes back from a provider's copy through its
-# restore command, with its token file alone; another token leaves a running server's own database in place.
+# signer, the server never goes back to an older one, and it alerts when its configuration, or the nixpkgs its release
+# locks, gets old. The server's checks read how old the backups the cluster records are and Ceph's health with an
+# account that reads nothing else, ask the node's addresses for STUN, and alert once per change, also when the cluster
+# can't be read. Its etcd snapshots reach both providers encrypted to recovery keys, under a prefix its key can neither
+# leave nor empty; with one provider down they still reach the other, and the phone hears of it. Wiped, the server comes
+# back from a provider's copy through its restore command, with its token file alone; another token leaves a running
+# server's own database in place.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -1345,14 +1346,24 @@ pkgs.testers.runNixOSTest {
               "${ops} | jq -e 'select(.title == \"server: big\") | (has(\"attachment\") | not) and (.message | length) <= 3800'"
           )
 
-      with subtest("A host running an old configuration says so"):
+      with subtest("A host running an old configuration, or a release that locks an old nixpkgs, says so"):
           server.succeed("systemctl start release-age.service")
-          server.fail("${ops} | grep -F 'server: stale configuration'")
+          server.fail("${ops} | grep -F 'server: stale'")
+          # The test's release locks no inputs: as if it locked a nixpkgs that old.
+          server.succeed(
+              "echo '{\"nixpkgs\": '$(( $(date +%s) - ${staleDays} * 86400 ))'}' > /var/lib/suveraen-upgrade/inputs.json"
+          )
+          server.succeed("systemctl start release-age.service")
+          old_inputs = "${ops} | jq -r 'select(.title == \"server: stale inputs\") | .message'"
+          server.wait_until_succeeds(f"{old_inputs} | grep -F 'The release this host runs locks nixpkgs from '")
+          server.succeed(f"{old_inputs} | grep -F 'Check update.yml, or move to the next NixOS release.'")
           server.succeed(
               "echo $(( $(date +%s) - ${staleDays} * 86400 )) > /var/lib/suveraen-upgrade/lastmodified"
           )
           server.succeed("systemctl start release-age.service")
           server.wait_until_succeeds("${ops} | grep -F 'server: stale configuration'")
+          # What an old configuration locks is as old, which doesn't alert again.
+          assert len(server.succeed(old_inputs).splitlines()) == 1
 
       # The server's alerts so far with this title, as the phone reads them.
       def sent(title):

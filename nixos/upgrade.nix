@@ -35,18 +35,39 @@ let
       fi
       echo "$count" >/run/suveraen-upgrade/revcount
       echo "$modified" >/run/suveraen-upgrade/lastmodified
+      # When each followed input that the release locks was last changed, found by its name in the release's flake.nix.
+      jq -c --argjson followed ${lib.escapeShellArg (builtins.toJSON cfg.followedInputs)} '
+        .locks as $l
+        | def node($path):
+            reduce $path[] as $name ($l.root; $l.nodes[.].inputs[$name] | if type == "array" then node(.) else . end);
+          [$followed[] as $i | (node([$i]) // empty) as $n | {key: $i, value: $l.nodes[$n].locked.lastModified}
+            | select(.value != null)]
+          | from_entries' <<<"$meta" >/run/suveraen-upgrade/inputs.json
       echo "$1&rev=$rev" >/run/suveraen-upgrade/flake
     '';
   };
 in
 {
-  options.suveraen.upgrade.staleAfterDays = lib.mkOption {
-    type = lib.types.ints.positive;
-    default = 14;
-    description = ''
-      Alert once a day when the configuration this host runs was committed longer ago than this. It catches releases
-      that stopped coming as well as a branch someone keeps frozen.
-    '';
+  options.suveraen.upgrade = {
+    staleAfterDays = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 14;
+      description = ''
+        Alert once a day when the configuration this host runs was committed longer ago than this. It catches releases
+        that stopped coming as well as a branch someone keeps frozen.
+      '';
+    };
+
+    followedInputs = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ "nixpkgs" ];
+      description = ''
+        Inputs of the release, by their names in its flake.nix, that are meant to keep moving. While the configuration
+        itself isn't old, the host alerts once a day when the release locks one of them at a revision older than
+        staleAfterDays: the updates to the lock have stopped, or the branch it follows has come to its end. Inputs
+        pinned on purpose, such as lanzaboote at its tag, don't belong here.
+      '';
+    };
   };
 
   # Every night the host switches to its configuration (named after its hostname) from suveraen.source.
@@ -76,20 +97,31 @@ in
         StateDirectory = "suveraen-upgrade";
       };
       preStart = "${lib.getExe resolve} ${lib.escapeShellArg flake}";
-      postStart = "cp /run/suveraen-upgrade/revcount /run/suveraen-upgrade/lastmodified ${state}/";
+      postStart = "cp /run/suveraen-upgrade/revcount /run/suveraen-upgrade/lastmodified /run/suveraen-upgrade/inputs.json ${state}/";
     };
 
     systemd.services.release-age = {
-      description = "Alert when this host's configuration is old";
+      description = "Alert when this host's configuration, or what it locks, is old";
       startAt = "12:00";
+      path = [ pkgs.jq ];
       serviceConfig.Type = "oneshot";
       script = ''
         # Nothing to compare before the first upgrade.
         [ -e ${state}/lastmodified ] || exit 0
+        now=$(date +%s)
         modified=$(< ${state}/lastmodified)
-        days=$(( ($(date +%s) - modified) / 86400 ))
+        days=$(( (now - modified) / 86400 ))
         if [ "$days" -ge ${toString cfg.staleAfterDays} ]; then
           ${alert} "stale configuration" "The configuration this host runs dates from $(date -ud "@$modified" +%F), $days days ago."
+          # What it locks is as old, and for the same reason.
+          exit 0
+        fi
+        stale=$(jq -r --argjson now "$now" --argjson after ${toString cfg.staleAfterDays} '
+          [to_entries[] | (($now - .value) / 86400 | floor) as $days | select($days >= $after)
+            | "\(.key) from \(.value | todate[0:10]), \($days) days ago"]
+          | join("; ")' ${state}/inputs.json)
+        if [ -n "$stale" ]; then
+          ${alert} "stale inputs" "The release this host runs locks $stale. Check update.yml, or move to the next NixOS release."
         fi
       '';
     };
