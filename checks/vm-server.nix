@@ -119,6 +119,10 @@ in
 
   # The tests run the upgrade's steps by hand; the timer would fire into a nightly run.
   systemd.timers.nixos-upgrade.enable = false;
+  # The node's store is the host's under an overlay held in memory: optimising it would copy the closure up into that
+  # memory, and collecting it has nothing of the node's own to free.
+  systemd.timers.nix-optimise.enable = false;
+  systemd.timers.nix-gc.enable = false;
 
   networking.hostId = "0400bdef";
   system.stateVersion = "26.05";
