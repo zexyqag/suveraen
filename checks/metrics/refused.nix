@@ -1,6 +1,6 @@
-# Rules and a job of a server's metrics that its evaluation refuses (refused.txt): each prints, or is keyed by, what may
-# not leave the server, is named so that its findings' keys could be another's, reads what no job keeps, or keeps what
-# no rule reads.
+# Rules, a job and writers of a server's metrics that its evaluation refuses (refused.txt): each prints, or is keyed by,
+# what may not leave the server, is named so that its findings' keys could be another's, or an input's a job's, reads
+# what nothing keeps or writes, keeps or writes what no rule reads, or may lack what it doesn't write.
 let
   rule = detail: {
     expr = "vector(1)";
@@ -15,6 +15,17 @@ in
     jobs.unread = {
       scrape.static_configs = [ { targets = [ "127.0.0.1:9999" ]; } ];
       keep = [ "unread_total" ];
+    };
+    textfiles = {
+      unread = {
+        script = "echo unread_written 1";
+        families = [ "unread_written" ];
+      };
+      stray = {
+        script = "echo stray_written 1";
+        families = [ "stray_written" ];
+        optional = [ "elsewhere_written" ];
+      };
     };
     rules = {
       "prints an instance" = rule "{{ $labels.instance }} found";

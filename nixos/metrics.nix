@@ -1,7 +1,7 @@
 # Each cluster server keeps its own metrics, on loopback behind a password: VictoriaMetrics scrapes and stores what the
-# jobs modules declare keep of their targets, on this host alone, and vmalert evaluates the rules modules declare on
-# them and sends nothing. The servers' checks read what those rules find (suveraen-metrics check, host-checks/metrics.jq)
-# and alert on it, and when the rules can't be checked.
+# jobs modules declare keep of their targets, on this host alone, and of what the writers modules declare measure, and
+# vmalert evaluates the rules modules declare on them and sends nothing. The servers' checks read what those rules find
+# (suveraen-metrics check, host-checks/metrics.jq) and alert on it, and when the rules can't be checked.
 {
   config,
   lib,
@@ -26,8 +26,15 @@ let
   # The labels the metrics' own rules key by, which name no person, host or address.
   ownLabels = [
     "job"
+    "writer"
     "family"
   ];
+
+  # The node's target reads the files the writers write, each <name>.prom.
+  textfiles = "/run/suveraen-metrics-textfiles";
+  textfile = name: "${textfiles}/${name}.prom";
+  # A writer's file is stale once three of its runs are due.
+  staleAfter = 3 * seconds cfg.textfileInterval;
 
   # The family a selector keeps, as node_systemd_unit_state of node_systemd_unit_state{state="failed"}.
   family = selector: lib.head (builtins.match "([a-zA-Z_:][a-zA-Z0-9_:]*).*" selector);
@@ -35,9 +42,20 @@ let
   kept = lib.concatLists (
     lib.mapAttrsToList (job: j: map (s: lib.nameValuePair (family s) job) j.keep) cfg.jobs
   );
-  sources = lib.foldl' (
+  keptBy = lib.foldl' (
     acc: f: acc // { ${f.name} = (acc.${f.name} or [ ]) ++ [ f.value ]; }
   ) { } kept;
+  # Each family a writer writes, with the writer.
+  writtenBy = lib.foldl' (acc: w: acc // lib.genAttrs cfg.textfiles.${w}.families (_: w)) { } (
+    lib.attrNames cfg.textfiles
+  );
+  # Where each family comes from: the jobs that keep it, or its writer and the node's target, which reads its file.
+  sources =
+    keptBy
+    // lib.mapAttrs (_: w: [
+      "node"
+      w
+    ]) writtenBy;
   # What a rule reads: the families it names and where each comes from, so that a source or a family that is lost
   # holds its findings.
   inputs = r: lib.unique (lib.concatMap (f: sources.${f} or [ ] ++ [ f ]) r.reads);
@@ -46,10 +64,16 @@ let
   printable =
     r:
     ownLabels
-    ++ lib.concatMap (s: cfg.jobs.${s}.labels) (
+    ++ lib.concatMap (s: (cfg.jobs.${s} or cfg.textfiles.${s}).labels) (
       lib.unique (lib.concatMap (f: sources.${f} or [ ]) r.reads)
     );
-  everyLabel = lib.unique (ownLabels ++ lib.concatMap (j: j.labels) (lib.attrValues cfg.jobs));
+  everyLabel = lib.unique (
+    ownLabels ++ lib.concatMap (s: s.labels) (lib.attrValues cfg.jobs ++ lib.attrValues cfg.textfiles)
+  );
+  # What a source gives whenever it answers.
+  always = lib.filter (
+    f: !(writtenBy ? ${f}) || !lib.elem f cfg.textfiles.${writtenBy.${f}}.optional
+  ) read;
 
   # What vmalert may print of an alert: one of the labels given, or its value, as is or made readable.
   printed =
@@ -82,44 +106,72 @@ let
   };
 
   jobs = lib.attrNames cfg.jobs;
+  writers = lib.attrNames cfg.textfiles;
   names = lib.attrNames cfg.rules ++ lib.attrNames own;
+  fresh = w: "time() - node_textfile_mtime_seconds{file=\"${textfile w}\"}";
+  generated = {
+    for = cfg.holdFor;
+    priority = 4;
+  };
   # The rules on the metrics themselves. One whose alert names what is lost, pending or firing, holds the findings of
   # every rule reading that, as they can't be told.
-  own = {
-    "target down" = {
-      expr = "max by (job) (${
-        lib.concatMapStringsSep " or " (job: ''up{job="${job}"} == 0 or absent(up{job="${job}"})'') jobs
-      })";
-      for = cfg.holdFor;
-      priority = 4;
-      title = "metric target down";
-      cleared = "metric targets up again";
-      detail = "no answer to the scrape";
-      key = [ "job" ];
-      inputs = [ ];
-      lost = "{{ $labels.job }}";
-    };
-  }
-  // lib.optionalAttrs (read != [ ]) {
-    # A family a rule reads that its source no longer gives, as after a rename, would keep the rule from ever firing.
-    "inputs missing" = {
-      expr = lib.concatMapStringsSep " or " (
-        f:
-        lib.concatMapStringsSep " or " (
-          job: ''(label_set(absent(${f}{job="${job}"}), "family", "${f}") and on() up{job="${job}"} == 1)''
-        ) sources.${f} or [ ]
-      ) read;
-      # Longer than a source takes to give every family once it starts.
-      for = "30m";
-      priority = 4;
-      title = "metric inputs missing";
-      cleared = "metric inputs back";
-      detail = "absent while its source answers, so no rule reading it can fire";
-      key = [ "family" ];
-      inputs = lib.unique (lib.concatMap (f: sources.${f} or [ ]) read);
-      lost = "{{ $labels.family }}";
-    };
-  };
+  own = lib.mapAttrs (_: r: generated // r) (
+    {
+      "target down" = {
+        expr = "max by (job) (${
+          lib.concatMapStringsSep " or " (job: ''up{job="${job}"} == 0 or absent(up{job="${job}"})'') jobs
+        })";
+        title = "metric target down";
+        cleared = "metric targets up again";
+        detail = "no answer to the scrape";
+        key = [ "job" ];
+        inputs = [ ];
+        lost = "{{ $labels.job }}";
+      };
+    }
+    // lib.optionalAttrs (writers != [ ]) {
+      # A writer that failed, timed out or wrote what the node's target can't read keeps its file as it was.
+      "input stale" = {
+        expr = lib.concatMapStringsSep " or " (
+          w:
+          "(max by (writer) (label_set(${fresh w}, \"writer\", \"${w}\") > ${toString staleAfter}"
+          + " or label_set(absent(node_textfile_mtime_seconds{file=\"${textfile w}\"}), \"writer\", \"${w}\"))"
+          + " and on() up{job=\"node\"} == 1)"
+        ) writers;
+        title = "metric input stale";
+        cleared = "metric inputs fresh again";
+        detail = "not written by its last three runs, or unreadable";
+        key = [ "writer" ];
+        inputs = [ "node" ];
+        lost = "{{ $labels.writer }}";
+      };
+    }
+    // lib.optionalAttrs (always != [ ]) {
+      # A family a rule reads that its source no longer gives, as after a rename, would keep the rule from ever firing.
+      "inputs missing" = {
+        expr = lib.concatMapStringsSep " or " (
+          f:
+          let
+            missing = job: ''label_set(absent(${f}{job="${job}"}), "family", "${f}")'';
+          in
+          if writtenBy ? ${f} then
+            "(${missing "node"} and on() (${fresh writtenBy.${f}} <= ${toString staleAfter}))"
+          else
+            lib.concatMapStringsSep " or " (
+              job: ''(${missing job} and on() up{job="${job}"} == 1)''
+            ) keptBy.${f} or [ ]
+        ) always;
+        # Longer than a source takes to give every family once it starts.
+        for = "30m";
+        title = "metric inputs missing";
+        cleared = "metric inputs back";
+        detail = "absent while its source answers, so no rule reading it can fire";
+        key = [ "family" ];
+        inputs = lib.unique (lib.concatMap (f: sources.${f} or [ ]) always);
+        lost = "{{ $labels.family }}";
+      };
+    }
+  );
 
   rules = {
     groups = [
@@ -232,6 +284,65 @@ in
       '';
     };
 
+    textfileInterval = lib.mkOption {
+      type = duration;
+      default = "5m";
+      description = "How often the writers in textfiles run.";
+    };
+
+    textfiles = lib.mkOption {
+      type = lib.types.attrsOf (
+        lib.types.submodule {
+          options = {
+            script = lib.mkOption {
+              type = lib.types.lines;
+              description = ''
+                A bash script, run by root, that prints what it measures in Prometheus's text format, which becomes the
+                file the node's target reads once the script has run to its end.
+              '';
+            };
+            path = lib.mkOption {
+              type = lib.types.listOf lib.types.package;
+              default = [ ];
+              description = "Packages whose programs the script runs.";
+            };
+            timeout = lib.mkOption {
+              type = lib.types.ints.positive;
+              default = 60;
+              description = "How many seconds it may run.";
+            };
+            families = lib.mkOption {
+              type = lib.types.nonEmptyListOf lib.types.str;
+              description = "The families it writes, each one a rule reads.";
+            };
+            labels = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = ''
+                The labels of what it writes that a rule reading it may print and key its findings by, none of which
+                names a person, a host or an address.
+              '';
+            };
+            optional = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              description = ''
+                Those of its families that a host may lack, such as one of what is mounted. Any other alerts as missing
+                while the script runs without it.
+              '';
+            };
+          };
+        }
+      );
+      default = { };
+      description = ''
+        What modules measure that no target gives, by name: each a script the metrics' writer runs every
+        textfileInterval, in turn and each within its own timeout, as root, but on a read-only system and reaching
+        nothing beyond loopback, and whose file the node's target reads. One whose file goes stale alerts, and holds the
+        findings of the rules reading it.
+      '';
+    };
+
     jobs = lib.mkOption {
       type = lib.types.attrsOf (
         lib.types.submodule {
@@ -329,12 +440,14 @@ in
   config = lib.mkIf cfg.enable {
     assertions =
       let
-        # The rules that don't do as the message says, by name.
-        refused = ok: lib.attrNames (lib.filterAttrs (name: r: !ok name r) cfg.rules);
-        check = ok: message: {
-          assertion = refused ok == [ ];
-          message = "${message}: ${lib.concatStringsSep ", " (refused ok)}.";
+        # The rules, or writers, that don't do as the message says, by name.
+        refused = set: ok: lib.attrNames (lib.filterAttrs (name: r: !ok name r) set);
+        checking = set: ok: message: {
+          assertion = refused set ok == [ ];
+          message = "${message}: ${lib.concatStringsSep ", " (refused set ok)}.";
         };
+        check = checking cfg.rules;
+        writing = checking cfg.textfiles;
       in
       [
         {
@@ -363,13 +476,27 @@ in
         ) "suveraen.metrics.rules are keyed only by labels the sources of what they read may print")
         (check (
           _: r: lib.all (f: sources ? ${f}) r.reads
-        ) "suveraen.metrics.rules read only families a job keeps")
+        ) "suveraen.metrics.rules read only families a job keeps or a writer writes")
         {
           assertion = lib.all (f: lib.elem f read) (lib.attrNames sources);
-          message = "suveraen.metrics.jobs keep only families a rule reads: ${
+          message = "suveraen.metrics.jobs and textfiles keep and write only families a rule reads: ${
             lib.concatStringsSep ", " (lib.filter (f: !(lib.elem f read)) (lib.attrNames sources))
           }.";
         }
+        (writing (
+          w: _: builtins.match "[a-z][a-z0-9-]*" w != null && !cfg.jobs ? ${w}
+        ) "suveraen.metrics.textfiles are named [a-z][a-z0-9-]*, other than a job")
+        (writing
+          (
+            _: t:
+            lib.all (f: lib.elem f t.families) t.optional
+            && lib.all (
+              f:
+              !keptBy ? ${f} && lib.length (lib.filter (v: lib.elem f cfg.textfiles.${v}.families) writers) == 1
+            ) t.families
+          )
+          "suveraen.metrics.textfiles write families of their own, which no job keeps, and may lack only those"
+        )
       ];
 
     suveraen.metrics.jobs.node.scrape = {
@@ -438,7 +565,12 @@ in
             metric_relabel_configs = [
               {
                 action = "keep";
-                "if" = j.keep;
+                # The node's target reads the writers' files too.
+                "if" =
+                  j.keep
+                  ++ lib.optionals (job == "node" && writers != [ ]) (
+                    [ "node_textfile_mtime_seconds" ] ++ lib.attrNames writtenBy
+                  );
               }
             ];
           }
@@ -520,6 +652,10 @@ in
         "--collector.disable-defaults"
         "--collector.systemd.enable-restarts-metrics"
         "--web.config.file=%d/web.yml"
+      ]
+      ++ lib.optionals (writers != [ ]) [
+        "--collector.textfile"
+        "--collector.textfile.directory=${textfiles}"
       ];
     };
     systemd.services.prometheus-node-exporter = {
@@ -594,6 +730,67 @@ in
           "node_nf_conntrack_entries"
           "node_nf_conntrack_entries_limit"
         ];
+      };
+    };
+
+    # Each writer in turn, so one that hangs or fails leaves the others' files fresh, and its own as it was.
+    systemd.services.suveraen-metrics-textfiles = lib.mkIf (writers != [ ]) {
+      description = "Write what modules measure for this server's metrics";
+      serviceConfig = {
+        Type = "oneshot";
+        RuntimeDirectory = baseNameOf textfiles;
+        RuntimeDirectoryMode = "0755";
+        RuntimeDirectoryPreserve = true;
+        TimeoutStartSec = lib.foldl' (sum: t: sum + t.timeout) 30 (lib.attrValues cfg.textfiles);
+        MemoryMax = "256M";
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+        NoNewPrivileges = true;
+        ProtectClock = true;
+        ProtectControlGroups = true;
+        ProtectHostname = true;
+        ProtectKernelLogs = true;
+        ProtectKernelModules = true;
+        ProtectKernelTunables = true;
+        LockPersonality = true;
+        RestrictNamespaces = true;
+        RestrictRealtime = true;
+        RestrictSUIDSGID = true;
+        SystemCallArchitectures = "native";
+        RestrictAddressFamilies = [
+          "AF_UNIX"
+          "AF_INET"
+          "AF_INET6"
+        ];
+      }
+      // confined;
+      script = lib.concatStrings (
+        lib.mapAttrsToList (
+          name: t:
+          let
+            writer = pkgs.writeShellApplication {
+              name = "metrics-textfile-${name}";
+              runtimeInputs = t.path;
+              text = t.script;
+            };
+          in
+          ''
+            if ${pkgs.coreutils}/bin/timeout ${toString t.timeout} ${lib.getExe writer} >${textfile name}.new; then
+              mv ${textfile name}.new ${textfile name}
+            else
+              echo "${name}: exit status $?"
+              rm -f ${textfile name}.new
+            fi
+          ''
+        ) cfg.textfiles
+      );
+    };
+    systemd.timers.suveraen-metrics-textfiles = lib.mkIf (writers != [ ]) {
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "30s";
+        OnUnitActiveSec = cfg.textfileInterval;
       };
     };
 

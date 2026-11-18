@@ -1,5 +1,5 @@
-# The rules nixos/metrics.nix holds on the metrics themselves: the Watchdog, and a target that answers no scrape, or
-# that no scrape reaches at all.
+# The rules nixos/metrics.nix holds on the metrics themselves: the Watchdog, a target that answers no scrape, or that no
+# scrape reaches at all, a writer's file that goes stale, or was never written, and a family a writer leaves out.
 rule_files:
   - rules.yml
 evaluation_interval: 1m
@@ -48,3 +48,48 @@ tests:
         groupname: metrics
         alertname: target down
         exp_alerts: [*node]
+  - interval: 1m
+    input_series:
+      - series: 'up{job="node", instance="127.0.0.1:9100"}'
+        values: '1x60'
+      # Written each minute for the first ten, then no more, in vmalert-tool's time, which starts in 2000; the other
+      # writer's file was never there.
+      - series: 'node_textfile_mtime_seconds{job="node", instance="127.0.0.1:9100", file="/run/suveraen-metrics-textfiles/pools.prom"}'
+        values: '946684800+60x10 946685400x50'
+    alert_rule_test:
+      - eval_time: 25m
+        groupname: metrics
+        alertname: input stale
+        exp_alerts:
+          - &datasets
+            exp_labels: {writer: datasets, priority: "4"}
+            exp_annotations:
+              title: metric input stale
+              cleared: metric inputs fresh again
+              detail: not written by its last three runs, or unreadable
+              key: datasets
+              inputs: node
+              lost: datasets
+      - eval_time: 45m
+        groupname: metrics
+        alertname: input stale
+        exp_alerts:
+          - *datasets
+          - exp_labels: {writer: pools, priority: "4"}
+            exp_annotations:
+              title: metric input stale
+              cleared: metric inputs fresh again
+              detail: not written by its last three runs, or unreadable
+              key: pools
+              inputs: node
+              lost: pools
+  - interval: 1m
+    input_series:
+      - series: 'up{job="node", instance="127.0.0.1:9100"}'
+        values: '0x60'
+    alert_rule_test:
+      # A target that doesn't answer is down, and the files it reads aren't stale.
+      - eval_time: 45m
+        groupname: metrics
+        alertname: input stale
+        exp_alerts: []

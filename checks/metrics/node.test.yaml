@@ -1,5 +1,6 @@
 # The node's own rules (nixos/metrics.nix): units that fail without alerting by themselves, or keep restarting, memory
-# running out, OOM kills and the connection table filling; and a family no longer in what the node's target gives.
+# running out, OOM kills and the connection table filling; and a family no longer in what the node's target, or a
+# writer's file, gives.
 rule_files:
   - rules.yml
 evaluation_interval: 1m
@@ -164,6 +165,9 @@ tests:
         values: '262144x60'
       - series: 'node_nf_conntrack_entries{job="node", instance="127.0.0.1:9100"}'
         values: '1000x60'
+      # And a writer's file, written each minute in vmalert-tool's time, which starts in 2000, without its family.
+      - series: 'node_textfile_mtime_seconds{job="node", instance="127.0.0.1:9100", file="/run/suveraen-metrics-textfiles/pools.prom"}'
+        values: '946684800+60x60'
     alert_rule_test:
       - eval_time: 20m
         groupname: metrics
@@ -180,8 +184,16 @@ tests:
               cleared: metric inputs back
               detail: absent while its source answers, so no rule reading it can fire
               key: node_pressure_memory_stalled_seconds_total
-              inputs: node
+              inputs: node pools
               lost: node_pressure_memory_stalled_seconds_total
+          - exp_labels: {job: node, family: pool_capacity_ratio, priority: "4"}
+            exp_annotations:
+              title: metric inputs missing
+              cleared: metric inputs back
+              detail: absent while its source answers, so no rule reading it can fire
+              key: pool_capacity_ratio
+              inputs: node pools
+              lost: pool_capacity_ratio
   - interval: 1m
     input_series:
       # A target that doesn't answer is down, and its families aren't missing.

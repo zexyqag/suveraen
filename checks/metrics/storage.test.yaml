@@ -1,0 +1,74 @@
+# Storage's rules (nixos/storage.nix): a pool, or a bounded dataset, filling.
+rule_files:
+  - rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'pool_capacity_ratio{job="node", instance="127.0.0.1:9100", pool="rpool"}'
+        values: '0.5x10 0.85x40 0.95x60'
+    alert_rule_test:
+      - eval_time: 20m
+        groupname: metrics
+        alertname: pool nearly full
+        exp_alerts: []
+      - eval_time: 30m
+        groupname: metrics
+        alertname: pool nearly full
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, pool: rpool, priority: "4"}
+            exp_annotations:
+              title: pool nearly full
+              cleared: pools have room again
+              detail: 85% taken
+              key: rpool
+              inputs: node pools pool_capacity_ratio
+      # Past nine tenths it alerts again, at top priority.
+      - eval_time: 30m
+        groupname: metrics
+        alertname: pool critically full
+        exp_alerts: []
+      - eval_time: 80m
+        groupname: metrics
+        alertname: pool critically full
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, pool: rpool, priority: "5"}
+            exp_annotations:
+              title: pool critically full
+              cleared: pools no longer critically full
+              detail: 95% taken
+              key: rpool
+              inputs: node pools pool_capacity_ratio
+      - eval_time: 80m
+        groupname: metrics
+        alertname: pool nearly full
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, pool: rpool, priority: "4"}
+            exp_annotations:
+              title: pool nearly full
+              cleared: pools have room again
+              detail: 95% taken
+              key: rpool
+              inputs: node pools pool_capacity_ratio
+  - interval: 1m
+    input_series:
+      - series: 'dataset_size_bytes{job="node", instance="127.0.0.1:9100", mountpoint="/var/log"}'
+        values: '16000000000x60'
+      - series: 'dataset_avail_bytes{job="node", instance="127.0.0.1:9100", mountpoint="/var/log"}'
+        values: '8000000000x10 1000000000x50'
+      - series: 'dataset_size_bytes{job="node", instance="127.0.0.1:9100", mountpoint="/var/lib/kubelet"}'
+        values: '64000000000x60'
+      - series: 'dataset_avail_bytes{job="node", instance="127.0.0.1:9100", mountpoint="/var/lib/kubelet"}'
+        values: '32000000000x60'
+    alert_rule_test:
+      - eval_time: 30m
+        groupname: metrics
+        alertname: datasets nearly full
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, mountpoint: /var/log, priority: "4"}
+            exp_annotations:
+              title: datasets nearly full
+              cleared: datasets have room again
+              detail: 6.25% free
+              key: /var/log
+              inputs: node datasets dataset_avail_bytes dataset_size_bytes

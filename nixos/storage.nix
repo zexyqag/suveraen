@@ -237,6 +237,10 @@ let
     rook = mounted "/var/lib/rook" { reservation = cfg.rookReservation; };
   };
   ownDatasets = lib.attrNames own ++ [ "reserved" ];
+  # Where the datasets bounded by a quota are mounted, which fill before the pool does.
+  bounded =
+    lib.mapAttrsToList (_: d: d.mountpoint) (lib.filterAttrs (_: d: d.options ? quota) own)
+    ++ lib.mapAttrsToList (_: d: d.path) cfg.unsnapshotted;
 in
 {
   options.suveraen.storage = {
@@ -618,5 +622,77 @@ in
       "zfs-health"
       "sanoid"
     ];
+
+    suveraen.metrics = lib.mkIf config.suveraen.metrics.enable {
+      # How much of each pool is taken, and of each bounded dataset that is mounted, which a test's VM has none of.
+      textfiles = {
+        pools = lib.mkIf pooled {
+          path = [ pkgs.gawk ];
+          labels = [ "pool" ];
+          script = ''
+            echo '# TYPE pool_capacity_ratio gauge'
+            ${zfs}/sbin/zpool list -Hp -o name,capacity \
+              | awk '{ sub("%", "", $2); printf "pool_capacity_ratio{pool=\"%s\"} %s\n", $1, $2 / 100 }'
+          '';
+          families = [ "pool_capacity_ratio" ];
+        };
+        datasets = {
+          path = [ pkgs.coreutils ];
+          script = ''
+            avail=() size=()
+            for path in ${lib.escapeShellArgs bounded}; do
+              read -r target free total < <(df -B1 --output=target,avail,size "$path" 2>/dev/null | tail -n 1) || continue
+              [ "$target" = "$path" ] || continue
+              avail+=("dataset_avail_bytes{mountpoint=\"$path\"} $free")
+              size+=("dataset_size_bytes{mountpoint=\"$path\"} $total")
+            done
+            if [ "''${#avail[@]}" -gt 0 ]; then
+              printf '%s\n' '# TYPE dataset_avail_bytes gauge' "''${avail[@]}" '# TYPE dataset_size_bytes gauge' "''${size[@]}"
+            fi
+          '';
+          families = [
+            "dataset_avail_bytes"
+            "dataset_size_bytes"
+          ];
+          labels = [ "mountpoint" ];
+          optional = [
+            "dataset_avail_bytes"
+            "dataset_size_bytes"
+          ];
+        };
+      };
+      rules = {
+        "pool nearly full" = lib.mkIf pooled {
+          expr = "pool_capacity_ratio > 0.8";
+          title = "pool nearly full";
+          cleared = "pools have room again";
+          detail = "{{ $value | humanizePercentage }} taken";
+          key = [ "pool" ];
+          reads = [ "pool_capacity_ratio" ];
+        };
+        # Past nine tenths ZFS slows down, and the last tenth goes fast.
+        "pool critically full" = lib.mkIf pooled {
+          expr = "pool_capacity_ratio > 0.9";
+          priority = 5;
+          title = "pool critically full";
+          cleared = "pools no longer critically full";
+          detail = "{{ $value | humanizePercentage }} taken";
+          key = [ "pool" ];
+          reads = [ "pool_capacity_ratio" ];
+        };
+        # The kubelet evicts pods once less than a twentieth of its own is free.
+        "datasets nearly full" = {
+          expr = "dataset_avail_bytes / dataset_size_bytes < 0.1";
+          title = "datasets nearly full";
+          cleared = "datasets have room again";
+          detail = "{{ $value | humanizePercentage }} free";
+          key = [ "mountpoint" ];
+          reads = [
+            "dataset_avail_bytes"
+            "dataset_size_bytes"
+          ];
+        };
+      };
+    };
   };
 }

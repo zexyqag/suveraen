@@ -3,8 +3,8 @@
 # bitmap, at least at their size and with nothing on them, LVM's commands reach them by an ordinary PATH, and all stay
 # readable when one disk fails; k3s's and the monitors' datasets are bounded or reserved as set and mounted outside
 # rpool/var; containerd's dataset takes overlay mounts, so k3s keeps its overlayfs snapshotter there; the journal, the
-# metrics, and a dynamic user's state declared so, lie on bounded datasets outside the snapshots of /var; and the pool's
-# health check passes.
+# metrics, and a dynamic user's state declared so, lie on bounded datasets outside the snapshots of /var; the pool's
+# health check passes; and the metrics read how much of the pool, and of each bounded dataset, is taken.
 { lib, pkgs, ... }:
 let
   keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
@@ -138,6 +138,13 @@ in
     machine.succeed("systemctl start --wait sanoid && test $(systemctl show -P Result sanoid) = success")
     machine.succeed("zfs list -Ho name -t snapshot -r rpool/var | grep -q '^rpool/var@'")
     machine.succeed("test -z \"$(zfs list -Ho name -t snapshot -r rpool/log rpool/probe rpool/host-checks rpool/metrics)\"")
+
+    # What the metrics read of the pool, as root, but on a read-only system, and of each bounded dataset.
+    machine.succeed("systemctl start suveraen-metrics-textfiles")
+    machine.succeed("grep -Eqx 'pool_capacity_ratio\\{pool=\"rpool\"\\} 0(\\.[0-9]+)?' /run/suveraen-metrics-textfiles/pools.prom")
+    for path in ["/var/lib/rancher/k3s/agent/containerd", "/var/lib/kubelet", "/var/log", "/var/lib/private/probe",
+                 "/var/lib/private/victoriametrics"]:
+        machine.succeed(f"grep -q '^dataset_avail_bytes{{mountpoint=\"{path}\"}} [0-9]' /run/suveraen-metrics-textfiles/datasets.prom")
 
     # Writes, whiteouts included, land in the upper directory on ZFS.
     probe = "/var/lib/rancher/k3s/agent/containerd/overlay-probe"
