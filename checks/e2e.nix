@@ -35,7 +35,9 @@
 # Flux takes charts from the release alone: its one GitRepository, and a HelmChart per vendored chart at the version
 # its record gives, which every HelmRelease runs.
 # containerd pulled every image through the server's mirror alone, which holds images of every registry it lists, all
-# of every image the node holds, and answers.
+# of every image the node holds, and answers. With the mirror and every pod cut off from the internet, a
+# source-controller started afresh builds every chart again from the forge's release, and an image containerd no longer
+# holds comes back from the mirror.
 # Apps see a pseudonym per host in place of each client's address, never an address a client names in a header. The
 # gateway gets each client's own address, limits each by it, and changes its key when it restarts; neither it nor a
 # tenant's pod logs a client's address.
@@ -710,6 +712,21 @@ runTest {
             "tenant busy" = ".*";
             "tenant stalled" = ".*";
           };
+      # Whatever the mirror sends leaves by loopback or not at all, so it serves only what it holds; and no pod leaves
+      # by the server's uplink, so Flux has the forge's release alone to build its charts from.
+      mirrorUser = nodes.server.systemd.services.zot.serviceConfig.User;
+      upstreamsCut = pkgs.writeText "upstreams-cut.nft" ''
+        table inet upstreams-cut {
+          chain output {
+            type filter hook output priority filter; policy accept;
+            oifname != "lo" meta skuid ${mirrorUser} reject
+          }
+          chain forward {
+            type filter hook forward priority filter; policy accept;
+            oifname "${nodes.server.suveraen.network.interface}" reject
+          }
+        }
+      '';
     in
     ''
       import base64
@@ -1187,6 +1204,72 @@ runTest {
               assert in_store('{__name__=~"pod_cpu_usage_seconds_total|container_pressure_io_stalled_seconds_total"}') == []
               named = {label for r in in_store('{job=~"kubelet|cadvisor|resource"}') for label in r["metric"]}
               assert not named & {"id", "image", "name", "uid", "boot_id", "machine_id", "system_uuid"}, named
+
+          with subtest("With the mirror and every pod cut off from the internet, a source-controller started afresh builds every chart again from the forge's release, and an image containerd no longer holds comes back from the mirror"):
+              server.succeed("nft -f ${upstreamsCut}")
+              registries = ${builtins.toJSON (map (u: u.url) (lib.attrValues nodes.server.suveraen.mirror.upstreams))}
+              # 7 is curl's for a connection refused.
+              for registry in registries:
+                  server.succeed(
+                      f"code=0; runuser -u ${mirrorUser} -- curl -sS -m 10 -o /dev/null {registry}/v2/ || code=$?; test $code = 7"
+                  )
+              lost_ns, lost_pod, lost_image = min(
+                  (p["metadata"]["namespace"], p["metadata"]["name"], c["image"])
+                  for p in items("pods") if p["metadata"].get("labels", {}).get("app.kubernetes.io/controller") == "hello"
+                  for c in p["spec"]["containers"]
+              )
+              # From a namespace without network policies, in hello's image, which has curl.
+              cut_probe = {
+                  "apiVersion": "v1",
+                  "kind": "Pod",
+                  "metadata": {"name": "probe", "namespace": "uplink"},
+                  "spec": {
+                      "securityContext": {"runAsNonRoot": True, "runAsUser": 65534, "seccompProfile": {"type": "RuntimeDefault"}},
+                      "containers": [{
+                          "name": "probe",
+                          "image": lost_image,
+                          "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+                      }],
+                  },
+              }
+              server.succeed(
+                  f"kubectl create namespace uplink && echo {shlex.quote(json.dumps(cut_probe))} | kubectl create -f -"
+                  " && kubectl -n uplink wait pod probe --for=condition=Ready --timeout=300s"
+              )
+              for registry in registries:
+                  code = server.execute(f"kubectl -n uplink exec probe -- curl -sS -m 10 -o /dev/null {registry}/v2/")[0]
+                  assert code == 7, (registry, code)
+              server.succeed("kubectl delete namespace uplink --timeout=300s")
+              # source-controller keeps what it builds in its pod alone, so a new one fetches the release from the forge
+              # again and builds each chart anew from it, as soon as it starts.
+              charts_held = {
+                  c["metadata"]["name"]: (c["status"]["artifact"]["revision"], c["status"]["observedSourceArtifactRevision"])
+                  for c in items("helmcharts")
+              }
+              server.succeed(
+                  "kubectl -n flux-system rollout restart deployment source-controller"
+                  " && kubectl -n flux-system rollout status deployment source-controller --timeout=300s"
+              )
+              afresh = max(
+                  datetime.fromisoformat(p["metadata"]["creationTimestamp"])
+                  for p in parsed("kubectl -n flux-system get pods -l app=source-controller -o json")["items"]
+              )
+              retry(lambda _: {
+                  c["metadata"]["name"]: (c["status"]["artifact"]["revision"], c["status"]["observedSourceArtifactRevision"])
+                  for c in items("helmcharts")
+                  if [x["status"] for x in c["status"].get("conditions", []) if x["type"] == "Ready"] == ["True"]
+                  and datetime.fromisoformat(c["status"]["artifact"]["lastUpdateTime"]) >= afresh
+              } == charts_held, timeout_seconds=300)
+              # Pods that still run the image keep its layers unpacked, so containerd fetches from the mirror only its
+              # index, manifest and config.
+              server.succeed(f"k3s crictl rmi {lost_image}")
+              server.fail(f"k3s crictl inspecti {lost_image}")
+              server.succeed(f"kubectl -n {lost_ns} delete pod {lost_pod} --timeout=120s")
+              server.wait_until_succeeds(
+                  f"kubectl -n {lost_ns} wait pod -l app.kubernetes.io/controller=hello --for=condition=Ready --timeout=0",
+                  timeout=300,
+              )
+              server.succeed("nft delete table inet upstreams-cut")
 
           with subtest("The platform's pods run at its priority, tenants' at theirs, and Ceph's monitors, OSDs and CSI node plugin at the node's, which a shutdown stops last"):
               labels = {n["metadata"]["name"]: n["metadata"].get("labels", {}) for n in items("namespaces")}
