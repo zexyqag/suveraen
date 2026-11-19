@@ -2,8 +2,10 @@
 # or rewound main, a tag posing as main and an unsafe key change, terminal control codes stripped from the review,
 # a key change done in two releases, the canary signed in only when confirmed, a file that makes a Kanidm entry
 # refused once its text is other than main first held under its ID or for its entry, in any layout and from any
-# directory of the clone, while added, moved, deleted and restored ones pass, and refusals while checks fail or can't
-# be read.
+# directory of the clone, while added, moved, deleted and restored ones pass, the vendored charts a release changes
+# with their versions, signers and sources, a moved one where it went and where it was, a tree changed without its
+# record flagged, a note on when each part of a release that changes both nixos/ and kubernetes/ applies, and refusals
+# while checks fail or can't be read.
 { pkgs, approve }:
 pkgs.runCommand "approve-test"
   {
@@ -185,6 +187,50 @@ pkgs.runCommand "approve-test"
     stage "sed '/10-hello-oidc.json/,+1d' ../sso.yaml > $sso" "hello-users is back"
     echo release | approve
     released
+
+    # Each vendored chart that changes, by its record: its versions or tag, its signer and whether that or its source
+    # changes, where one that moved went and where it was, and a tree that changes while its record doesn't.
+    vendor=kubernetes/platform/demo/vendor
+    # record <name> version|tag:<value> <values.yaml> <PGP key or none> [<source>]
+    record() {
+      mkdir -p $vendor/$1 && echo "$3" > $vendor/$1/values.yaml
+      if [ "$4" = none ]; then signer='"none"'; else signer="{\"pgp\": \"$4\"}"; fi
+      echo "{\"source\": \"''${5:-oci://registry.example.org/demo/$1}\", \"''${2%%:*}\": \"''${2#*:}\", \"signer\": $signer}" \
+        > $vendor/$1.json
+    }
+    stage "record chart version:1.0.0 one none && record crds tag:v1.0.0 one none" "charts"
+    echo release | approve > ../out
+    released
+    grep -qx "  $vendor/chart: new at 1.0.0, unsigned" ../out
+    grep -qx "  $vendor/crds: new at v1.0.0, unsigned" ../out
+    other=kubernetes/platform/other/vendor
+    stage "mkdir -p $other && git mv $vendor/crds $vendor/crds.json $other/" "crds moved"
+    echo release | approve > ../out
+    released
+    grep -qx "  $vendor/crds: removed" ../out
+    grep -qx "  $other/crds: new at v1.0.0, unsigned" ../out
+    stage "git mv $other/crds $other/crds.json $vendor/" "crds back"
+    echo release | approve
+    released
+    stage "record chart version:1.1.0 two 0123ABCD && rm -r $vendor/crds $vendor/crds.json" "chart signed, crds gone"
+    echo release | approve > ../out
+    released
+    grep -qx "  $vendor/chart: 1.0.0 to 1.1.0, PGP key 0123ABCD, signer changes" ../out
+    grep -qx "  $vendor/crds: removed" ../out
+    stage "record chart version:1.1.0 two 0123ABCD oci://elsewhere.example.org/chart" "chart elsewhere"
+    echo release | approve > ../out
+    released
+    grep -qx "  $vendor/chart: 1.1.0, PGP key 0123ABCD, source changes from oci://registry.example.org/demo/chart" ../out
+    stage "echo three > $vendor/chart/values.yaml" "chart by hand"
+    echo release | approve > ../out
+    released
+    grep -qx "  $vendor/chart: 1.1.0, PGP key 0123ABCD, tree changed, record didn't" ../out
+    ! grep -q "nixos/ and kubernetes/" ../out || exit 1
+    # A release that changes both says when each applies.
+    stage "mkdir -p nixos && echo '{ }' > nixos/default.nix && echo four > $vendor/chart/values.yaml" "both"
+    echo release | approve > ../out
+    released
+    grep -q "^This changes both nixos/ and kubernetes/: the cluster applies kubernetes/ within minutes" ../out
 
     git config user.signingkey $keys/owner
     stage "echo four > four" four

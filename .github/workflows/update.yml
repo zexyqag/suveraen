@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "17 2 * * *"
   workflow_dispatch:
+    inputs:
+      charts:
+        description: Lines of arguments to release/charts.sh, one run each, in place of the lock update
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -20,18 +25,40 @@ jobs:
     outputs:
       base: ${{ steps.changes.outputs.base }}
       changed: ${{ steps.changes.outputs.changed }}
+      message: ${{ steps.changes.outputs.message }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.BRANCH }}
           persist-credentials: false
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
-      - run: nix flake update
+      - if: inputs.charts == ''
+        run: nix flake update
       # With the new lock's Flux, so its images' pins come in the same commit.
-      - run: nix run .#flux-images
+      - if: inputs.charts == ''
+        run: nix run .#flux-images
+      # Each line's words are arguments, never code; the lines are the loop's input, not the tool's.
+      - if: inputs.charts != ''
+        env:
+          CHARTS: ${{ inputs.charts }}
+        run: |
+          while read -ra args; do
+            if [ ${#args[@]} -gt 0 ]; then
+              nix run .#charts -- "${args[@]}" < /dev/null
+            fi
+          done <<< "$CHARTS"
       - id: changes
+        env:
+          CHARTS: ${{ inputs.charts }}
         run: |
           echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # Named from the records, not from the lines given.
+          if [ -n "$CHARTS" ]; then
+            message=$(nix run .#charts -- summary)
+          else
+            message="flake.lock: update inputs"
+          fi
+          echo "message=$message" >> "$GITHUB_OUTPUT"
           git add -A
           git diff --cached --binary > "$RUNNER_TEMP/changes.patch"
           if [ -s "$RUNNER_TEMP/changes.patch" ]; then
@@ -70,7 +97,9 @@ jobs:
           path: ${{ runner.temp }}
       - env:
           BASE: ${{ needs.update.outputs.base }}
+          CHARTS: ${{ inputs.charts }}
           GH_TOKEN: ${{ github.token }}
+          MESSAGE: ${{ needs.update.outputs.message }}
         run: |
           # The checks ran on the commit the update job named, and that job ran upstream code: the branch must still be
           # that commit.
@@ -79,20 +108,25 @@ jobs:
             exit 1
           fi
           git apply --index "$RUNNER_TEMP/changes.patch"
-          # The patch comes from that job too: it may change only what an update changes, and only as a plain file.
-          # Read from the index, as a patch's own list of paths leaves out where a rename came from.
+          # The patch comes from that job too: it may change only what this kind of update changes, and only as a plain
+          # file. Read from the index, as a patch's own list of paths leaves out where a rename came from.
+          if [ -n "$CHARTS" ]; then
+            allowed='kubernetes/platform/[^/]+/vendor/.+|release/chart-keys/[0-9A-F]{40}\.asc'
+          else
+            allowed='flake\.lock|nixos/flux-images\.json'
+          fi
           changes=$(git diff --cached --raw --no-renames)
           while IFS= read -r change; do
             read -r _ mode _ <<< "${change#:}"
             path=${change#*$'\t'}
-            if ! [[ $mode =~ ^(100644|000000)$ && $path =~ ^(flake\.lock|nixos/flux-images\.json)$ ]]; then
+            if ! [[ $mode =~ ^(100644|000000)$ && $path =~ ^($allowed)$ ]]; then
               echo "The update changes $path, to mode $mode, which it may not." >&2
               exit 1
             fi
           done <<< "$changes"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "flake.lock: update inputs"
+          git commit -m "$MESSAGE"
           git push origin "HEAD:refs/heads/$BRANCH"
           # Pushes with this token start no workflows, and a release needs the checks' result for this commit.
           gh workflow run check.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"

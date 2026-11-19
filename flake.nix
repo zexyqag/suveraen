@@ -33,6 +33,7 @@
           curl
           diffutils
           gawk
+          gnused
           coreutils
           yq-go
         ];
@@ -50,6 +51,27 @@
           cosign
         ];
         text = builtins.readFile ./release/flux-images.sh;
+      };
+
+      charts = pkgs.writeShellApplication {
+        name = "charts";
+        runtimeInputs = with pkgs; [
+          regclient
+          cosign
+          gnupg
+          git
+          curl
+          jq
+          yq-go
+          gnutar
+          gzip
+          coreutils
+          findutils
+          diffutils
+          gawk
+          gnugrep
+        ];
+        text = builtins.readFile ./release/charts.sh;
       };
 
       config =
@@ -114,6 +136,13 @@
           meta.description = "Pin each image Flux runs to a digest signed by Flux's release workflow";
         };
 
+        # `nix run .#charts -- add|bump ...`: vendor a chart, as update.yml does when given lines of arguments.
+        charts = {
+          type = "app";
+          program = pkgs.lib.getExe charts;
+          meta.description = "Vendor a chart from its upstream pin with its signature checked, or check the vendored ones";
+        };
+
         # `nix run .#e2e`: needs KVM and internet access, so it can't be one of the checks.
         e2e = {
           type = "app";
@@ -127,6 +156,11 @@
         watcher = build ./checks/watcher.nix;
         ns = build ./checks/ns.nix;
         approve = import ./checks/approve.nix { inherit pkgs approve; };
+        charts = import ./checks/charts.nix {
+          inherit pkgs charts;
+          kubernetes = ./kubernetes;
+          release = ./release;
+        };
         render = import ./checks/render.nix {
           inherit
             pkgs

@@ -131,6 +131,35 @@ if ! git diff --quiet "$release" "$candidate" -- flake.lock; then
   echo "Inputs that change:"
   { diff <(locks "$release") <(locks "$candidate") || true; } | clean
 fi
+# Each vendored tree that changes, by its record's path without .json, with its versions, signer and source. Only the
+# tool writes a tree from upstream, and it writes the record too: a tree that changes alone was changed some other way.
+charts() {
+  git diff --name-only --no-renames "$release" "$candidate" -- 'kubernetes/platform/*/vendor/*' |
+    sed -E 's,/vendor/([^/]*)(\.json$|/.*),/vendor/\1,' | sort -u | while IFS= read -r stem; do
+    old=$(git show "$release:$stem.json" 2>/dev/null || echo null)
+    new=$(git show "$candidate:$stem.json" 2>/dev/null || echo null)
+    same=false
+    if git diff --quiet "$release" "$candidate" -- "$stem.json"; then same=true; fi
+    jq -n -r --arg stem "$stem" --argjson old "$old" --argjson new "$new" --argjson same "$same" '
+      def called: .version // .tag;
+      def signer: if . == "none" then "unsigned" elif .pgp? then "PGP key \(.pgp)"
+        elif .cosign? then "cosign \(.cosign.identity), issued by \(.cosign.issuer)" else error end;
+      "  \($stem): " + if $new == null and $old == null then "holds no record"
+      elif $new == null then "removed"
+      else [if $old == null then "new at \($new | called)" elif ($old | called) == ($new | called) then $new | called
+          else "\($old | called) to \($new | called)" end, ($new.signer | signer)]
+        + if $old != null and $old.signer != $new.signer then ["signer changes"] else [] end
+        + if $old != null and $old.source != $new.source then ["source changes from \($old.source)"] else [] end
+        + if $same then ["tree changed, record didn\u0027t"] else [] end
+        | join(", ") end' || die "$(printf %s "$stem" | clean).json isn't a chart's record."
+  done
+}
+vendored=$(charts | clean)
+if [ -n "$vendored" ]; then
+  echo
+  echo "Charts that change:"
+  echo "$vendored"
+fi
 if ! $first && ! git diff --quiet "$release" "$candidate" -- "$signers_file"; then
   echo
   echo "The signers change. After this release, only these keys can sign:"
@@ -142,6 +171,12 @@ if [ -n "$trust" ]; then
   echo
   echo "These change how releases are checked. Read them closely; every other change runs as root too:"
   echo "$trust"
+fi
+if ! git diff --quiet "$release" "$candidate" -- nixos && ! git diff --quiet "$release" "$candidate" -- kubernetes; then
+  echo
+  echo "This changes both nixos/ and kubernetes/: the cluster applies kubernetes/ within minutes, the servers nixos/ at"
+  echo "tonight's upgrade. If kubernetes/ relies on the servers' change, start nixos-upgrade.service on each server once"
+  echo "this is released."
 fi
 
 echo
