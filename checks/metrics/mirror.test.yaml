@@ -1,0 +1,48 @@
+# The mirror's rules (nixos/mirror.nix): images this node holds that it doesn't hold whole, and it not answering.
+rule_files:
+  - rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'mirror_missing{job="node", instance="127.0.0.1:9100"}'
+        values: '0x10 2x50'
+      # Stopped for half an hour.
+      - series: 'mirror_answering{job="node", instance="127.0.0.1:9100"}'
+        values: '1x10 0x30 1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        groupname: metrics
+        alertname: mirror lacks images this node holds
+        exp_alerts: []
+      - eval_time: 30m
+        groupname: metrics
+        alertname: mirror lacks images this node holds
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, priority: "4"}
+            exp_annotations:
+              title: mirror lacks images this node holds
+              cleared: mirror holds the images this node holds again
+              detail: >-
+                2 images this node holds are not wholly in the mirror: suveraen-mirror missing names them, fill fetches
+                them while upstream serves them
+              inputs: node mirror mirror_missing
+      - eval_time: 20m
+        groupname: metrics
+        alertname: mirror not answering
+        exp_alerts: []
+      - eval_time: 30m
+        groupname: metrics
+        alertname: mirror not answering
+        exp_alerts:
+          - exp_labels: {job: node, instance: 127.0.0.1:9100, priority: "4"}
+            exp_annotations:
+              title: mirror not answering
+              cleared: mirror answering again
+              detail: not ready, or not serving an image it holds whole, within 5 seconds
+              inputs: node mirror mirror_answering
+      # Answering again for longer than it is held for.
+      - eval_time: 60m
+        groupname: metrics
+        alertname: mirror not answering
+        exp_alerts: []

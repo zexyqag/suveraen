@@ -26,7 +26,8 @@
 # leave nor empty; with one provider down they still reach the other, and the phone hears of it. Wiped, the server comes
 # back from a provider's copy through its restore command, with its token file alone; another token leaves a running
 # server's own database in place.
-# Flux's controllers run the digests the release pins for their images' tags.
+# Flux's controllers run the digests the release pins for their images' tags, which they can't pull here, out of reach
+# of their registry, and the rules on the server's metrics find those pulls failing.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -363,6 +364,7 @@ pkgs.testers.runNixOSTest {
       import secrets
       import shlex
 
+      ${watching.reading}
       start_all()
       # The checks and copies run when the test says.
       server.succeed("systemctl stop host-checks.timer offsite.timer")
@@ -1378,15 +1380,22 @@ pkgs.testers.runNixOSTest {
               " | jq -e '.data.result | length == 1 and .[0].value[1] == \"1\"'",
               timeout=300,
           )
-          # Once the rules are evaluated, none fires but the Watchdog: nothing they find is late from the start.
+          # Once the rules are evaluated, none fires but the Watchdog: nothing they find is late from the start, but for
+          # image pulls failing while the pods that wait on a pull are Flux's controllers alone. That stands from then on,
+          # so the checks find it from their first run, and still late in every run after.
           server.wait_until_succeeds(
               "suveraen-metrics check | jq -e 'any(.rules[]; .name == \"Watchdog\" and any(.alerts[]; .state == \"firing\"))'",
               timeout=180,
           )
-          checked = json.loads(server.succeed("suveraen-metrics check"))["rules"]
-          assert all(r["health"] == "ok" for r in checked), checked
-          fired = {(r["name"], a["annotations"].get("key")) for r in checked for a in r["alerts"] if a["state"] == "firing"}
-          assert fired == {("Watchdog", None)}, checked
+
+          def firing_but_for_flux(_):
+              checked = json.loads(server.succeed("suveraen-metrics check"))["rules"]
+              assert all(r["health"] == "ok" for r in checked), checked
+              fired = {(r["name"], a["annotations"].get("key")) for r in checked for a in r["alerts"] if a["state"] == "firing"}
+              assert fired <= {("Watchdog", None), ("image pulls failing", None)}, checked
+              return ("image pulls failing", None) in fired and pulling() == flux_controllers() != []
+
+          retry(firing_but_for_flux, timeout_seconds=600)
 
       with subtest("The metrics account reads node metrics and nothing else"):
           reader = "--as=system:serviceaccount:kube-system:metrics"
@@ -1474,14 +1483,6 @@ pkgs.testers.runNixOSTest {
           # What an old configuration locks is as old, which doesn't alert again.
           assert len(server.succeed(old_inputs).splitlines()) == 1
 
-      # The server's alerts so far with this title, as the phone reads them.
-      def sent(title):
-          out = server.succeed(f"${ops} | jq -c --arg t {shlex.quote(f'server: {title}')} 'select(.title == $t)'")
-          return [json.loads(line) for line in out.splitlines()]
-
-      def keys(lines):
-          return {line.split(": ")[0] for line in lines.splitlines()}
-
       def at(when):
           return server.succeed(f"date -u -d '{when}' +%FT%TZ").strip()
 
@@ -1555,7 +1556,7 @@ pkgs.testers.runNixOSTest {
           found_wrong({"Flux GitRepository flux-system/suveraen": 2 * 3600, "Flux release": 2 * 86400})
           server.succeed("systemctl start host-checks")
           [late] = sent("Flux and the host on different releases; Flux not ready")
-          assert keys(late["message"]) == {"New:", "Flux GitRepository flux-system/suveraen", "Flux release"}, late
+          assert keys(late["message"]) == pulls_late | {"New:", "Flux GitRepository flux-system/suveraen", "Flux release"}, late
           server.succeed("systemctl start host-checks")
           assert len([t for t in server.succeed("${ops} | jq -r .title").splitlines() if t.startswith("server: Flux")]) == 1
           release = server.succeed("cat ${nodes.server.suveraen.upgrade.revisionFile}").strip()
@@ -1578,7 +1579,7 @@ pkgs.testers.runNixOSTest {
           found_wrong({"Flux Kustomization flux-system/probe suspended": 2 * 86400})
           server.succeed("systemctl start host-checks")
           [suspended] = sent("Flux suspended")
-          assert keys(suspended["message"]) == {"New:", "Flux Kustomization flux-system/probe suspended"}, suspended
+          assert keys(suspended["message"]) == pulls_late | {"New:", "Flux Kustomization flux-system/probe suspended"}, suspended
           assert suspended.get("priority", 3) == 3, suspended
           server.succeed("systemctl start host-checks")
           assert len(sent("Flux suspended")) == 1
@@ -1600,7 +1601,7 @@ pkgs.testers.runNixOSTest {
           issued("-85 days", "+5 days", "-25 days")
           server.succeed("systemctl start host-checks")
           [late] = sent("certificate renewal late")
-          assert keys(late["message"]) == {"New:", "certificate private/probe"}, late
+          assert keys(late["message"]) == pulls_late | {"New:", "certificate private/probe"}, late
           assert late["priority"] == 5, late
           server.succeed("systemctl start host-checks")
           assert len(sent("certificate renewal late")) == 1
@@ -1661,7 +1662,7 @@ pkgs.testers.runNixOSTest {
           # The probe file isn't there yet, but has been missed for less than its hour.
           server.succeed("systemctl start host-checks")
           [late] = sent("backups late: 3")
-          assert keys(late["message"]) == {"New:", "checks-db/postgres base backup", "checks-db/offsite", "checks-app/data-2"}, late
+          assert keys(late["message"]) == pulls_late | {"New:", "checks-db/postgres base backup", "checks-db/offsite", "checks-app/data-2"}, late
           server.succeed("systemctl start host-checks")
           assert len([t for t in server.succeed("${ops} | jq -r .title").splitlines() if t.startswith("server: backups")]) == 1
 
@@ -1718,7 +1719,7 @@ pkgs.testers.runNixOSTest {
           server.succeed("systemctl start host-checks")
           # The title counts its findings, one for each of the node's addresses.
           [unanswered] = sent(f"STUN unanswered: {len(node_addresses)}")
-          assert keys(unanswered["message"]) == {"New:"} | {f"STUN {a}" for a in node_addresses}, unanswered
+          assert keys(unanswered["message"]) == pulls_late | {"New:"} | {f"STUN {a}" for a in node_addresses}, unanswered
           server.succeed("systemctl start host-checks")
           assert len(sent(f"STUN unanswered: {len(node_addresses)}")) == 1
           server.succeed("systemctl start coturn")
@@ -1727,14 +1728,6 @@ pkgs.testers.runNixOSTest {
           server.succeed("systemctl start host-checks")
           [answered] = sent("STUN answered again")
           assert answered.get("priority", 3) == 3, answered
-
-      # What a rule on the server's metrics finds now: each alert's state and key.
-      def found_by(rule):
-          out = server.succeed(
-              f"suveraen-metrics check | jq -c --arg rule {shlex.quote(rule)}"
-              " '.rules[] | select(.name == $rule) | .alerts[] | {state, key: .annotations.key}'"
-          )
-          return [json.loads(line) for line in out.splitlines()]
 
       with subtest("With the cluster down, the server says so"):
           server.succeed("systemctl stop k3s")
@@ -1776,7 +1769,7 @@ pkgs.testers.runNixOSTest {
           found_wrong({"metric rules": 3600})
           server.succeed("systemctl start host-checks")
           [unchecked] = sent("metric rules unchecked")
-          assert keys(unchecked["message"]) == {"New:", "metric rules"}, unchecked
+          assert keys(unchecked["message"]) == pulls_late | {"New:", "metric rules"}, unchecked
           server.succeed("systemctl start host-checks")
           assert len(sent("metric rules unchecked")) == 1
           server.succeed("systemctl start vmalert")
@@ -1793,7 +1786,7 @@ pkgs.testers.runNixOSTest {
           retry(lambda _: {"state": "firing", "key": "probe.service"} in found_by("units failed"), timeout_seconds=300)
           server.succeed("systemctl start host-checks")
           [failed] = sent("units failed")
-          assert keys(failed["message"]) == {"New:", "metric units failed probe.service"}, failed
+          assert keys(failed["message"]) == pulls_late | {"New:", "metric units failed probe.service"}, failed
           server.succeed("systemctl start host-checks")
           assert len(sent("units failed")) == 1
           server.succeed("systemctl reset-failed probe")
@@ -1809,7 +1802,7 @@ pkgs.testers.runNixOSTest {
           retry(lambda _: {"state": "firing", "key": dataset} in found_by("datasets nearly full"), timeout_seconds=300)
           server.succeed("systemctl start host-checks")
           [full] = sent("datasets nearly full")
-          assert keys(full["message"]) == {"New:", f"metric datasets nearly full {dataset}"}, full
+          assert keys(full["message"]) == pulls_late | {"New:", f"metric datasets nearly full {dataset}"}, full
           server.succeed("systemctl start host-checks")
           assert len(sent("datasets nearly full")) == 1
           server.succeed(f"rm {dataset}/fill && systemctl start suveraen-metrics-textfile-datasets")
@@ -1845,7 +1838,7 @@ pkgs.testers.runNixOSTest {
           retry(lambda _: fires("containers restarting", "alpha-hello/crashing/crashing"), timeout_seconds=600)
           server.succeed("systemctl start host-checks")
           [crashing] = sent("containers restarting")
-          assert keys(crashing["message"]) == {"New:", "metric containers restarting alpha-hello/crashing/crashing"}, crashing
+          assert keys(crashing["message"]) == pulls_late | {"New:", "metric containers restarting alpha-hello/crashing/crashing"}, crashing
           server.succeed("systemctl start host-checks")
           assert len(sent("containers restarting")) == 1
           server.succeed("kubectl -n alpha-hello delete pod crashing")
@@ -1864,7 +1857,7 @@ pkgs.testers.runNixOSTest {
           retry(lambda _: fires("OOM kills", "alpha-hello/oom/oom"), timeout_seconds=300)
           server.succeed("systemctl start host-checks")
           [killed] = sent("OOM kills")
-          assert keys(killed["message"]) == {"New:", "metric OOM kills alpha-hello/oom/oom"}, killed
+          assert keys(killed["message"]) == pulls_late | {"New:", "metric OOM kills alpha-hello/oom/oom"}, killed
           server.succeed("systemctl start host-checks")
           assert len(sent("OOM kills")) == 1
           # With its pod gone, the kill is the host's no more, though it lies within the hour.

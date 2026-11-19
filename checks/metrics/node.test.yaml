@@ -167,7 +167,7 @@ tests:
               cleared: metric inputs back
               detail: absent while its source answers, so no rule reading it can fire
               key: node_pressure_memory_stalled_seconds_total
-              inputs: node containers chrony etcd pools resource cadvisor
+              inputs: node containers chrony etcd mirror pools resource cadvisor
               lost: node_pressure_memory_stalled_seconds_total
           - exp_labels: {job: node, family: pool_capacity_ratio, priority: "4"}
             exp_annotations:
@@ -175,7 +175,7 @@ tests:
               cleared: metric inputs back
               detail: absent while its source answers, so no rule reading it can fire
               key: pool_capacity_ratio
-              inputs: node containers chrony etcd pools resource cadvisor
+              inputs: node containers chrony etcd mirror pools resource cadvisor
               lost: pool_capacity_ratio
   - interval: 1m
     input_series:

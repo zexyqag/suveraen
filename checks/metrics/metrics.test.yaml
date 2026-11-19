@@ -131,6 +131,15 @@ tests:
               key: datasets
               inputs: node
               lost: datasets
+          - &mirror
+            exp_labels: {writer: mirror, needs: cluster, priority: "4"}
+            exp_annotations:
+              title: metric input stale
+              cleared: metric inputs fresh again
+              detail: not written by its last three runs, or unreadable
+              key: mirror
+              inputs: node
+              lost: mirror
       - eval_time: 45m
         groupname: metrics
         alertname: input stale
@@ -138,6 +147,7 @@ tests:
           - *chrony
           - *containers
           - *datasets
+          - *mirror
           - exp_labels: {writer: pools, priority: "4"}
             exp_annotations:
               title: metric input stale

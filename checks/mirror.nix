@@ -1,14 +1,19 @@
-# Boots a server and a stand-in registry, which serves an image built here, sharing no layer with those k3s loads,
-# under a name the server's mirror lists and one it doesn't. containerd's settings name the mirror alone, with no way
-# past it to a registry; a pod runs the image through the mirror, which keeps it, so the pod runs again with the
+# Boots a server, a watcher and a stand-in registry, which serves an image built here, sharing no layer with those k3s
+# loads, under a name the server's mirror lists and one it doesn't. containerd's settings name the mirror alone, with no
+# way past it to a registry; a pod runs the image through the mirror, which keeps it, so the pod runs again with the
 # registry gone, the image's layers gone from containerd and zot restarted, which clears what a sync or an upload left;
 # from the registry the mirror doesn't list nothing is pulled, though it serves the image too, not even under a path
 # that begins with a listed registry's name. The mirror takes no push or delete, listens on loopback alone, where only
 # root reaches it, and serves none of zot's debugging routes.
+# Pulls that keep failing, as Flux's controllers' do here, reach the phone once. An image the node holds that the mirror
+# lacks a blob of reaches it once, and so does its return once suveraen-mirror fill has brought the image back whole
+# while the registry serves it, as fill does an image one of whose blobs holds other bytes than its name says; and a
+# mirror that stops answering reaches the phone once, and so does its return.
 { pkgs, module }:
 let
   inherit (pkgs) lib;
   keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
+  watching = import ./vm-watcher.nix pkgs;
 
   listed = "registry.test";
   unlisted = "unlisted.test";
@@ -55,6 +60,14 @@ pkgs.testers.runNixOSTest {
   name = "suveraen-mirror";
 
   nodes = {
+    watcher = {
+      imports = [
+        module
+        watching.module
+      ];
+      suveraen.adminKeys = [ keys.snakeOilEd25519PublicKey ];
+    };
+
     upstream = {
       # It takes pushes from anyone, and only the seed makes one.
       services.dockerRegistry = {
@@ -105,11 +118,19 @@ pkgs.testers.runNixOSTest {
           cores = 2;
         };
 
-        networking.hosts.${nodes.upstream.networking.primaryIPAddress} = [
-          listed
-          unlisted
-        ];
+        networking.hosts = {
+          ${nodes.upstream.networking.primaryIPAddress} = [
+            listed
+            unlisted
+          ];
+          ${nodes.watcher.networking.primaryIPAddress} = [ "alerts.test" ];
+        };
         security.pki.certificateFiles = [ ca ];
+        environment.systemPackages = [ pkgs.jq ];
+
+        # The test starts these far more often than their timers do.
+        systemd.services.host-checks.startLimitIntervalSec = 0;
+        systemd.services.suveraen-metrics-textfile-mirror.startLimitIntervalSec = 0;
 
         suveraen = {
           adminKeys = [ keys.snakeOilEd25519PublicKey ];
@@ -125,9 +146,11 @@ pkgs.testers.runNixOSTest {
               credentialsFile = "/run/secrets/offsite-${n}";
             });
           };
-          alerts = {
-            urlFile = toString (pkgs.writeText "alerts-url" "http://127.0.0.1:9/ops");
-            tokenFile = toString (pkgs.writeText "alerts-token" "unused");
+          alerts = watching.alerts;
+          # So that what the rules find comes, and goes, within minutes.
+          metrics = {
+            interval = "15s";
+            holdFor = "1m";
           };
         };
       };
@@ -145,10 +168,13 @@ pkgs.testers.runNixOSTest {
       import re
       import shlex
 
+      ${watching.reading}
       start_all()
       # The checks and copies run when a test says.
       server.succeed("systemctl stop host-checks.timer offsite.timer")
       upstream.wait_for_unit("registry-seed.service")
+      watcher.wait_for_unit("nginx.service")
+      watcher.wait_until_succeeds("curl -fsS http://127.0.0.1:2586/v1/health")
       server.wait_for_unit("zot.service")
       server.wait_for_unit("k3s.service")
       server.wait_until_succeeds(
@@ -255,5 +281,74 @@ pkgs.testers.runNixOSTest {
               assert code == "404", (path, code)
           # What no other test measures: how much of the server's memory it takes.
           print("zot", server.succeed("ps -o rss= -p $(systemctl show -p MainPID --value zot)").strip(), "KiB resident")
+
+      # Whether a rule on the mirror finds it, once the mirror's writer has looked again.
+      def fires(rule):
+          server.succeed("systemctl start suveraen-metrics-textfile-mirror")
+          return found_by(rule) == [{"state": "firing", "key": None}]
+
+      def gone(rule):
+          server.succeed("systemctl start suveraen-metrics-textfile-mirror")
+          return found_by(rule) == []
+
+      # Every blob the mirror holds of the image is there, with the bytes its name says.
+      def whole():
+          blobs = f"{store}/blobs/sha256"
+          for blob in [digest, seed["config"], *seed["layers"]]:
+              server.succeed(f"test -s {blobs}/{blob.removeprefix('sha256:')}")
+          server.succeed(f"cd {blobs} && for blob in *; do echo \"$blob  $blob\"; done | sha256sum --check --quiet")
+
+      layer = f"{store}/blobs/sha256/{seed['layers'][0].removeprefix('sha256:')}"
+
+      with subtest("A pull that keeps failing reaches the phone once"):
+          # Flux's controllers', from the start.
+          retry(lambda _: {"state": "firing", "key": None} in found_by("image pulls failing")
+                and pulling() == flux_controllers() != [], timeout_seconds=600)
+          server.succeed("systemctl start host-checks")
+          [failing] = sent("image pulls failing")
+          assert keys(failing["message"]) == {"New:", "metric image pulls failing"}, failing
+          server.succeed("systemctl start host-checks")
+          assert len(sent("image pulls failing")) == 1
+
+      with subtest("An image this node holds that the mirror lacks reaches the phone once, and fill brings it back whole"):
+          upstream.succeed("systemctl start docker-registry")
+          server.wait_until_succeeds("curl -fsS -m 5 -o /dev/null https://${listed}/v2/", timeout=60)
+          assert server.succeed("suveraen-mirror missing") == "", "the image is in the mirror whole to begin with"
+          server.succeed(f"rm {layer}")
+          retry(lambda _: fires("mirror lacks images this node holds"), timeout_seconds=300)
+          assert server.succeed("suveraen-mirror missing").split() == [image]
+          server.succeed("systemctl start host-checks")
+          [lacking] = sent("mirror lacks images this node holds")
+          assert keys(lacking["message"]) == pulls_late | {"New:", "metric mirror lacks images this node holds"}, lacking
+          server.succeed("systemctl start host-checks")
+          assert len(sent("mirror lacks images this node holds")) == 1
+          server.succeed("suveraen-mirror fill")
+          whole()
+          retry(lambda _: gone("mirror lacks images this node holds"), timeout_seconds=300)
+          server.succeed("systemctl start host-checks")
+          [back] = sent("mirror holds the images this node holds again")
+          assert back.get("priority", 3) == 3, back
+
+      with subtest("A blob whose bytes don't match its name is replaced by fill"):
+          server.succeed(f"head -c $(stat -c %s {layer}) /dev/urandom > {layer}.new && cat {layer}.new > {layer} && rm {layer}.new")
+          server.fail(f"cd {store}/blobs/sha256 && sha256sum --check --quiet <<<\"$(basename {layer})  $(basename {layer})\"")
+          # It is there, so no count finds it.
+          assert server.succeed("suveraen-mirror missing") == ""
+          server.succeed(f"suveraen-mirror fill {image}")
+          whole()
+
+      with subtest("A mirror that stops answering reaches the phone once, and so does its return"):
+          server.succeed("kill -STOP $(systemctl show -p MainPID --value zot)")
+          retry(lambda _: fires("mirror not answering"), timeout_seconds=300)
+          server.succeed("systemctl start host-checks")
+          [stopped] = sent("mirror not answering")
+          assert keys(stopped["message"]) == pulls_late | {"New:", "metric mirror not answering"}, stopped
+          server.succeed("systemctl start host-checks")
+          assert len(sent("mirror not answering")) == 1
+          server.succeed("kill -CONT $(systemctl show -p MainPID --value zot)")
+          retry(lambda _: gone("mirror not answering"), timeout_seconds=300)
+          server.succeed("systemctl start host-checks")
+          [back] = sent("mirror answering again")
+          assert back.get("priority", 3) == 3, back
     '';
 }

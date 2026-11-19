@@ -1,7 +1,9 @@
 # Every image the cluster pulls comes through the server's own mirror, Zot built with nothing but its sync: it fetches
 # each from its registry the first time containerd asks for it and keeps it, on a bounded dataset of its own.
 # containerd pulls from nowhere else, so an image from a registry the mirror doesn't list isn't pulled at all. It
-# answers on loopback, to root alone, and takes no push or delete.
+# answers on loopback, to root alone, and takes no push or delete. The server's metrics count the images containerd
+# holds that the mirror doesn't hold whole, and tell whether it answers; `suveraen-mirror missing` names those images,
+# and `suveraen-mirror fill` makes them whole again while their registries serve them.
 {
   config,
   lib,
@@ -102,6 +104,169 @@ let
       // {
         "*".endpoint = [ "http://127.0.0.1:${port}/v2/unlisted" ];
       };
+  };
+
+  # How long the mirror has to answer the writer.
+  probeSeconds = 5;
+  inherit (pkgs.stdenv.hostPlatform) go;
+  # A child of an index is this node's as containerd picks it: of the node's OS and architecture, with no variant or
+  # the one containerd takes as none.
+  baseVariant =
+    {
+      amd64 = "v1";
+      arm64 = "v8";
+    }
+    .${go.GOARCH} or "";
+  # What the mirror holds of the images containerd pulled, read from its store: asked for, zot would fetch what it
+  # lacks.
+  reading = ''
+    store=${dir}
+    zot=http://127.0.0.1:${port}
+    component='[a-z0-9]([a-z0-9-]*[a-z0-9])?'
+    reference="^$component(\\.$component)*(:[0-9]+)?(/[a-z0-9]+(([._]|__|-+)[a-z0-9]+)*)+@sha256:[0-9a-f]{64}\$"
+    # The images containerd pulled, by <name>@<digest>, each once; those k3s loads itself it keeps pinned.
+    held() {
+      crictl images -o json | jq -r '[.images[] | select(.pinned | not) | .repoDigests[]?] | unique[]'
+    }
+    # Where the mirror keeps a blob of a repository's.
+    blob() { echo "$store/$1/blobs/sha256/''${2#sha256:}"; }
+    # What a blob names, a line each: of an index, its manifest for this node's platform; of a manifest, its config
+    # and its layers.
+    names() {
+      jq -er --arg os ${go.GOOS} --arg arch ${go.GOARCH} --arg base "${baseVariant}" '
+        def checked: if type == "string" and test("^sha256:[0-9a-f]{64}$") then . else error("no digest") end;
+        if has("manifests") then
+          first(.manifests[] | select(.platform.os == $os and .platform.architecture == $arch
+            and (.platform.variant // "" | . == "" or . == $base)))
+          | "manifest \(.digest | checked)"
+        else
+          "blob \(.config.digest | checked)", (.layers[] | "blob \(.digest | checked)")
+        end' "$1" 2>/dev/null
+    }
+    # The blobs the mirror serves an image to this node with, a line each, by role and digest: the image's own (top),
+    # for an index its manifest for this platform (manifest), and the manifest's config and layers (blob), as far as
+    # the mirror holds them with the bytes their names say. It fails unless the mirror holds every one.
+    walk() {
+      local name=''${1%@*} role=top digest=''${1##*@} file named whole=0
+      [[ $1 =~ $reference ]] || return 1
+      while :; do
+        echo "$role $digest"
+        file=$(blob "$name" "$digest")
+        # Read only once its bytes are what its name says, so that each step names a blob no earlier one did.
+        [ -f "$file" ] && [ "$(sha256sum <"$file")" = "''${digest#sha256:}  -" ] || return 1
+        named=$(names "$file") || return 1
+        [[ $named == "manifest "* ]] || break
+        role=manifest digest=''${named#manifest }
+      done
+      echo "$named"
+      while read -r _ digest; do
+        [ -f "$(blob "$name" "$digest")" ] || whole=1
+      done <<<"$named"
+      return "$whole"
+    }
+  '';
+
+  command = pkgs.writeShellApplication {
+    name = "suveraen-mirror";
+    runtimeInputs = [
+      cluster.crictl
+      pkgs.jq
+      pkgs.curl
+      pkgs.coreutils
+    ];
+    text = reading + ''
+      missing() {
+        local images image
+        images=$(held) || return 1
+        for image in $images; do
+          walk "$image" >/dev/null || echo "$image"
+        done
+      }
+
+      # Asks the mirror for a manifest by digest, which it syncs with whatever else of it it lacks, while upstream
+      # serves it. zot answers once it holds all of that, which for a big image over a slow link takes minutes.
+      fetch() {
+        curl -fsS --max-time 1800 -o /dev/null -H "Accept: ${
+          lib.concatStringsSep ", " [
+            "application/vnd.oci.image.index.v1+json"
+            "application/vnd.oci.image.manifest.v1+json"
+            "application/vnd.docker.distribution.manifest.list.v2+json"
+            "application/vnd.docker.distribution.manifest.v2+json"
+          ]
+        }" "$zot/v2/$1/manifests/$2" || true
+      }
+
+      # zot serves a blob it holds as it is, and syncs no manifest it holds, however little of it it has.
+      repair() {
+        local name=''${1%@*} walked line digest file manifest="" gap=0 absent tried=""
+        # Whatever of the image it holds whose bytes don't match their name goes,
+        mapfile -t walked < <(walk "$1")
+        for line in "''${walked[@]}"; do
+          digest=''${line#* }
+          file=$(blob "$name" "$digest")
+          if [ -f "$file" ] && [ "$(sha256sum <"$file")" != "''${digest#sha256:}  -" ]; then rm -f -- "$file"; fi
+        done
+        # and so does its manifest when its config or a layer is missing, which it then syncs again, fetching only what
+        # it lacks.
+        mapfile -t walked < <(walk "$1")
+        for line in "''${walked[@]}"; do
+          case $line in
+            "blob "*) [ -f "$(blob "$name" "''${line#blob }")" ] || gap=1 ;;
+            *) manifest=''${line#* } ;;
+          esac
+        done
+        if [ "$gap" = 1 ]; then rm -f -- "$(blob "$name" "$manifest")"; fi
+        # Then each index or manifest missing, the first the walk comes to, until none is or one asked for still is.
+        while :; do
+          absent=""
+          mapfile -t walked < <(walk "$1")
+          for line in "''${walked[@]}"; do
+            [[ $line == "blob "* ]] || [ -f "$(blob "$name" "''${line#* }")" ] || {
+              absent=''${line#* }
+              break
+            }
+          done
+          if [ -z "$absent" ] || [ "$absent" = "$tried" ]; then return 0; fi
+          tried=$absent
+          fetch "$name" "$absent"
+        done
+      }
+
+      fill() {
+        local images image left
+        for image; do
+          [[ $image =~ $reference ]] || {
+            echo "suveraen-mirror: not <name>@sha256:<digest>: $image" >&2
+            exit 2
+          }
+        done
+        if [ $# -gt 0 ]; then images=$(printf '%s\n' "$@"); else images=$(missing); fi
+        for image in $images; do repair "$image"; done
+        left=$(for image in $images; do walk "$image" >/dev/null || echo "$image"; done)
+        if [ -n "$left" ]; then
+          echo "$left"
+          exit 1
+        fi
+      }
+
+      case ''${1:-} in
+        missing)
+          [ $# = 1 ] || {
+            echo "usage: suveraen-mirror missing" >&2
+            exit 2
+          }
+          missing
+          ;;
+        fill)
+          shift
+          fill "$@"
+          ;;
+        *)
+          echo "usage: suveraen-mirror missing | fill [<name>@<digest>...]" >&2
+          exit 2
+          ;;
+      esac
+    '';
   };
 in
 {
@@ -227,5 +392,63 @@ in
     };
 
     suveraen.alerts.units = [ "zot" ];
+
+    environment.systemPackages = [ command ];
+
+    suveraen.metrics = lib.mkIf config.suveraen.metrics.enable {
+      # Of the images containerd holds: one the mirror lost that no pod here pulled since goes unseen until asked for.
+      textfiles.mirror = {
+        path = [
+          cluster.crictl
+          pkgs.jq
+          pkgs.curl
+        ];
+        needsCluster = true;
+        after = [
+          "k3s.service"
+          "zot.service"
+        ];
+        # Up to 145 seconds for the runtime to answer, and then what the writer asks it and the mirror.
+        timeout = 210;
+        script = reading + ''
+          # Read whole first, so a runtime that can't be asked fails the writer, and its file goes stale.
+          images=$(held)
+          lacking=0 whole=""
+          for image in $images; do
+            if walk "$image" >/dev/null; then whole=''${whole:-$image}; else lacking=$((lacking + 1)); fi
+          done
+          # Ready, and serving an image it holds whole, from its store.
+          answering=0
+          probe() { curl -fsS --max-time ${toString probeSeconds} -o /dev/null "$@"; }
+          if probe "$zot/readyz" \
+            && { [ -z "$whole" ] || probe -I "$zot/v2/''${whole%@*}/manifests/''${whole##*@}"; }; then
+            answering=1
+          fi
+          printf '%s\n' '# TYPE mirror_missing gauge' "mirror_missing $lacking" \
+            '# TYPE mirror_answering gauge' "mirror_answering $answering"
+        '';
+        families = [
+          "mirror_missing"
+          "mirror_answering"
+        ];
+      };
+      rules = {
+        "mirror lacks images this node holds" = {
+          expr = "mirror_missing > 0";
+          title = "mirror lacks images this node holds";
+          cleared = "mirror holds the images this node holds again";
+          detail = "{{ $value }} images this node holds are not wholly in the mirror: suveraen-mirror missing names them, fill fetches them while upstream serves them";
+          reads = [ "mirror_missing" ];
+        };
+        # New pulls fail meanwhile; what containerd holds still runs.
+        "mirror not answering" = {
+          expr = "mirror_answering == 0";
+          title = "mirror not answering";
+          cleared = "mirror answering again";
+          detail = "not ready, or not serving an image it holds whole, within ${toString probeSeconds} seconds";
+          reads = [ "mirror_answering" ];
+        };
+      };
+    };
   };
 }

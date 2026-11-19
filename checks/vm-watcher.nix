@@ -1,6 +1,7 @@
 # A watcher as a node of a NixOS test (module), whose ntfy and Gatus answer at alerts.test and status.test over plain
 # HTTP, with the accounts and tokens the test's servers, Gatus and phone use (secrets), how the phone reads the alerts
-# (ops), and what a server's alerts reach the watcher with once it names the watcher's address alerts.test (alerts).
+# (ops), what a server's alerts reach the watcher with once it names the watcher's address alerts.test (alerts), and,
+# in Python, how a test whose server is the node server reads its alerts on their way (reading).
 pkgs:
 let
   # ntfy tokens are "tk_" plus 29 characters.
@@ -34,6 +35,43 @@ rec {
     urlFile = toString (pkgs.writeText "alerts-url" "http://alerts.test/ops");
     tokenFile = "${secrets}/publisher-token";
   };
+
+  # How a test reads its server's alerts on their way, from the rules on its metrics to the phone.
+  reading = ''
+    # What a rule on the server's metrics finds now: each alert's state and key.
+    def found_by(rule):
+        out = server.succeed(
+            f"suveraen-metrics check | jq -c --arg rule {shlex.quote(rule)}"
+            " '.rules[] | select(.name == $rule) | .alerts[] | {state, key: .annotations.key}'"
+        )
+        return [json.loads(line) for line in out.splitlines()]
+
+    # The server's alerts so far with this title, as the phone reads them.
+    def sent(title):
+        out = server.succeed(f"${ops} | jq -c --arg t {shlex.quote(f'server: {title}')} 'select(.title == $t)'")
+        return [json.loads(line) for line in out.splitlines()]
+
+    def keys(lines):
+        return {line.split(": ")[0] for line in lines.splitlines()}
+
+    # The pods that wait on a pull of their images, by namespace and app.
+    def pulling():
+        return sorted(server.succeed(
+            "kubectl get pods -A -o json | jq -r '.items[] | select(any(.status.containerStatuses[]?,"
+            " .status.initContainerStatuses[]?; .state.waiting.reason | IN(\"ErrImagePull\", \"ImagePullBackOff\")))"
+            " | \"\\(.metadata.namespace)/\\(.metadata.labels.app)\"'"
+        ).split())
+
+    # Flux's controllers, whose registry is out of reach of a test's server: their pulls keep failing for as long as the
+    # test runs, and so stand still late in every message after the first that names them.
+    def flux_controllers():
+        return sorted(
+            f"flux-system/{name}"
+            for name in server.succeed("kubectl -n flux-system get deployments -o jsonpath='{.items[*].metadata.name}'").split()
+        )
+
+    pulls_late = {"Still late:", "metric image pulls failing"}
+  '';
 
   module =
     { lib, ... }:

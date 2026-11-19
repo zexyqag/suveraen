@@ -1,6 +1,6 @@
 # The cluster's rules (nixos/cluster.nix): containers restarting, as the runtime's records count them, and OOM kills,
-# by the container killed where there is one; volumes and etcd filling; and a tenant taking much of the node's CPU, or
-# stalled on I/O, as the sums per namespace tell.
+# by the container killed where there is one; image pulls failing, as the kubelet counts them once one has; volumes and
+# etcd filling; and a tenant taking much of the node's CPU, or stalled on I/O, as the sums per namespace tell.
 rule_files:
   - rules.yml
 evaluation_interval: 1m
@@ -98,6 +98,41 @@ tests:
       - eval_time: 90m
         groupname: metrics
         alertname: OOM kills
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      # Failing from minute 10, three times within three minutes, then once more.
+      - series: 'kubelet_runtime_operations_errors_total{job="kubelet", instance="127.0.0.1:10250", operation_type="pull_image"}'
+        values: '_x10 1 2 3 4x120'
+    alert_rule_test:
+      - eval_time: 20m
+        groupname: metrics
+        alertname: image pulls failing
+        exp_alerts: []
+      - eval_time: 30m
+        groupname: metrics
+        alertname: image pulls failing
+        exp_alerts:
+          - exp_labels: {job: kubelet, instance: 127.0.0.1:10250, operation_type: pull_image, priority: "4"}
+            exp_annotations:
+              title: image pulls failing
+              cleared: image pulls no longer failing
+              detail: 4 failed in the last hour
+              inputs: kubelet kubelet_runtime_operations_errors_total
+      # An hour after the third, and as long again as it is held for.
+      - eval_time: 90m
+        groupname: metrics
+        alertname: image pulls failing
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      # Twice within the hour.
+      - series: 'kubelet_runtime_operations_errors_total{job="kubelet", instance="127.0.0.1:10250", operation_type="pull_image"}'
+        values: '_x10 1 2x60'
+    alert_rule_test:
+      - eval_time: 40m
+        groupname: metrics
+        alertname: image pulls failing
         exp_alerts: []
   - interval: 1m
     input_series:

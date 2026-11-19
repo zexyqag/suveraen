@@ -108,6 +108,21 @@ let
   inherit (cfg.nodeServices) resolver;
   kubeletPort = 10250;
 
+  # k3s may say it has started before its runtime answers.
+  crictl = pkgs.writeShellApplication {
+    name = "crictl";
+    text = ''
+      runtime=(${lib.getExe' pkgs.cri-tools "crictl"} --runtime-endpoint unix:///run/k3s/containerd/containerd.sock --timeout 20s)
+      tries=6
+      until "''${runtime[@]}" version >/dev/null; do
+        tries=$((tries - 1))
+        [ "$tries" -gt 0 ] || exit 1
+        sleep 5
+      done
+      exec "''${runtime[@]}" "$@"
+    '';
+  };
+
   inherit (config.suveraen) metrics;
   # What the kubelet tells of the volumes pods have mounted.
   volumes = [
@@ -116,6 +131,9 @@ let
     "kubelet_volume_stats_inodes_free"
     "kubelet_volume_stats_inodes"
   ];
+  # The kubelet's count of the pulls that failed, which it gives once one has.
+  pullErrors = "kubelet_runtime_operations_errors_total";
+  pulls = ''${pullErrors}{operation_type="pull_image"}'';
   # Which namespaces are a tenant's, and where its ID and its app are in their names, as the tenant-namespaces policy
   # tells, which admits no other.
   tenancy =
@@ -430,6 +448,17 @@ in
       '';
     };
 
+    crictl = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      internal = true;
+      default = crictl;
+      description = ''
+        crictl, asking this host's container runtime, each command within 20 seconds once the runtime answers, for which
+        it waits at most six tries of 20 seconds, 5 apart.
+      '';
+    };
+
     nodeServices = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       readOnly = true;
@@ -673,9 +702,9 @@ in
       ];
     };
 
-    # What k3s serves of the kubelet's and etcd's metrics, on loopback: of the kubelet, its volumes' use, and of its
-    # pods, as only sums per namespace, how much CPU they take and how long they stall on I/O; etcd's size against its
-    # quota. Each is lost while k3s is, which the cluster's own finding tells of.
+    # What k3s serves of the kubelet's and etcd's metrics, on loopback: of the kubelet, its volumes' use and the pulls
+    # that failed, and of its pods, as only sums per namespace, how much CPU they take and how long they stall on I/O;
+    # etcd's size against its quota. Each is lost while k3s is, which the cluster's own finding tells of.
     suveraen.metrics = lib.mkIf metrics.enable {
       # What the kubelet's are read with: a token for the account above, valid for an hour, made again each time k3s
       # starts and every credentialInterval of the metrics', so one that ran out while the cluster couldn't be read is
@@ -733,13 +762,13 @@ in
         in
         {
           kubelet = kubelet "/metrics" // {
-            keep = volumes;
+            keep = volumes ++ [ pulls ];
             labels = [
               "namespace"
               "persistentvolumeclaim"
             ];
-            # As many as the volumes pods have mounted.
-            optional = volumes;
+            # As many as the volumes pods have mounted, and the pulls' errors once a pull has failed.
+            optional = volumes ++ [ pullErrors ];
           };
           cadvisor = kubelet "/metrics/cadvisor" // {
             keep = [
@@ -774,28 +803,21 @@ in
       # this keeps only the names the pod gives it, its latest attempt and whether it was last killed for memory.
       textfiles.containers = {
         path = [
-          pkgs.cri-tools
+          cfg.crictl
           pkgs.jq
         ];
         needsCluster = true;
         after = [ "k3s.service" ];
-        # Six tries, of up to 20 seconds each.
-        timeout = 150;
+        # Up to 145 seconds for the runtime to answer, and then what the writer asks it.
+        timeout = 180;
         labels = [
           "namespace"
           "pod"
           "container"
         ];
         script = ''
-          crictl() { command crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock --timeout 20s "$@"; }
-          # Read whole first, so a runtime that can't be asked fails the writer, and its file goes stale. k3s may say
-          # it has started before its runtime answers.
-          tries=6
-          until listed=$(crictl ps -a -o json); do
-            tries=$((tries - 1))
-            [ "$tries" -gt 0 ] || exit 1
-            sleep 5
-          done
+          # Read whole first, so a runtime that can't be asked fails the writer, and its file goes stale.
+          listed=$(crictl ps -a -o json)
           attempts=() killed=()
           while IFS=$'\t' read -r namespace pod container attempt exited; do
             labels="namespace=\"$namespace\",pod=\"$pod\",container=\"$container\""
@@ -868,6 +890,14 @@ in
               "container_oom_killed"
               "container_attempt"
             ];
+          };
+          # A pod whose image can't be pulled never starts a container, so no rule on containers finds it.
+          "image pulls failing" = {
+            expr = "increase(${pulls}[1h]) >= 3";
+            title = "image pulls failing";
+            cleared = "image pulls no longer failing";
+            detail = "{{ $value | humanize }} failed in the last hour";
+            reads = [ pullErrors ];
           };
           # The kubelet tells only of volumes a pod on this node mounts: one that stays unmounted longer than holdFor,
           # as with its app scaled down, clears, and alerts again once mounted.
