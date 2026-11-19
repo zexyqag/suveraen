@@ -1,0 +1,7 @@
+{
+  "source": "oci://ghcr.io/piraeusdatastore/helm-charts/snapshot-controller",
+  "version": "5.3.0",
+  "digest": "sha256:9026d5c4c86d54ff213b53bb6cb6c854ed5648bb0bf5b32614e4f26651c465d9",
+  "signer": "none",
+  "tree": "sha256:084f1c0a63fedd5154f9476554acde4df29b5af7abbd383e0f7a47ae3d81e055"
+}

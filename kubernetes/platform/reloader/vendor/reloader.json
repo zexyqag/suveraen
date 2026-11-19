@@ -1,0 +1,16 @@
+{
+  "source": "oci://ghcr.io/stakater/charts/reloader",
+  "version": "2.2.18",
+  "digest": "sha256:209bd7de47e93313249b5e9c94321d49bcd1627400eab74b2727074c3e5b5f94",
+  "signer": {
+    "cosign": {
+      "workflow": "https://github.com/stakater/Reloader/.github/workflows/push-helm-chart.yaml",
+      "issuer": "https://token.actions.githubusercontent.com"
+    }
+  },
+  "license": {
+    "url": "https://raw.githubusercontent.com/stakater/Reloader/93bac9d625556bdbd7323616fe1b05072072cdda/LICENSE",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  "tree": "sha256:2123d173234b79c6b7b6ceead5d8bd91d6d8bae7229ce0d8ba12287a9dd57a47"
+}

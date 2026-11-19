@@ -1,0 +1,9 @@
+{
+  "source": "oci://ghcr.io/traefik/helm/traefik",
+  "version": "41.7.1",
+  "digest": "sha256:ce4608f8ad8fff14b6e335f525b1f430798c91c0b74fe0751d8e3f00c97671f0",
+  "signer": {
+    "pgp": "B0FBA7678F685E9B7024B79FFD92BB57C5A71A99"
+  },
+  "tree": "sha256:1f2634d16bb0cc845903f03694f08c365dae1734daa90d9c33c20bad0bdbbe05"
+}

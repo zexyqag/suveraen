@@ -1,0 +1,13 @@
+{
+  "source": "oci://quay.io/jetstack/charts/cert-manager",
+  "version": "v1.21.2",
+  "digest": "sha256:634dce9c13b56677a2c05e2ab76c312d0be2664022d5dd05815da67e1fd5f610",
+  "signer": {
+    "pgp": "1020CF3C033D4F35BAE1C19E1226061C665DF13E"
+  },
+  "license": {
+    "url": "https://raw.githubusercontent.com/cert-manager/cert-manager/922a06aa49ee4bb802db268ef72a174af70edd32/LICENSE",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  "tree": "sha256:3fc0249c134fb2d67acb9934d6281ce0320cf5c168f5f5e2eb4ca6ac64fdcb86"
+}

@@ -1,0 +1,9 @@
+{
+  "source": "oci://ghcr.io/cloudnative-pg/charts/plugin-barman-cloud",
+  "version": "0.8.1",
+  "digest": "sha256:b48511269e2c75603ee2f06f6c5444e8154542103a3c3b9d692344725bac37b7",
+  "signer": {
+    "pgp": "699875E68BBFC9800CBD86AEE3C68F93B50C5EC0"
+  },
+  "tree": "sha256:c48da38e3f50ce0f83a9edf807e568ec5d1db65d01414b72e26f7b6a0012ed02"
+}

@@ -1,0 +1,62 @@
+{{- define "bjw-s.common.class.serviceMonitor" -}}
+  {{- $rootContext := .rootContext -}}
+  {{- $serviceMonitorObject := .object -}}
+  {{- $ctx := dict "rootContext" $rootContext "serviceMonitorObject" $serviceMonitorObject -}}
+  {{- $labels := mergeOverwrite
+    (include "bjw-s.common.lib.metadata.allLabels" $rootContext | fromYaml)
+    ($serviceMonitorObject.labels | default dict)
+  -}}
+  {{- $annotations := mergeOverwrite
+    (include "bjw-s.common.lib.metadata.globalAnnotations" $rootContext | fromYaml)
+    ($serviceMonitorObject.annotations | default dict)
+  -}}
+  {{ $service := dict -}}
+  {{ $serviceName := "" -}}
+  {{ if $serviceMonitorObject.serviceName -}}
+    {{ $serviceName = include "bjw-s.common.lib.common.renderString" (dict "value" $serviceMonitorObject.serviceName "rootContext" $rootContext) -}}
+  {{ else if not (empty (dig "service" "name" nil $serviceMonitorObject)) -}}
+    {{ $serviceName = include "bjw-s.common.lib.common.renderString" (dict "value" $serviceMonitorObject.service.name "rootContext" $rootContext) -}}
+  {{ else if not (empty (dig "service" "identifier" nil $serviceMonitorObject)) -}}
+    {{ $service = (include "bjw-s.common.lib.service.getByIdentifier" (dict "rootContext" $rootContext "id" $serviceMonitorObject.service.identifier) | fromYaml ) -}}
+    {{ if not $service -}}
+      {{fail (printf "No enabled Service found with this identifier. (serviceMonitor: '%s', identifier: '%s')" $serviceMonitorObject.identifier $serviceMonitorObject.service.identifier)}}
+    {{ end -}}
+    {{ $serviceName = $service.name -}}
+  {{ end -}}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $serviceMonitorObject.name }}
+  {{- with $labels }}
+  labels:
+    {{- range $key, $value := . }}
+      {{- printf "%s: %s" $key (include "bjw-s.common.lib.common.renderString" (dict "value" $value "rootContext" $rootContext) | toYaml ) | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  {{- with $annotations }}
+  annotations:
+    {{- range $key, $value := . }}
+      {{- printf "%s: %s" $key (include "bjw-s.common.lib.common.renderString" (dict "value" $value "rootContext" $rootContext) | toYaml ) | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  namespace: {{ $rootContext.Release.Namespace }}
+spec:
+  jobLabel: {{ include "bjw-s.common.lib.serviceMonitor.field.jobLabel" (dict "ctx" $ctx) | trim }}
+  namespaceSelector:
+    matchNames:
+      - {{ $rootContext.Release.Namespace }}
+  selector:
+    {{- if $serviceMonitorObject.selector -}}
+      {{- include "bjw-s.common.lib.common.renderString" (dict "value" ($serviceMonitorObject.selector | toYaml) "rootContext" $rootContext) | nindent 4}}
+    {{- else }}
+    matchLabels:
+      app.kubernetes.io/service: {{ $serviceName }}
+      {{- include "bjw-s.common.lib.metadata.selectorLabels" $rootContext | nindent 6 }}
+    {{- end }}
+  endpoints: {{- include "bjw-s.common.lib.common.renderString" (dict "value" (toYaml $serviceMonitorObject.endpoints) "rootContext" $rootContext) | nindent 4 }}
+  {{- if not (empty $serviceMonitorObject.targetLabels )}}
+  targetLabels:
+    {{- toYaml $serviceMonitorObject.targetLabels | nindent 4 }}
+  {{- end }}
+{{- end }}

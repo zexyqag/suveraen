@@ -1,0 +1,12 @@
+{
+  "source": "https://github.com/backube/volsync",
+  "tag": "v0.16.0",
+  "commit": "22b97b0717c74f328853d92877151392ff5ecb42",
+  "path": "helm/volsync",
+  "signer": "none",
+  "license": {
+    "path": "LICENSE"
+  },
+  "version": "0.16.0",
+  "tree": "sha256:08c9cfa74eabc5d26b06a0f80c0d57c6370f77f6b2748dcf46b8740a094372a2"
+}

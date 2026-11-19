@@ -1,0 +1,12 @@
+{
+  "source": "oci://ghcr.io/bjw-s-labs/helm/app-template",
+  "version": "5.3.0",
+  "digest": "sha256:0e13b145656490310ada364d8eb708e5f4f6384c7deb60d3f5f0fa56950ff63a",
+  "signer": {
+    "cosign": {
+      "workflow": "https://github.com/bjw-s-labs/helm-charts/.github/workflows/chart-release-steps.yaml",
+      "issuer": "https://token.actions.githubusercontent.com"
+    }
+  },
+  "tree": "sha256:4b9a7a483014fc9eb6397345a6a251fe131048f46147abfd9688ce3373f3e3c3"
+}

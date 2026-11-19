@@ -1,0 +1,16 @@
+{
+  "source": "oci://ghcr.io/rook/rook-ceph",
+  "version": "1.21.0",
+  "digest": "sha256:0b5b8ec32bec6816fc27cdc4c6649dd224cd7012e195511b1432ed0962b26d7f",
+  "signer": {
+    "cosign": {
+      "workflow": "https://github.com/rook/rook/.github/workflows/push-build.yaml",
+      "issuer": "https://token.actions.githubusercontent.com"
+    }
+  },
+  "license": {
+    "url": "https://raw.githubusercontent.com/rook/rook/f190ca3b45f131da03641741e9e03b2584cd7d5e/LICENSE",
+    "sha256": "2a9bf3e31df6ecaec382adcc5a9dacf034a16abcf20e63b7ac4630dd9b5c52a6"
+  },
+  "tree": "sha256:fb5ef0207b56fc3f3900897573af3fb1115194c790d1a22c86930d9fe50c6adc"
+}
