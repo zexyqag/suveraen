@@ -471,8 +471,13 @@ pkgs.testers.runNixOSTest {
           # Nothing of this VM's lies on it, so its boot goes on without.
           server.switch_root()
           server.fail("test -e /dev/mapper/crypt-system0")
-          journal = server.succeed("journalctl -b -u 'systemd-cryptsetup@crypt\\x2dsystem0.service' -o cat --no-pager")
-          assert "does not match the expectation: '${hostVolumeKeyId}'" in journal, journal
+          # journald rotates its files as the clock jumps back at boot, and a read in that moment can miss the initrd's
+          # lines.
+          server.wait_until_succeeds(
+              "journalctl -b -u 'systemd-cryptsetup@crypt\\x2dsystem0.service' -o cat --no-pager"
+              " | grep -F \"does not match the expectation: '${hostVolumeKeyId}'\"",
+              timeout=60,
+          )
           server.shutdown()
     '';
 }
