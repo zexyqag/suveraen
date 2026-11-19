@@ -6,10 +6,10 @@ on:
       ref:
         type: string
         default: ""
-      lock:
-        description: A flake.lock, base64-encoded, to check instead of the committed one.
-        type: string
-        default: ""
+      changes:
+        description: Check the commit with the patch in the calling run's artifact "changes" applied.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,10 +24,16 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
-      - if: inputs.lock != ''
-        env:
-          LOCK: ${{ inputs.lock }}
-        run: base64 -d <<< "$LOCK" > flake.lock
+      - if: inputs.changes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: changes
+          path: ${{ runner.temp }}
+      # A flake holds only the files git tracks.
+      - if: inputs.changes
+        run: |
+          git apply --index "$RUNNER_TEMP/changes.patch"
+          if git status --porcelain --untracked-files=all | grep '^??'; then exit 1; fi
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       - run: nix flake check --no-build
       - id: names
@@ -46,10 +52,16 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
-      - if: inputs.lock != ''
-        env:
-          LOCK: ${{ inputs.lock }}
-        run: base64 -d <<< "$LOCK" > flake.lock
+      - if: inputs.changes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: changes
+          path: ${{ runner.temp }}
+      # A flake holds only the files git tracks.
+      - if: inputs.changes
+        run: |
+          git apply --index "$RUNNER_TEMP/changes.patch"
+          if git status --porcelain --untracked-files=all | grep '^??'; then exit 1; fi
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       # The unlock check's disk image is made by systemd-repart under unshare --map-root-user, which Ubuntu's
       # AppArmor refuses to an unprivileged process unless this is off.

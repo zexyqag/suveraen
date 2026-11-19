@@ -8,8 +8,8 @@ on:
 permissions:
   contents: read
 
-# Lock updates are new changes like any other: they go to the branch the watcher runs first, never to the
-# release branch.
+# Updates are new changes like any other: they go to the branch the watcher runs first, never to the release
+# branch.
 env:
   BRANCH: staging
 
@@ -18,8 +18,8 @@ jobs:
   update:
     runs-on: ubuntu-latest
     outputs:
-      lock: ${{ steps.lock.outputs.lock }}
-      base: ${{ steps.lock.outputs.base }}
+      base: ${{ steps.changes.outputs.base }}
+      changed: ${{ steps.changes.outputs.changed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -27,39 +27,72 @@ jobs:
           persist-credentials: false
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       - run: nix flake update
-      - id: lock
+      # With the new lock's Flux, so its images' pins come in the same commit.
+      - run: nix run .#flux-images
+      - id: changes
         run: |
           echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          git diff --quiet flake.lock || echo "lock=$(base64 -w0 flake.lock)" >> "$GITHUB_OUTPUT"
+          git add -A
+          git diff --cached --binary > "$RUNNER_TEMP/changes.patch"
+          if [ -s "$RUNNER_TEMP/changes.patch" ]; then
+            echo changed=true >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: changes
+          path: ${{ runner.temp }}/changes.patch
+          if-no-files-found: error
+          retention-days: 1
 
   check:
     needs: update
-    if: needs.update.outputs.lock != ''
+    if: needs.update.outputs.changed == 'true'
     uses: ./.github/workflows/checks.yml
     with:
       ref: ${{ needs.update.outputs.base }}
-      lock: ${{ needs.update.outputs.lock }}
+      changes: true
 
   push:
     needs: [update, check]
-    if: needs.update.outputs.lock != ''
+    if: needs.update.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: write
     steps:
-      # The commit that was checked above; if the branch has moved since, the push is refused.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.update.outputs.base }}
+          ref: ${{ env.BRANCH }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: changes
+          path: ${{ runner.temp }}
       - env:
-          LOCK: ${{ needs.update.outputs.lock }}
+          BASE: ${{ needs.update.outputs.base }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          base64 -d <<< "$LOCK" > flake.lock
+          # The checks ran on the commit the update job named, and that job ran upstream code: the branch must still be
+          # that commit.
+          if [ "$(git rev-parse HEAD)" != "$BASE" ]; then
+            echo "$BRANCH isn't $BASE, which the update began from and the checks ran on." >&2
+            exit 1
+          fi
+          git apply --index "$RUNNER_TEMP/changes.patch"
+          # The patch comes from that job too: it may change only what an update changes, and only as a plain file.
+          # Read from the index, as a patch's own list of paths leaves out where a rename came from.
+          changes=$(git diff --cached --raw --no-renames)
+          while IFS= read -r change; do
+            read -r _ mode _ <<< "${change#:}"
+            path=${change#*$'\t'}
+            if ! [[ $mode =~ ^(100644|000000)$ && $path =~ ^(flake\.lock|nixos/flux-images\.json)$ ]]; then
+              echo "The update changes $path, to mode $mode, which it may not." >&2
+              exit 1
+            fi
+          done <<< "$changes"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "flake.lock: update inputs"
+          git commit -m "flake.lock: update inputs"
           git push origin "HEAD:refs/heads/$BRANCH"
           # Pushes with this token start no workflows, and a release needs the checks' result for this commit.
           gh workflow run check.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"

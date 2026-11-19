@@ -26,6 +26,7 @@
 # leave nor empty; with one provider down they still reach the other, and the phone hears of it. Wiped, the server comes
 # back from a provider's copy through its restore command, with its token file alone; another token leaves a running
 # server's own database in place.
+# Flux's controllers run the digests the release pins for their images' tags.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -418,7 +419,7 @@ pkgs.testers.runNixOSTest {
           assert status.get("enable") and status["activekey"] == "XSalsa20-POLY1305 secretboxkey", status
           stored_with_secretbox()
 
-      with subtest("Flux is installed and follows the repository"):
+      with subtest("Flux is installed, its controllers on the digests the release pins, and follows the repository"):
           server.wait_until_succeeds("kubectl -n flux-system get deployment source-controller", timeout=300)
           server.wait_until_succeeds(
               "kubectl -n flux-system get gitrepository suveraen -o jsonpath='{.spec.url}' | grep -F '${repository}'"
@@ -428,6 +429,11 @@ pkgs.testers.runNixOSTest {
               "kubectl -n flux-system get kustomization cluster -o jsonpath='{.spec.path}' | grep -F '${path}'"
           )
           server.wait_until_succeeds("kubectl -n flux-system get secret sops-age", timeout=300)
+          pins = ${builtins.toJSON (pkgs.lib.importJSON ../nixos/flux-images.json)}
+          images = server.succeed(
+              "kubectl -n flux-system get deployments -o json | jq -r '.items[] | .. | objects | select(has(\"image\")) | .image'"
+          ).split()
+          assert sorted(images) == sorted(f"{image}@{digest}" for image, digest in pins.items()), images
 
       with subtest("Ceph's disks have stable names and DB volumes, each filling a group of its own on an array over both disks that keeps a write-intent bitmap, and k3s keeps no volumes"):
           server.wait_for_unit("osd-db-volumes.service")

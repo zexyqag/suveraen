@@ -18,8 +18,19 @@ let
   # A tenant's Kustomization can start on a new revision before the root one, cluster, gives it the release's
   # settings. Those then cut short that run's health checks, which would otherwise hold them back for up to its
   # timeout.
+  # The controllers, cluster admins all, run the digest the release pins for each image's tag, never what the tag
+  # points at by then; `nix run .#flux-images` keeps the table and checks each new digest's signature.
+  fluxImages = ./flux-images.json;
+  fluxImage = ''select(.kind == "Deployment") | .. | select(tag == "!!map" and has("image")) | .image'';
   fluxComponents = pkgs.runCommand "flux-components.yaml" { } ''
-    ${lib.getExe pkgs.fluxcd} install --export | ${lib.getExe pkgs.yq-go} '
+    ${lib.getExe pkgs.fluxcd} install --export > install.yaml
+    ${lib.getExe pkgs.yq-go} ea -o=json '[${fluxImage}]' install.yaml | ${lib.getExe pkgs.jq} --slurpfile pins ${fluxImages} '
+      unique as $images | ($pins[0] | keys) as $pinned
+      | [($images - $pinned)[] | "Flux runs \(.), which nixos/flux-images.json has no pin for."]
+        + [($pinned - $images)[] | "nixos/flux-images.json pins \(.), which Flux does not run."]
+      | if . == [] then empty else "\(join("\n"))\nnix run .#flux-images updates the table.\n" | halt_error end
+    '
+    ${lib.getExe pkgs.yq-go} '
       (select(.kind == "ClusterRole").metadata.labels) |=
         with_entries(select(.key | test("^rbac.authorization.k8s.io/aggregate-to-") | not))
       | (select(.kind == "Deployment" and .metadata.name == "kustomize-controller").spec.template.spec.containers[0].args) +=
@@ -30,7 +41,8 @@ let
       | (select(.kind == "Deployment" and .metadata.name == "notification-controller").spec.template.spec.containers[0].args) +=
         ["--no-cross-namespace-refs=true"]
       | (select(.kind == "Deployment").spec.template.spec.priorityClassName) = "platform"
-    ' > $out
+      | (${fluxImage}) |= . + "@" + load("${fluxImages}")[.]
+    ' install.yaml > $out
   '';
 
   # Every pod must meet the "restricted" Pod Security Standard unless the platform labels its namespace otherwise;

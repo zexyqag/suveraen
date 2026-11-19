@@ -39,6 +39,19 @@
         text = builtins.readFile ./release/approve.sh;
       };
 
+      flux-images = pkgs.writeShellApplication {
+        name = "flux-images";
+        runtimeInputs = with pkgs; [
+          git
+          fluxcd
+          yq-go
+          jq
+          regclient
+          cosign
+        ];
+        text = builtins.readFile ./release/flux-images.sh;
+      };
+
       config =
         host:
         (nixpkgs.lib.nixosSystem {
@@ -92,6 +105,13 @@
           type = "app";
           program = pkgs.lib.getExe approve;
           meta.description = "Sign the staging branch's head as the next release";
+        };
+
+        # `nix run .#flux-images`: pin the images the flake's Flux runs, as update.yml does after updating the lock.
+        flux-images = {
+          type = "app";
+          program = pkgs.lib.getExe flux-images;
+          meta.description = "Pin each image Flux runs to a digest signed by Flux's release workflow";
         };
 
         # `nix run .#e2e`: needs KVM and internet access, so it can't be one of the checks.

@@ -137,7 +137,7 @@ if ! $first && ! git diff --quiet "$release" "$candidate" -- "$signers_file"; th
   show_signers "$candidate"
 fi
 trust=$(git diff --name-only "$release" "$candidate" -- "$signers_file" flake.nix flake.lock nixos/source.nix \
-  nixos/upgrade.nix nixos/cluster.nix nixos/default.nix .github release | clean)
+  nixos/upgrade.nix nixos/cluster.nix nixos/flux-images.json nixos/default.nix .github release | clean)
 if [ -n "$trust" ]; then
   echo
   echo "These change how releases are checked. Read them closely; every other change runs as root too:"
