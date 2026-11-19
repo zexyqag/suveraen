@@ -898,6 +898,11 @@ refuses chart-image-tag "images are pinned by digest: v3.18.1" \
   "sed -i 's/tag: v3.18.1@sha256:[0-9a-f]*\$/tag: v3.18.1/' platform/rook-ceph/app/helmrelease.yaml"
 refuses chart-image-number "images are pinned by digest: 0.16" \
   "sed -i '0,/tag: 0.16.0@sha256:[0-9a-f]*\$/s//tag: 0.16/' platform/volsync/app/helmrelease.yaml"
+refuses cert-manager-image-version \
+  "test: cert-manager's controller, webhook and cainjector run the version of its chart" \
+  "yq -i '.spec.values.webhook.image.tag |= sub(\"^[^@]*\", \"v0.0.0\")' platform/cert-manager/app/helmrelease.yaml"
+refuses cert-manager-renamed "test: cert-manager runs as HelmRelease cert-manager in flux-system" \
+  "yq -i '.metadata.name = \"certificates\"' platform/cert-manager/app/helmrelease.yaml"
 refuses cronjob-image-tag "images are pinned by digest: busybox:1" \
   "append platform/reloader/app/helmrelease.yaml '---\napiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: x
   namespace: reloader\nspec:\n  schedule: \"0 0 * * *\"\n  jobTemplate:\n    spec:\n      template:\n        spec:

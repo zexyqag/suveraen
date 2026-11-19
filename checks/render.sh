@@ -2187,6 +2187,20 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
   [ "$barrier" = "$cephcsi" ] || fail "$cluster: the DaemonSet unmap-barrier in rook-ceph, which holds a shutdown" \
     "until no volume is mapped, runs the CSI node plugin's image, already on every node that maps volumes," \
     "$cephcsi: $barrier"
+  # cert-manager's controller, webhook and cainjector are of the version of the chart that installs their CRDs.
+  certmanager='[select(.kind == "HelmRelease" and .metadata.namespace == "flux-system"
+    and .metadata.name == "cert-manager")] | .[0]'
+  chart=$(yq ea "$certmanager | .spec.chartRef.name // \"\"" "$rendered"/*.yaml)
+  export chart
+  tree=$(yq ea '[select(.kind == "HelmChart" and .metadata.namespace == "flux-system"
+    and .metadata.name == strenv(chart))] | .[0].spec.chart // ""' "$rendered"/*.yaml)
+  [ -n "$tree" ] && [ -f "$tree.json" ] || fail "$cluster: cert-manager runs as HelmRelease cert-manager in" \
+    "flux-system, from a HelmChart there that builds a tree the release vendors with its record"
+  version=$(yq -p=json -oy '.version' "$tree.json")
+  tags=$(yq ea "$certmanager | .spec.values as \$v | [\$v.image, \$v.webhook.image, \$v.cainjector.image]
+    | map(.tag // \"-\" | tostring | sub(\"@.*\", \"\")) | join(\" \")" "$rendered"/*.yaml)
+  [ "$tags" = "$version $version $version" ] || fail "$cluster: cert-manager's controller, webhook and cainjector run" \
+    "the version of its chart, $version in $tree.json: $tags"
   for issuer in public standby; do
     [ "$(yq ea "[select(.kind == \"ClusterIssuer\" and .metadata.name == \"$issuer\")] | length" "$rendered"/*.yaml)" \
       = 1 ] || fail "$cluster: the cluster has one ClusterIssuer public, which every host's certificate names, and" \

@@ -3,13 +3,12 @@
 # certificates live only in the gateway namespace, where no app's account reaches. No route needs a ReferenceGrant,
 # and only the platform's ClusterIssuers sign. cert-manager signs any CertificateRequest for an issuer it knows and
 # completes any ACME Order, and the hostnames policy can't read the names in either, so requests, Orders and their
-# Challenges too stay where cert-manager makes them from certificates. cert-manager's startup check tries a request in
-# its own namespace as a dry run, which makes nothing. What a tenant applies carries its label. Platform namespaces
-# labelled suveraen/private-ca (components/private-ca) sign their own internal names: there a self-signed or CA Issuer,
-# and only certificates it signs. An app that terminates TLS itself, behind a passthrough listener, holds its own
-# public certificate in its namespace, labelled suveraen/passthrough: one host per certificate, which the hostname map
-# gives to that namespace or its tenant. There the requests, Orders and Challenges come from cert-manager's controller
-# alone, as nothing reads the names in them.
+# Challenges too stay where cert-manager makes them from certificates. What a tenant applies carries its label.
+# Platform namespaces labelled suveraen/private-ca (components/private-ca) sign their own internal names: there a
+# self-signed or CA Issuer, and only certificates it signs. An app that terminates TLS itself, behind a passthrough
+# listener, holds its own public certificate in its namespace, labelled suveraen/passthrough: one host per certificate,
+# which the hostname map gives to that namespace or its tenant. There the requests, Orders and Challenges come from
+# cert-manager's controller alone, as nothing reads the names in them.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -52,9 +51,7 @@ spec:
         request.resource.resource in ['gateways', 'listenersets'] ? request.namespace == 'gateway' :
         request.resource.resource in ['certificates', 'certificaterequests', 'orders', 'challenges'] ?
         (request.namespace == 'gateway' || variables.passthrough && (request.resource.resource == 'certificates' ?
-        size(object.spec.?dnsNames.orValue([])) == 1 : variables.certManager)) && !variables.ownIssuer ||
-        request.resource.resource == 'certificaterequests' && request.namespace == 'cert-manager' &&
-        request.?dryRun.orValue(false) :
+        size(object.spec.?dnsNames.orValue([])) == 1 : variables.certManager)) && !variables.ownIssuer :
         request.resource.resource == 'issuers' ? variables.privateCA && (has(object.spec.selfSigned) ||
         has(object.spec.ca)) && !has(object.spec.acme) && !has(object.spec.vault) && !has(object.spec.venafi) :
         request.resource.resource == 'clusterissuers' ? object.metadata.?labels[?'suveraen/tenant'].orValue('') == '' :

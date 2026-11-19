@@ -1121,10 +1121,8 @@ pkgs.testers.runNixOSTest {
               }
 
           refused(dry(request("alpha-hello")), "edge-objects")
+          refused(dry(request("cert-manager")), "edge-objects")
           server.succeed(dry(request("gateway")))
-          # cert-manager's startup check, a dry run in its own namespace, gets through; a real request there doesn't.
-          server.succeed(dry(request("cert-manager")))
-          refused(f"echo {shlex.quote(json.dumps(request('cert-manager')))} | kubectl create -f -", "edge-objects")
 
           def order(namespace, kind="Order"):
               return {
