@@ -457,6 +457,8 @@ in
       enable = true;
       # k3s only supports upgrading one minor version at a time.
       package = pkgs.k3s_1_36;
+      # Its own images, from its release's tarball, which nixpkgs pins by hash, rather than by tag from a registry.
+      images = [ config.services.k3s.package.airgap-images ];
       role = "server";
       inherit (cfg) tokenFile;
       # Embedded etcd from the start, so more servers can join later.
@@ -590,6 +592,8 @@ in
         };
       };
     };
+    # With this file k3s remembers what it imported, rather than unpacking the tarball again on every start.
+    systemd.tmpfiles.rules = [ "f /var/lib/rancher/k3s/agent/images/.cache.json" ];
 
     # logind holds a poweroff back while the kubelet stops its groups, with time for its steps between them.
     services.logind.settings.Login.InhibitDelayMaxSec = lib.foldl' (

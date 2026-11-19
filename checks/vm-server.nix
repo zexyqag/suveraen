@@ -1,6 +1,6 @@
-# A cluster server as a node of a NixOS test: it boots from its own plain disk, so there's nothing to unlock,
-# reaches the outside through eth0 and its peers on eth1, and loads k3s's own images from the release tarball. Three
-# empty disks stand in for Ceph's, and two more for the system disks' share of the DB array.
+# A cluster server as a node of a NixOS test: it boots from its own plain disk, so there's nothing to unlock, and
+# reaches the outside through eth0 and its peers on eth1. Three empty disks stand in for Ceph's, and two more for the
+# system disks' share of the DB array.
 {
   config,
   lib,
@@ -91,10 +91,6 @@ in
       }
     ];
   };
-
-  services.k3s.images = [ config.services.k3s.package.airgap-images ];
-  # With this file k3s remembers what it imported, rather than unpacking the tarball again on every start.
-  systemd.tmpfiles.rules = [ "f /var/lib/rancher/k3s/agent/images/.cache.json" ];
 
   # The provider and key that encrypted each Secret, as etcd holds them.
   environment.systemPackages = [
