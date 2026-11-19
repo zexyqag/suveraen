@@ -1,0 +1,44 @@
+---
+# helm-controller runs without --no-cross-namespace-refs (nixos/cluster.nix) so that apps take their chart from
+# flux-system. Flux reads nothing but the signed release: its one GitRepository, and HelmCharts built from it there.
+# Flux's objects reach CEL untyped, so a field named namespace is read by index. One on its way out may still drop its
+# finalizers. GitRepository suveraen is the servers' (nixos/cluster.nix), which k3s applies as a cluster admin: no one
+# else changes what it fetches or how it is verified.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: release-sources
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [source.toolkit.fluxcd.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [gitrepositories, ocirepositories, helmrepositories, buckets, helmcharts, externalartifacts]
+      - apiGroups: [helm.toolkit.fluxcd.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [helmreleases]
+  validations:
+    - expression: >-
+        request.operation == 'UPDATE' && has(oldObject.metadata.deletionTimestamp) && object.spec == oldObject.spec ||
+        (request.resource.resource == 'helmreleases' ? has(object.spec.chartRef) &&
+          object.spec.chartRef.kind == 'HelmChart' &&
+          ('namespace' in object.spec.chartRef ? object.spec.chartRef['namespace'] : request.namespace) == 'flux-system' :
+        request.resource.resource == 'helmcharts' ? request.namespace == 'flux-system' &&
+          object.spec.sourceRef.kind == 'GitRepository' && object.spec.sourceRef.name == 'suveraen' &&
+          (!has(object.spec.reconcileStrategy) || object.spec.reconcileStrategy == 'ChartVersion') &&
+          !has(object.spec.valuesFiles) :
+        request.resource.resource == 'gitrepositories' && request.namespace == 'flux-system' &&
+          object.metadata.name == 'suveraen' &&
+          ('system:masters' in request.userInfo.groups || request.operation == 'UPDATE' && object.spec == oldObject.spec))
+      message: Flux reads only the signed release, and charts only as the release ships them, from flux-system
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: release-sources
+spec:
+  policyName: release-sources
+  validationActions: [Deny]

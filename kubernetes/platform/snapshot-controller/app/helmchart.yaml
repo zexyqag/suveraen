@@ -1,0 +1,13 @@
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmChart
+metadata:
+  name: snapshot-controller
+  namespace: flux-system
+spec:
+  interval: 12h
+  sourceRef:
+    kind: GitRepository
+    name: suveraen
+  # Its controller keeps the version of Rook's csi-snapshotter sidecar.
+  chart: ./kubernetes/platform/snapshot-controller/vendor/snapshot-controller

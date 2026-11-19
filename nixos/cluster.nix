@@ -14,7 +14,9 @@ let
   # Flux's install grants create rights on its own kinds to the built-in admin and edit roles, while its
   # controllers apply with cluster-admin rights; anyone with admin or edit in a namespace could then take over the
   # cluster. Drop those grants, and lock the controllers down so that a Flux object only gets the rights of the
-  # service account it names, with no references into other namespaces or to remote bases.
+  # service account it names, with no references into other namespaces or to remote bases; helm-controller alone may
+  # read a chart from flux-system, which kubernetes/platform/policies/app/release-sources.yaml holds to the charts the
+  # release ships.
   # A tenant's Kustomization can start on a new revision before the root one, cluster, gives it the release's
   # settings. Those then cut short that run's health checks, which would otherwise hold them back for up to its
   # timeout.
@@ -37,7 +39,7 @@ let
         ["--no-cross-namespace-refs=true", "--no-remote-bases=true", "--default-service-account=default",
          "--feature-gates=CancelHealthCheckOnNewRevision=true"]
       | (select(.kind == "Deployment" and .metadata.name == "helm-controller").spec.template.spec.containers[0].args) +=
-        ["--no-cross-namespace-refs=true", "--default-service-account=default"]
+        ["--default-service-account=default"]
       | (select(.kind == "Deployment" and .metadata.name == "notification-controller").spec.template.spec.containers[0].args) +=
         ["--no-cross-namespace-refs=true"]
       | (select(.kind == "Deployment").spec.template.spec.priorityClassName) = "platform"

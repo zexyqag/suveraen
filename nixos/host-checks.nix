@@ -268,7 +268,7 @@ let
       get /apis/kustomize.toolkit.fluxcd.io/v1/kustomizations "$run/kustomizations.json"
       get /apis/helm.toolkit.fluxcd.io/v2/helmreleases "$run/helmreleases.json"
       get /apis/source.toolkit.fluxcd.io/v1/gitrepositories "$run/gitrepositories.json"
-      get /apis/source.toolkit.fluxcd.io/v1/ocirepositories "$run/ocirepositories.json"
+      get /apis/source.toolkit.fluxcd.io/v1/helmcharts "$run/helmcharts.json"
       get /apis/cert-manager.io/v1/certificates "$run/certificates.json"
       get /apis/gateway.networking.k8s.io/v1/namespaces/gateway/gateways "$run/gateways.json"
       : >"$run/cronjobs.json"
@@ -288,7 +288,7 @@ let
 
       args=()
       for part in nodes clusters objectstores pvcs replicationsources cephcluster kustomizations helmreleases \
-        gitrepositories ocirepositories certificates gateways cronjobs idm mesh; do
+        gitrepositories helmcharts certificates gateways cronjobs idm mesh; do
         args+=(--slurpfile "$part" "$run/$part.json")
       done
       # Of Flux's objects, certificates and Gateways, only what the checks judge: a chart's values and a condition's
@@ -301,7 +301,7 @@ let
         {nodes: $nodes[0], clusters: $clusters[0], objectstores: $objectstores[0], pvcs: $pvcs[0],
           replicationsources: $replicationsources[0], cephcluster: $cephcluster[0],
           kustomizations: ($kustomizations[0] | listed(flux)), helmreleases: ($helmreleases[0] | listed(flux)),
-          gitrepositories: ($gitrepositories[0] | listed(flux)), ocirepositories: ($ocirepositories[0] | listed(flux)),
+          gitrepositories: ($gitrepositories[0] | listed(flux)), helmcharts: ($helmcharts[0] | listed(flux)),
           certificates: ($certificates[0] | listed({metadata: (.metadata | {name, namespace, creationTimestamp}),
             spec: (.spec | {secretName, dnsNames}), status: (.status // {} | {notBefore, notAfter, renewalTime})})),
           gateways: ($gateways[0] | listed({metadata: (.metadata | {name, namespace}),
@@ -680,7 +680,7 @@ in
             apiGroups = [ "source.toolkit.fluxcd.io" ];
             resources = [
               "gitrepositories"
-              "ocirepositories"
+              "helmcharts"
             ];
             verbs = [ "list" ];
           }

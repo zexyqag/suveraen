@@ -10,7 +10,7 @@ spec:
   targetNamespace: cloudnative-pg
   releaseName: cloudnative-pg
   chartRef:
-    kind: OCIRepository
+    kind: HelmChart
     name: cloudnative-pg
   install:
     crds: CreateReplace
@@ -48,7 +48,7 @@ spec:
   targetNamespace: cloudnative-pg
   releaseName: barman-cloud
   chartRef:
-    kind: OCIRepository
+    kind: HelmChart
     name: barman-cloud
   dependsOn:
     - name: cloudnative-pg

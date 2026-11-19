@@ -668,7 +668,8 @@ refuses coredns-other-tenant "$dns" \
   "sed -i 's/idm.one.test kanidm.alpha-kanidm/idm.one.test kanidm.bravo-kanidm/' clusters/test/coredns.yaml"
 refuses coredns-absent "which the cluster's DNS answers from ConfigMap coredns-custom in kube-system" \
   "sed -i '/coredns.yaml/d' clusters/test/kustomization.yaml"
-refuses cluster-dir-elsewhere "a cluster directory adds objects to flux-system alone" \
+clusterdir="a cluster directory adds Kustomizations, ConfigMaps and Secrets to flux-system alone"
+refuses cluster-dir-elsewhere "$clusterdir" \
   "append clusters/test/coredns.yaml '---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n  namespace: kube-system\n'"
 refuses map-idm-by-tenant "the hostname map gives idm.org.test, passed through to bravo-kanidm, to that namespace by" \
   "sed -i '/idm.org.test: bravo-kanidm/d' clusters/test/hostnames.yaml"
@@ -718,13 +719,67 @@ refuses np-empty-peer "a network policy rule without peers reaches everything: x
 refuses np-edge-ports-only "a network policy rule without peers reaches everything: from-gateway-" \
   "yq -i 'del(.spec.ingress[0].from)' edge/base/networkpolicy.yaml"
 
-# Sources.
-refuses helmrepository-source "sources must be pinned to a digest or a commit: HelmRepository/reloader" \
-  "append platform/reloader/app/ocirepository.yaml '---\napiVersion: source.toolkit.fluxcd.io/v1\nkind: HelmRepository
-metadata:\n  name: reloader\n  namespace: flux-system\nspec:\n  interval: 12h
-  url: https://stakater.github.io/stakater-charts\n'"
-refuses oci-tag-only "sources must be pinned to a digest or a commit: OCIRepository/reloader" \
-  "yq -i 'del(.spec.ref.digest)' platform/reloader/app/ocirepository.yaml"
+# Sources and charts.
+source="the release names no Flux source but the HelmCharts the platform builds from it:"
+oci='---\napiVersion: source.toolkit.fluxcd.io/v1\nkind: OCIRepository\nmetadata:\n  name: NAME\nspec:\n  interval: 12h
+  url: oci://ghcr.io/bjw-s-labs/helm/app-template\n  ref:\n    digest: sha256:'$(printf %064d 0)'\n'
+RC=platform/reloader/app/helmchart.yaml
+refuses oci-platform "$source OCIRepository/flux-system/reloader" \
+  "append $RC '${oci/NAME/reloader\\n  namespace: flux-system}'"
+refuses oci-app "$source OCIRepository/alpha-hello/hello" "append apps/hello/app/helmrelease.yaml '${oci/NAME/hello}'"
+refuses helmrepository "$source HelmRepository/flux-system/reloader" \
+  "append $RC '---\napiVersion: source.toolkit.fluxcd.io/v1\nkind: HelmRepository\nmetadata:\n  name: reloader
+  namespace: flux-system\nspec:\n  interval: 12h\n  url: https://stakater.github.io/stakater-charts\n'"
+refuses gitrepository "$source GitRepository/flux-system/gateway-api" \
+  "append platform/gateway-api/app/crds.yaml '---\napiVersion: source.toolkit.fluxcd.io/v1\nkind: GitRepository
+metadata:\n  name: gateway-api\n  namespace: flux-system\nspec:\n  interval: 24h
+  url: https://github.com/kubernetes-sigs/gateway-api\n  ref:\n    commit: c0836133e24073fcdcdbb1713aba3cc73a89d0b5\n'"
+refuses kustomization-other-source "test/gateway-api: Kustomizations apply the release alone, from GitRepository" \
+  "yq -i '.spec.sourceRef.name = \"gateway-api\"' platform/gateway-api/app/crds.yaml"
+refuses chart-template "never from a template of its own: flux-system/volsync" \
+  "yq -i 'del(.spec.chartRef) | .spec.chart.spec = {\"chart\": \"./kubernetes/platform/volsync/vendor/volsync\",
+   \"sourceRef\": {\"kind\": \"GitRepository\", \"name\": \"suveraen\"}}' platform/volsync/app/helmrelease.yaml"
+apprelease="an app's HelmReleases take their chart from a HelmChart the platform builds in flux-system: hello"
+refuses app-chart-other-app "$apprelease" \
+  "yq -i '.spec.chartRef.namespace = \"\${TENANT}-kanidm\"' apps/hello/app/helmrelease.yaml"
+refuses app-chart-own-namespace "$apprelease" \
+  "yq -i 'del(.spec.chartRef.namespace)' apps/hello/app/helmrelease.yaml"
+refuses app-chart-unjudged "an app's charts are app-template's, the only one quota-fit can judge: hello" \
+  "yq -i '.spec.chartRef.name = \"reloader\"' apps/hello/app/helmrelease.yaml"
+refuses platform-chart-other-piece "test/reloader: a platform HelmRelease takes its chart from a HelmChart its own" \
+  "yq -i '.spec.chartRef.name = \"cert-manager\"' platform/reloader/app/helmrelease.yaml"
+charts="test/reloader: a piece's charts are HelmCharts in flux-system"
+refuses helmchart-revision "$charts" "yq -i '.spec.reconcileStrategy = \"Revision\"' $RC"
+renders helmchart-chart-version "yq -i '.spec.reconcileStrategy = \"ChartVersion\"' $RC"
+refuses helmchart-values-files "$charts" \
+  "yq -i '.spec.valuesFiles = [\"./kubernetes/platform/reloader/vendor/reloader/values.yaml\"]' $RC"
+refuses helmchart-elsewhere "$charts" "yq -i '.metadata.namespace = \"reloader\"' $RC"
+refuses helmchart-other-source "$charts" "yq -i '.spec.sourceRef = {\"kind\": \"OCIRepository\", \"name\": \"reloader\"}' $RC"
+refuses helmchart-no-record "$charts" "yq -i '.spec.chart = \"./kubernetes/platform/reloader/vendor/other\"' $RC"
+refuses helmchart-other-piece "$charts" \
+  "yq -i '.spec.chart = \"./kubernetes/platform/cert-manager/vendor/cert-manager\"' $RC"
+refuses helmchart-in-cluster "test: HelmCharts come from the platform alone: flux-system/x" \
+  "yq ea '.metadata.name = \"x\"' $RC >>clusters/test/settings.yaml"
+refuses tree-unused "is a HelmChart's chart or a Kustomization's path in some cluster:\
+ ./kubernetes/platform/reloader/vendor/next" \
+  "cp -r platform/reloader/vendor/reloader platform/reloader/vendor/next
+   cp platform/reloader/vendor/reloader.json platform/reloader/vendor/next.json"
+refuses helmchart-unused "every HelmChart is the chart of a HelmRelease in some cluster: flux-system/app-template-next" \
+  "yq ea '.metadata.name = \"app-template-next\"' platform/app-charts/app/helmcharts.yaml >next.yaml
+   cat next.yaml >>platform/app-charts/app/helmcharts.yaml; rm next.yaml"
+vendored="test/gateway-api: a Kustomization applies a tree its piece vendors with its record"
+refuses tree-substituted "$vendored" \
+  "yq -i '.spec.postBuild.substitute.APP = \"gateway-api\"' platform/gateway-api/app/crds.yaml"
+refuses tree-other-piece "$vendored" \
+  "mv platform/gateway-api/vendor/gateway-api platform/gateway-api/vendor/gateway-api.json platform/reloader/vendor/
+   yq -i '.spec.path = \"./kubernetes/platform/reloader/vendor/gateway-api\"' platform/gateway-api/app/crds.yaml"
+refuses tree-no-record "$vendored" \
+  "cp -r platform/gateway-api/vendor/gateway-api platform/gateway-api/vendor/copy
+   yq -i '.spec.path = \"./kubernetes/platform/gateway-api/vendor/copy\"' platform/gateway-api/app/crds.yaml"
+refuses tree-from-cluster "test: a tree a piece vendors is applied from that piece's own render alone: gateway-api" \
+  "yq -i '.spec.path = \"./kubernetes/platform/gateway-api/vendor/gateway-api\"' platform/gateway-api/ks.yaml"
+refuses helmrelease-in-cluster "test: $clusterdir" \
+  "yq ea '.metadata.name = \"x\"' platform/reloader/app/helmrelease.yaml >>clusters/test/settings.yaml"
 
 # Pod Security.
 privileged="only rook-ceph, where Ceph runs, is privileged"

@@ -10,7 +10,7 @@ spec:
   targetNamespace: gateway
   releaseName: traefik
   chartRef:
-    kind: OCIRepository
+    kind: HelmChart
     name: traefik
   install:
     crds: CreateReplace

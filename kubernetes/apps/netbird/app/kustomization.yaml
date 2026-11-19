@@ -5,7 +5,6 @@ resources:
   - ./configmap.yaml
   - ./roots.yaml
   - ./secret.yaml
-  - ./ocirepository.yaml
   - ./helmrelease.yaml
 patches:
   # Management alone signs in at Kanidm and keeps the mesh in PostgreSQL; the edge pod, which faces the internet,

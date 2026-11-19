@@ -105,12 +105,12 @@
         }
       ]
     },
-    "ocirepositories": {
+    "helmcharts": {
       "items": [
         {
           "metadata": {
-            "name": "hello",
-            "namespace": "alpha-hello"
+            "name": "app-template-5",
+            "namespace": "flux-system"
           },
           "spec": {},
           "status": {

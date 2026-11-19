@@ -8,8 +8,8 @@ spec:
   serviceAccountName: kustomize-controller
   sourceRef:
     kind: GitRepository
-    name: gateway-api
-  path: ./config/crd
+    name: suveraen
+  path: ./kubernetes/platform/gateway-api/vendor/gateway-api
   interval: 24h
   retryInterval: 2m
   timeout: 10m

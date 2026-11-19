@@ -6,8 +6,9 @@ metadata:
 spec:
   interval: 1h
   chartRef:
-    kind: OCIRepository
-    name: kanidm
+    kind: HelmChart
+    name: app-template-5
+    namespace: flux-system
   values:
     controllers:
       kanidm:

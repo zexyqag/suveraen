@@ -6,7 +6,7 @@ include "rows";
 
 def kinds:
   [["Kustomization", "kustomizations"], ["HelmRelease", "helmreleases"], ["GitRepository", "gitrepositories"],
-   ["OCIRepository", "ocirepositories"]];
+   ["HelmChart", "helmcharts"]];
 
 def listed($k):
   [kinds[] as [$kind, $list]

@@ -1,9 +1,9 @@
 cluster	evaluated
 cluster	Flux GitRepository flux-system/suveraen	ok	4	Flux not ready	ready	Flux ready again	flux
+cluster	Flux HelmChart flux-system/app-template-5	ok	4	Flux not ready	ready	Flux ready again	flux
 cluster	Flux HelmRelease alpha-hello/hello	ok	4	Flux not ready	ready	Flux ready again	flux
 cluster	Flux Kustomization flux-system/cluster	ok	4	Flux not ready	ready	Flux ready again	flux
 cluster	Flux Kustomization flux-system/tenant-alpha	ok	4	Flux not ready	ready	Flux ready again	flux
-cluster	Flux OCIRepository alpha-hello/hello	ok	4	Flux not ready	ready	Flux ready again	flux
 cluster	Flux release	ok	4	Flux and the host on different releases	both on 0123456789ab	Flux and the host on one release again	flux
 cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
 host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api

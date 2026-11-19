@@ -1,0 +1,24 @@
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmChart
+metadata:
+  name: cloudnative-pg
+  namespace: flux-system
+spec:
+  interval: 12h
+  sourceRef:
+    kind: GitRepository
+    name: suveraen
+  chart: ./kubernetes/platform/cloudnative-pg/vendor/cloudnative-pg
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmChart
+metadata:
+  name: barman-cloud
+  namespace: flux-system
+spec:
+  interval: 12h
+  sourceRef:
+    kind: GitRepository
+    name: suveraen
+  chart: ./kubernetes/platform/cloudnative-pg/vendor/plugin-barman-cloud

@@ -9,13 +9,9 @@ spec:
   serviceAccountName: helm-controller
   targetNamespace: volsync
   releaseName: volsync
-  chart:
-    spec:
-      chart: ./helm/volsync
-      sourceRef:
-        kind: GitRepository
-        name: volsync
-      reconcileStrategy: Revision
+  chartRef:
+    kind: HelmChart
+    name: volsync
   install:
     strategy:
       name: RetryOnFailure

@@ -11,8 +11,9 @@ spec:
   # A migration on real disks, and management waiting for Kanidm as it starts.
   timeout: 15m
   chartRef:
-    kind: OCIRepository
-    name: netbird
+    kind: HelmChart
+    name: app-template-5
+    namespace: flux-system
   upgrade:
     remediation:
       # A rollback would run the previous management on a database the new one has migrated.

@@ -16,3 +16,4 @@ resources:
   - ./cloudnative-pg/ks.yaml
   - ./pg-catalog/ks.yaml
   - ./volsync/ks.yaml
+  - ./app-charts/ks.yaml

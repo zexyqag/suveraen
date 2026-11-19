@@ -15,6 +15,7 @@ spec:
     - ../../../components/sso-secret
   dependsOn:
     - name: policies
+    - name: app-charts
     - name: volsync
     - name: ceph
     - name: ${TENANT}-hello-db

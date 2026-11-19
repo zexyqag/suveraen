@@ -1,5 +1,6 @@
 # Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and pointed at the repository,
-# out of reach of namespace admins, pods held to the restricted Pod Security Standard, secrets encrypted at rest with
+# out of reach of namespace admins and reading nothing but the release's one GitRepository and HelmCharts built from
+# it in flux-system, pods held to the restricted Pod Security Standard, secrets encrypted at rest with
 # secretbox and only SSH, web and STUN ports open. Ceph's disks have stable names, their DB volumes lie on an array over
 # both system disks, the kernel maps and decrypts Ceph's volumes without loading modules, and k3s keeps no volumes of
 # its own. An app's charts reach only its own namespace and can neither widen who may act there nor publish ports, no
@@ -433,17 +434,19 @@ pkgs.testers.runNixOSTest {
           server.succeed("test ! -e /var/lib/rancher/k3s/server/manifests/local-storage.yaml")
           server.succeed("test -z \"$(kubectl get storageclass -o name)\"")
 
-      with subtest("Rights in a namespace don't extend to Flux, and Flux acts there only with that namespace's own account"):
-          for controller in ["kustomize-controller", "helm-controller", "notification-controller"]:
-              server.succeed(
+      with subtest("Rights in a namespace don't extend to Flux, which acts there only with that namespace's own account and takes charts from nowhere but the release"):
+          def controller_args(controller):
+              return json.loads(server.succeed(
                   f"kubectl -n flux-system get deployment {controller} -o jsonpath='{{.spec.template.spec.containers[0].args}}'"
-                  " | grep -F -- --no-cross-namespace-refs=true"
-              )
+              ))
+
+          for controller in ["kustomize-controller", "notification-controller"]:
+              assert "--no-cross-namespace-refs=true" in controller_args(controller), controller
           for controller in ["kustomize-controller", "helm-controller"]:
-              server.succeed(
-                  f"kubectl -n flux-system get deployment {controller} -o jsonpath='{{.spec.template.spec.containers[0].args}}'"
-                  " | grep -F -- --default-service-account=default"
-              )
+              assert "--default-service-account=default" in controller_args(controller), controller
+          # helm-controller alone reads charts from flux-system, held to the release's own by release-sources.
+          helm_args = controller_args("helm-controller")
+          assert not [a for a in helm_args if a.startswith("--no-cross-namespace-refs")], helm_args
           server.succeed("kubectl -n flux-system get kustomization cluster -o jsonpath='{.spec.serviceAccountName}' | grep -x kustomize-controller")
           server.succeed(
               "kubectl create namespace member && kubectl -n member create serviceaccount member"
@@ -455,6 +458,81 @@ pkgs.testers.runNixOSTest {
           assert len(kinds) >= 4, kinds
           for kind in kinds:
               server.fail(f"kubectl auth can-i create {kind} {member}")
+
+      with subtest("Flux takes nothing but the signed release: one GitRepository, and charts built from it in flux-system"):
+          server.succeed("kubectl apply -f ${../kubernetes/platform/policies/app/release-sources.yaml}")
+
+          def flux_object(kind, namespace, spec, name="probe"):
+              group = "helm.toolkit.fluxcd.io/v2" if kind == "HelmRelease" else "source.toolkit.fluxcd.io/v1"
+              return {"apiVersion": group, "kind": kind, "metadata": {"name": name, "namespace": namespace}, "spec": spec}
+
+          def flux_release(where, kind, name, **ref):
+              return flux_object("HelmRelease", where, {"interval": "1h", "chartRef": {"kind": kind, "name": name} | ref})
+
+          def flux_chart(namespace="flux-system", **spec):
+              built = {"interval": "12h", "chart": "./kubernetes/platform/probe/vendor/probe",
+                       "sourceRef": {"kind": "GitRepository", "name": "suveraen"}}
+              return flux_object("HelmChart", namespace, built | spec)
+
+          # As Flux applies the release, with its own cluster-wide account.
+          def as_flux(candidate):
+              return (
+                  f"echo {shlex.quote(json.dumps(candidate))}"
+                  " | kubectl create --dry-run=server -f - --as=system:serviceaccount:flux-system:kustomize-controller"
+              )
+
+          admitted_sources = [
+              flux_release("member", "HelmChart", "app-template-5", namespace="flux-system"),
+              flux_release("flux-system", "HelmChart", "probe"),
+              flux_release("flux-system", "HelmChart", "probe", namespace="flux-system"),
+              flux_chart(),
+              flux_chart(reconcileStrategy="ChartVersion"),
+          ]
+          refused_sources = [
+              flux_release("member", "OCIRepository", "probe"),
+              flux_release("member", "HelmChart", "probe"),
+              flux_release("member", "HelmChart", "probe", namespace="default"),
+              flux_release("member", "OCIRepository", "probe", namespace="flux-system"),
+              flux_release("member", "ExternalArtifact", "probe", namespace="flux-system"),
+              flux_object("HelmRelease", "flux-system", {
+                  "interval": "1h", "chart": {"spec": {"chart": "probe", "sourceRef": {"kind": "GitRepository", "name": "suveraen"}}},
+              }),
+              flux_object("GitRepository", "flux-system", {"interval": "1h", "url": "https://example.invalid/other.git"}),
+              flux_object("GitRepository", "member", {"interval": "1h", "url": "${repository}"}, name="suveraen"),
+              flux_object("OCIRepository", "flux-system", {"interval": "1h", "url": "oci://example.invalid/probe"}),
+              flux_object("HelmRepository", "flux-system", {"interval": "1h", "url": "https://example.invalid/charts"}),
+              flux_object("Bucket", "flux-system", {"interval": "1h", "bucketName": "probe", "endpoint": "example.invalid"}),
+              flux_object("ExternalArtifact", "flux-system", {}),
+              flux_chart(reconcileStrategy="Revision"),
+              flux_chart(valuesFiles=["./kubernetes/platform/probe/vendor/probe/values.yaml"]),
+              flux_chart("member"),
+              flux_chart(sourceRef={"kind": "HelmRepository", "name": "suveraen"}),
+              flux_chart(sourceRef={"kind": "GitRepository", "name": "other"}),
+          ]
+          # The policy takes a moment to load after it's created.
+          server.wait_until_fails(as_flux(refused_sources[0]))
+          for candidate in admitted_sources:
+              server.succeed(as_flux(candidate))
+          # The release's own GitRepository, whose metadata Flux changes, and whose spec only the servers do, as cluster
+          # admins.
+          server.succeed(
+              "kubectl -n flux-system label gitrepository suveraen probe=true --dry-run=server"
+              " --as=system:serviceaccount:flux-system:kustomize-controller"
+          )
+          moved = "kubectl -n flux-system patch gitrepository suveraen --type=merge --dry-run=server" \
+              " -p '{\"spec\": {\"url\": \"https://example.invalid/other.git\"}}'"
+          server.succeed(moved)
+          # Made already on its way out, which server-side apply alone keeps.
+          dying = flux_object("OCIRepository", "flux-system", {"interval": "1h", "url": "oci://example.invalid/probe"})
+          dying["metadata"] |= {"finalizers": ["finalizers.fluxcd.io"], "deletionTimestamp": "2026-01-01T00:00:00Z"}
+          refused_changes = [
+              f"{moved} --as=system:serviceaccount:flux-system:kustomize-controller",
+              f"echo {shlex.quote(json.dumps(dying))} | kubectl apply --server-side --dry-run=server -f -"
+              " --as=system:serviceaccount:flux-system:kustomize-controller",
+          ]
+          for candidate in [as_flux(c) for c in refused_sources] + refused_changes:
+              out = server.fail(f"{candidate} 2>&1")
+              assert "ValidatingAdmissionPolicy 'release-sources'" in out, (candidate, out)
 
       with subtest("Pods must meet the restricted Pod Security Standard unless the platform labels their namespace"):
           out = server.fail(f"kubectl run root --image=busybox --restart=Never {member} 2>&1")
@@ -1508,7 +1586,7 @@ pkgs.testers.runNixOSTest {
               (["ceph.rook.io"], ["cephclusters"], ["rook-ceph"], ["get"]),
               (["kustomize.toolkit.fluxcd.io"], ["kustomizations"], [], ["list"]),
               (["helm.toolkit.fluxcd.io"], ["helmreleases"], [], ["list"]),
-              (["source.toolkit.fluxcd.io"], ["gitrepositories", "ocirepositories"], [], ["list"]),
+              (["source.toolkit.fluxcd.io"], ["gitrepositories", "helmcharts"], [], ["list"]),
               (["cert-manager.io"], ["certificates"], [], ["list"]),
               (["gateway.networking.k8s.io"], ["gateways"], [], ["list"]),
           ]), rules
@@ -1526,7 +1604,7 @@ pkgs.testers.runNixOSTest {
               "watch helmreleases.helm.toolkit.fluxcd.io -A",
               "patch gitrepositories.source.toolkit.fluxcd.io/suveraen -n flux-system",
               "list buckets.source.toolkit.fluxcd.io -A",
-              "list helmcharts.source.toolkit.fluxcd.io -A",
+              "list ocirepositories.source.toolkit.fluxcd.io -A",
               "list certificaterequests.cert-manager.io -A",
               "list issuers.cert-manager.io -A",
               "list orders.acme.cert-manager.io -A",
@@ -1748,7 +1826,7 @@ pkgs.testers.runNixOSTest {
               "/apis/barmancloud.cnpg.io/v1/objectstores", "/apis/volsync.backube/v1alpha1/replicationsources",
               "/apis/ceph.rook.io/v1/cephclusters", "/apis/kustomize.toolkit.fluxcd.io/v1/kustomizations",
               "/apis/helm.toolkit.fluxcd.io/v2/helmreleases", "/apis/source.toolkit.fluxcd.io/v1/gitrepositories",
-              "/apis/source.toolkit.fluxcd.io/v1/ocirepositories", "/apis/cert-manager.io/v1/certificates",
+              "/apis/source.toolkit.fluxcd.io/v1/helmcharts", "/apis/cert-manager.io/v1/certificates",
               "/apis/gateway.networking.k8s.io/v1/namespaces/gateway/gateways",
           ]:
               server.wait_until_succeeds(f"kubectl get --raw {path}", timeout=300)

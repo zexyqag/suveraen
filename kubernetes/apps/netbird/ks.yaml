@@ -17,6 +17,7 @@ spec:
     - ../../../components/passthrough-app
   dependsOn:
     - name: policies
+    - name: app-charts
     - name: issuer
     - name: ${TENANT}-netbird-db
     - name: ${TENANT}-netbird-sso

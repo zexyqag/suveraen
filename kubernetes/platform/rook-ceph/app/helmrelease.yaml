@@ -10,7 +10,7 @@ spec:
   targetNamespace: rook-ceph
   releaseName: rook-ceph
   chartRef:
-    kind: OCIRepository
+    kind: HelmChart
     name: rook-ceph
   install:
     crds: CreateReplace

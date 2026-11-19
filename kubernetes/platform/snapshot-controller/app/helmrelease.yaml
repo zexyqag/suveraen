@@ -10,7 +10,7 @@ spec:
   targetNamespace: snapshot-controller
   releaseName: snapshot-controller
   chartRef:
-    kind: OCIRepository
+    kind: HelmChart
     name: snapshot-controller
   install:
     crds: CreateReplace

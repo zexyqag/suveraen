@@ -76,6 +76,25 @@ fingerprint() {
     awk -F: '$1 == "pub" { n++; next } $1 == "fpr" && !seen++ { fpr = $10 } END { if (n == 1) print fpr }'
 }
 
+# A chart's dependencies, as Helm reads them, from its lock where it has one, against what its charts/ holds, at every
+# depth: source-controller would fetch what charts/ lacks from wherever the chart says, with nothing to pin it by.
+unvendored() {
+  local file want held sub
+  want=$(for file in Chart.lock requirements.lock Chart.yaml requirements.yaml; do
+    if [ -f "$1/$file" ]; then
+      yq '.dependencies[]?.name' "$1/$file"
+      [[ $file != *.lock ]] || break
+    fi
+  done | LC_ALL=C sort | paste -sd' ')
+  held=$(for sub in "$1"/charts/*; do
+    if [ -f "$sub/Chart.yaml" ]; then yq .name "$sub/Chart.yaml"; elif [ -e "$sub" ]; then echo "${sub##*/}"; fi
+  done | LC_ALL=C sort | paste -sd' ')
+  [ "$want" = "$held" ] || echo "$1: depends on ${want:-nothing}, but its charts/ holds ${held:-nothing}"
+  for sub in "$1"/charts/*/; do
+    [ ! -f "$sub/Chart.yaml" ] || unvendored "${sub%/}"
+  done
+}
+
 # Why a tree doesn't stand as its record describes it, one line each; nothing if it does.
 problems() {
   local tree=$1 record=$2 name path chart workflow sources
@@ -101,6 +120,7 @@ problems() {
     (if $chart.version != .version then
       "\($tree): its Chart.yaml has version \($chart.version), its record \(.version // "none")" else empty end)
     ' "$record"
+  unvendored "$tree"
   # A signature by any workflow would only show that someone signed: it must be one in the chart's own repository, which
   # a source names only as https://<host>/<owner>/<repository>.
   workflow=$(jq -r '.signer.cosign?.workflow // empty' "$record")

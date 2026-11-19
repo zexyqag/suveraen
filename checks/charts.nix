@@ -6,8 +6,8 @@
 # On those trees, with signed records beside them, check refuses each way a tree and its keys can part from their
 # records: a tree edited without its record, a README, a dot file, a link, a path its record drops, a Chart.yaml of
 # another version, an entry no record owns, a vendor directory outside the pieces, a record the tool doesn't write, a
-# cosign signer outside the chart's own repository or one its Chart.yaml names no repository for, a key of another
-# fingerprint and a key no record names.
+# cosign signer outside the chart's own repository or one its Chart.yaml names no repository for, a chart without a
+# chart it depends on, a key of another fingerprint and a key no record names.
 {
   pkgs,
   charts,
@@ -179,6 +179,8 @@ pkgs.runCommand "charts-test"
       "jq '.signer.cosign.workflow += \"@refs/heads/main\"' cosigned.json > x && mv x cosigned.json"
     refused "isn't in a repository its Chart.yaml gives as its source" \
       "sed -i 's,https://example.org/owner/demo,https://example.org/owner,' cosigned/Chart.yaml"
+    refused "chart: depends on sub, but its charts/ holds nothing" \
+      "printf 'dependencies:\\n  - name: sub\\n    version: 1.0.0\\n    repository: https://example.org/charts\\n' >> chart/Chart.yaml"
     refused "doesn't hold exactly one key, with fingerprint $signer" \
       "cp ../../../../../other.asc ../../../../release/chart-keys/$signer.asc"
     refused "$other.asc: no record is signed by it" "cp ../../../../../other.asc ../../../../release/chart-keys/$other.asc"

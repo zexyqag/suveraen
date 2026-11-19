@@ -1,0 +1,13 @@
+---
+# One for each major version of app-template, whose values change between them: apps move to the next one by one.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmChart
+metadata:
+  name: app-template-5
+  namespace: flux-system
+spec:
+  interval: 12h
+  sourceRef:
+    kind: GitRepository
+    name: suveraen
+  chart: ./kubernetes/platform/app-charts/vendor/app-template-5

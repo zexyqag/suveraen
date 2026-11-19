@@ -10,7 +10,7 @@ spec:
   targetNamespace: reloader
   releaseName: reloader
   chartRef:
-    kind: OCIRepository
+    kind: HelmChart
     name: reloader
   install:
     crds: CreateReplace

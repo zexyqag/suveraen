@@ -31,6 +31,8 @@
 # lost its config, and passes for an app that has copied nothing yet, whose first restore left an empty repository at
 # one provider and none at the other; nothing is left of the volumes copies and restores worked on, and every volume in
 # a tenant's namespace is backed up or VolSync's.
+# Flux takes charts from the release alone: its one GitRepository, and a HelmChart per vendored chart at the version
+# its record gives, which every HelmRelease runs.
 # containerd pulled every image through the server's mirror alone, which holds images of every registry it lists, all
 # of every image the node holds, and answers.
 # Apps see a pseudonym per host in place of each client's address, never an address a client names in a header. The
@@ -710,6 +712,7 @@ runTest {
     in
     ''
       import base64
+      import glob
       import hashlib
       import ipaddress
       import json
@@ -837,7 +840,7 @@ runTest {
           # Most of what follows asks the API server, which may be restarting.
           server.execute("timeout 180 sh -c 'until kubectl get --raw /readyz >/dev/null 2>&1; do sleep 5; done'")
           for cmd in [
-              "kubectl get gitrepositories,ocirepositories,kustomizations,helmreleases -A",
+              "kubectl get gitrepositories,helmcharts,kustomizations,helmreleases -A",
               "kubectl get pods -A -o wide",
               "kubectl get pods -A --field-selector=status.phase=Failed"
               " -o jsonpath='{range .items[*]}{.metadata.namespace}{\" \"}{.metadata.name}{\"\\n\"}{end}'"
@@ -1049,6 +1052,39 @@ runTest {
               ))
               images()
               memory()
+
+          with subtest("Charts come from the release: one GitRepository, a HelmChart per vendored chart at its recorded version, and every release at its chart's version"):
+              # Each chart the release vendors, by its tree, at the version its record gives.
+              vendored: dict[str, str] = {}
+              for record in glob.glob("${kubernetes}/platform/*/vendor/*.json"):
+                  tree = record.removesuffix(".json")
+                  if os.path.exists(f"{tree}/Chart.yaml"):
+                      with open(record) as record_file:
+                          vendored["./kubernetes/" + os.path.relpath(tree, "${kubernetes}")] = json.load(record_file)["version"]
+              others = parsed("kubectl get ocirepositories,helmrepositories,buckets,externalartifacts -A -o json")["items"]
+              assert not others, [(o["kind"], o["metadata"]["namespace"], o["metadata"]["name"]) for o in others]
+              repositories = parsed("kubectl get gitrepositories -A -o json")["items"]
+              assert [(g["metadata"]["namespace"], g["metadata"]["name"]) for g in repositories] \
+                  == [("flux-system", "suveraen")], repositories
+              revision = repositories[0]["status"]["artifact"]["revision"]
+              built = parsed("kubectl get helmcharts -A -o json")["items"]
+              assert all(c["metadata"]["namespace"] == "flux-system" for c in built), built
+              assert sorted(c["spec"]["chart"] for c in built) == sorted(vendored), (built, vendored)
+              charts = {c["metadata"]["name"]: c for c in built}
+              for chart in built:
+                  chart_name = chart["metadata"]["name"]
+                  observed = chart["status"]
+                  ready_now = [x["status"] for x in observed.get("conditions", []) if x["type"] == "Ready"]
+                  assert ready_now == ["True"], (chart_name, observed)
+                  assert observed["artifact"]["revision"] == vendored[chart["spec"]["chart"]], (chart_name, observed)
+                  assert observed["observedSourceArtifactRevision"] == revision, (chart_name, observed, revision)
+              for hr in parsed("kubectl get helmreleases -A -o json")["items"]:
+                  where = f"{hr['metadata']['namespace']}/{hr['metadata']['name']}"
+                  ref = {k: hr["spec"]["chartRef"].get(k) for k in ["kind", "name", "namespace"]}
+                  if hr["metadata"]["namespace"] != "flux-system":
+                      assert (ref["kind"], ref["namespace"]) == ("HelmChart", "flux-system"), (where, ref)
+                  installed = hr["status"]["history"][0]["chartVersion"]
+                  assert installed == vendored[charts[ref["name"]]["spec"]["chart"]], (where, installed)
 
           with subtest("Both CAs know our accounts, and hosts got their certificates over DNS-01 through the ACME zone"):
               for issuer, directory in [("public", setting("ACME_SERVER")), ("standby", setting("ACME_STANDBY_SERVER"))]:
@@ -3535,7 +3571,7 @@ runTest {
               flux = {
                   f"Flux {kind} {o['metadata']['namespace']}/{o['metadata']['name']}"
                   for kind, plural in [("Kustomization", "kustomizations"), ("HelmRelease", "helmreleases"),
-                                       ("GitRepository", "gitrepositories"), ("OCIRepository", "ocirepositories")]
+                                       ("GitRepository", "gitrepositories"), ("HelmChart", "helmcharts")]
                   for o in items(plural)
               }
               certificates = {f"certificate {c['metadata']['namespace']}/{c['metadata']['name']}" for c in items("certificates")}

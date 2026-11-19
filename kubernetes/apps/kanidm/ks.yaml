@@ -16,6 +16,7 @@ spec:
     - ../../../components/passthrough
   dependsOn:
     - name: policies
+    - name: app-charts
     - name: volsync
     - name: ceph
     - name: issuer

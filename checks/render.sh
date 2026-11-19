@@ -40,8 +40,7 @@ hard+=',services,services.loadbalancers,services.nodeports'
 # create is a list of namespaced kinds; certificates and issuers come only from edges and the platform.
 appkinds='ConfigMap,Secret,Service,ServiceAccount,PersistentVolumeClaim,LimitRange,ResourceQuota,Namespace'
 appkinds+=',Role.rbac.authorization.k8s.io,RoleBinding.rbac.authorization.k8s.io,NetworkPolicy.networking.k8s.io'
-appkinds+=',OCIRepository.source.toolkit.fluxcd.io,HelmRelease.helm.toolkit.fluxcd.io'
-appkinds+=',HTTPRoute.gateway.networking.k8s.io'
+appkinds+=',HelmRelease.helm.toolkit.fluxcd.io,HTTPRoute.gateway.networking.k8s.io'
 # Copies of an app's volume and their checks (components/volsync).
 appkinds+=',ReplicationSource.volsync.backube,ReplicationDestination.volsync.backube,CronJob.batch'
 # The tenant's PostgreSQL also claims its bucket, tells Barman where to archive and fetches a copy back.
@@ -130,10 +129,10 @@ for name, ctl in (values.get("controllers") or {}).items():
         bad += [f"{n}:{k}" for k in ("envFrom", "command", "args") if x.get(k)]
 print(" ".join(bad))
 '
-# Prints what the pods of an app's charts need at their most beyond its namespace's quota, from the rendered app (a JSON
-# list on stdin): each controller's pods, with the one more a rolling update starts, at their requests and limits, the
-# LimitRange's defaults for what a container leaves out, each init container against the others together, and one
-# more pod at the defaults, such as one that only asks the app something.
+# Prints what the pods of an app's charts, all app-template's, need at their most beyond its namespace's quota, from the
+# rendered app (a JSON list on stdin): each controller's pods, with the one more a rolling update starts, at their
+# requests and limits, the LimitRange's defaults for what a container leaves out, each init container against the
+# others together, and one more pod at the defaults, such as one that only asks the app something.
 quotafit='
 import json, math, re, sys
 docs = [d for d in json.load(sys.stdin) if isinstance(d, dict)]
@@ -150,8 +149,6 @@ def quantity(q):
 defaults = [l for d in docs if d.get("kind") == "LimitRange" for l in d["spec"]["limits"]
             if l.get("type") == "Container"]
 quota = [d for d in docs if d.get("kind") == "ResourceQuota"][0]["spec"]["hard"]
-charts = {d["metadata"]["name"] for d in docs if d.get("kind") == "OCIRepository"
-          and d["spec"].get("url", "").endswith("/app-template")}
 
 # What a container asks for and may use once the API server has taken its limits for requests it left out, and the
 # LimitRange has given it its defaults.
@@ -182,7 +179,7 @@ def enabled(ctl, group):
 
 need, pods = container({}), 1
 for release in docs:
-    if release.get("kind") != "HelmRelease" or (release["spec"].get("chartRef") or {}).get("name") not in charts:
+    if release.get("kind") != "HelmRelease":
         continue
     for ctl in ((release["spec"].get("values") or {}).get("controllers") or {}).values():
         if ctl.get("enabled", True) is False:
@@ -1038,6 +1035,15 @@ passed() { # tenant, app
     yq ".spec.postBuild.substitute | .HOST + \".\" + .$domain" "$w/$edge.build.yaml"
   done
 }
+# The Kustomizations a render creates, each after the one that rendered it, to render in turn. Flux applies nothing but
+# the release, which the servers give it as GitRepository suveraen.
+spawned() { # parent, its render
+  local bad
+  bad=$(yq ea "[select($fluxks) | select(.spec.sourceRef.kind != \"GitRepository\"
+    or .spec.sourceRef.name != \"suveraen\") | .metadata.name] | .[]" "$2" | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster/$1: Kustomizations apply the release alone, from GitRepository suveraen: $bad"
+  yq ea "[select($fluxks) | .metadata.name] | .[]" "$2" | sed "s/^/$1 /"
+}
 for dir in kubernetes/clusters/*/; do
   dir=${dir%/}
   cluster=$(basename "$dir")
@@ -1062,8 +1068,7 @@ for dir in kubernetes/clusters/*/; do
       || fail "$cluster: cluster-settings sets ${range%%=*} to ${range#*=}, as the servers give k3s (nixos/cluster.nix)"
   done
 
-  yq ea "[select($fluxks and .spec.sourceRef.name == \"suveraen\") | .metadata.name] | .[]" "$rendered/cluster.yaml" \
-    | sed 's/^/cluster /' >"$w/queue"
+  spawned cluster "$rendered/cluster.yaml" >"$w/queue"
   while [ -s "$w/queue" ]; do
     read -r parent name <"$w/queue"
     sed -i 1d "$w/queue"
@@ -1131,16 +1136,20 @@ for dir in kubernetes/clusters/*/; do
     export guarded
     [ -z "$guarded" ] || yq -i 'with(.[] | select(key | test("^(" + strenv(guarded) + ")_"));
       . = "render-guard-" + key)' "$w/$name.vars.yaml"
-    yq ".spec.postBuild.substitute = (load(\"$w/$name.vars.yaml\") * (.spec.postBuild.substitute // {}))
-      | del(.spec.postBuild.substituteFrom)" "$w/$name.ks.yaml" >"$w/$name.build.yaml"
+    # Flux substitutes nothing for a Kustomization without postBuild.
+    yq "with(select(.spec | has(\"postBuild\"));
+      .spec.postBuild.substitute = (load(\"$w/$name.vars.yaml\") * (.spec.postBuild.substitute // {}))
+      | del(.spec.postBuild.substituteFrom))" "$w/$name.ks.yaml" >"$w/$name.build.yaml"
     flux build kustomization "$name" --path "$path" --kustomization-file "$w/$name.build.yaml" \
       --dry-run --strict-substitute >"$rendered/$name.yaml" || fail "$cluster/$name doesn't render"
+    # No rule reads a CRD's schema, a megabyte of Gateway API's that every rule over all renders would read again.
+    ! grep -q '^kind: CustomResourceDefinition$' "$rendered/$name.yaml" \
+      || yq -i 'del(select(.kind == "CustomResourceDefinition") | .spec.versions[].schema)' "$rendered/$name.yaml"
     bad=$(grep -oE 'render-guard-[A-Z0-9_]+' "$rendered/$name.yaml" | sort -u | sed 's/^render-guard-//' \
       | paste -sd' ' || true)
     [ -z "$bad" ] || fail "$cluster/$name reads $bad: an app reads only its own keys, and a host none"
     echo "$name $path" >>"$w/paths"
-    yq ea "[select($fluxks and .spec.sourceRef.name == \"suveraen\") | .metadata.name] | .[]" "$rendered/$name.yaml" \
-      | sed "s/^/$name /" >>"$w/queue"
+    spawned "$name" "$rendered/$name.yaml" >>"$w/queue"
   done
 
   bad=$(yq ea "[select($fluxks) | select(.spec.serviceAccountName != \"kustomize-controller\"
@@ -1174,6 +1183,37 @@ for dir in kubernetes/clusters/*/; do
     | .kind + "/" + .metadata.name] | .[]' "$rendered"/*.yaml | sort)
   [ "$reserved" = "$expected" ] || fail "$cluster: tenant- names only a tenant's own Kustomization and Secret:" \
     $(comm -23 <(echo "$reserved") <(echo "$expected"))
+  # Flux reads nothing but the release, which the servers give it as GitRepository suveraen, and the charts the
+  # platform builds from it.
+  bad=$(yq ea '[select(.apiVersion // "" | test("^source[.]toolkit[.]fluxcd[.]io/")) | select(.kind != "HelmChart")
+    | .kind + "/" + (.metadata.namespace // "") + "/" + .metadata.name] | .[]' "$rendered"/*.yaml | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: the release names no Flux source but the HelmCharts the platform builds from it:" \
+    "$bad"
+  bad=$(yq ea '[select(.kind == "HelmRelease" and (.spec | has("chart")))
+    | .metadata.namespace + "/" + .metadata.name] | .[]' "$rendered"/*.yaml | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: a HelmRelease takes its chart from a HelmChart by chartRef, never from a template" \
+    "of its own: $bad"
+  platformfiles=()
+  otherfiles=("$rendered/cluster.yaml")
+  while read -r name path; do
+    case $path in
+      ./kubernetes/platform/*) platformfiles+=("$rendered/$name.yaml") ;;
+      *) otherfiles+=("$rendered/$name.yaml") ;;
+    esac
+  done <"$w/paths"
+  bad=$(yq ea '[select(.kind == "HelmChart") | .metadata.namespace + "/" + .metadata.name] | .[]' "${otherfiles[@]}" \
+    | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: HelmCharts come from the platform alone: $bad"
+  bad=$(yq ea "[select($fluxks and (.spec.path // \"\" | test(\"/vendor(/|\$)\"))) | .metadata.name] | .[]" \
+    "${otherfiles[@]}" | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: a tree a piece vendors is applied from that piece's own render alone: $bad"
+  # The charts the platform builds in flux-system, which apps may name: each HelmChart's name and the chart its tree
+  # holds.
+  : >"$w/charts"
+  [ ${#platformfiles[@]} = 0 ] || yq ea '[select(.kind == "HelmChart" and .metadata.namespace == "flux-system")
+    | .metadata.name + " " + (.spec.chart // "")] | .[]' "${platformfiles[@]}" | while read -r chart tree; do
+    echo "$chart $(yq '.name // "-"' "$tree/Chart.yaml" 2>/dev/null || echo -)"
+  done >"$w/charts"
 
   while read -r name path; do
     file=$rendered/$name.yaml
@@ -1183,10 +1223,51 @@ for dir in kubernetes/clusters/*/; do
     case $path in
       ./kubernetes/platform/*)
         [ -z "$t" ] || fail "$cluster/$name: tenants run apps, not the platform"
-        # Operator charts install cluster-wide objects: they run as helm-controller, from flux-system.
+        piece=${path#./kubernetes/platform/}
+        piece=${piece%%/*}
+        export piece
+        # A piece's charts are the trees it vendors, as they are, at the version their records give.
+        bad=$(yq ea '[select(.kind == "HelmChart") | select(.metadata.namespace != "flux-system"
+          or ([.spec | keys | .[] | select(test("^(chart|interval|reconcileStrategy|sourceRef)$") | not)] | length) > 0
+          or (.spec.sourceRef | keys | sort | join(",")) != "kind,name"
+          or .spec.sourceRef.kind != "GitRepository" or .spec.sourceRef.name != "suveraen"
+          or (.spec.reconcileStrategy // "ChartVersion") != "ChartVersion"
+          or ((.spec.chart // "") | test("^[.]/kubernetes/platform/" + strenv(piece) + "/vendor/[^/]+$") | not))
+          | .metadata.name] | .[]' "$file")
+        bad+=$(yq ea '[select(.kind == "HelmChart") | .metadata.name + " " + (.spec.chart // "")] | .[]' "$file" \
+          | while read -r chart tree; do
+            [ -f "$tree.json" ] && [ -f "$tree/Chart.yaml" ] || echo " $chart"
+          done)
+        [ -z "$bad" ] || fail "$cluster/$name: a piece's charts are HelmCharts in flux-system, built from" \
+          "GitRepository suveraen by their own version and values, each from a tree the piece vendors with its" \
+          "record, ./kubernetes/platform/$piece/vendor/<name>: "$bad
+        # Upstream's manifests are applied as they are vendored: Flux substitutes, patches or moves nothing in them.
+        bad=$(yq ea "[select($fluxks and (.spec.path // \"\" | test(\"/vendor(/|\$)\"))) | select((.spec.path
+          | test(\"^[.]/kubernetes/platform/\" + strenv(piece) + \"/vendor/[^/]+$\") | not)
+          or (.spec | has(\"postBuild\") or has(\"patches\") or has(\"images\") or has(\"components\")
+            or has(\"targetNamespace\") or has(\"namePrefix\") or has(\"nameSuffix\") or has(\"commonMetadata\")))
+          | .metadata.name] | .[]" "$file")
+        bad+=$(yq ea "[select($fluxks and (.spec.path // \"\" | test(\"/vendor(/|\$)\")))
+          | .metadata.name + \" \" + .spec.path] | .[]" "$file" | while read -r ks tree; do
+          [ -f "$tree.json" ] || echo " $ks"
+        done)
+        [ -z "$bad" ] || fail "$cluster/$name: a Kustomization applies a tree its piece vendors with its record," \
+          "./kubernetes/platform/$piece/vendor/<name>, as it is, with no postBuild, patches, images, components," \
+          "targetNamespace, namePrefix, nameSuffix or commonMetadata: "$bad
+        # Operator charts install cluster-wide objects: they run as helm-controller, from flux-system, with a chart
+        # their own piece builds.
         bad=$(yq ea '[select(.kind == "HelmRelease") | select(.metadata.namespace != "flux-system"
           or .spec.serviceAccountName != "helm-controller") | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: platform HelmReleases must run as helm-controller from flux-system: $bad"
+        own=$(yq ea '[select(.kind == "HelmChart" and .metadata.namespace == "flux-system") | .metadata.name] | .[]' \
+          "$file")
+        bad=$(yq ea '[select(.kind == "HelmRelease") | .metadata.name + " " + (.spec.chartRef.kind // "-") + " "
+          + (.spec.chartRef.namespace // "flux-system") + " " + (.spec.chartRef.name // "-")] | .[]' "$file" \
+          | while read -r release kind ns chart; do
+            [ "$kind $ns" = "HelmChart flux-system" ] && grep -qxF "$chart" <<<"$own" || echo "$release"
+          done)
+        [ -z "$bad" ] || fail "$cluster/$name: a platform HelmRelease takes its chart from a HelmChart its own piece" \
+          "builds: $bad"
         bad=$(yq ea '[select(.kind == "Gateway" or .kind == "ListenerSet" or .kind == "ReferenceGrant"
           or .kind == "Issuer" or .kind == "HTTPRoute" or .kind == "GRPCRoute" or .kind == "TLSRoute")
           | .kind + "/" + .metadata.name] | .[]' "$file")
@@ -1231,6 +1312,21 @@ for dir in kubernetes/clusters/*/; do
           or .spec.serviceAccountName != "flux-deployer" or .spec.install.crds != "Skip" or .spec.upgrade.crds != "Skip"
           or (.spec | has("targetNamespace") or has("storageNamespace"))) | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: app HelmReleases must run as flux-deployer in the app's namespace: $bad"
+        built=$(cut -d' ' -f1 "$w/charts")
+        bad=$(yq ea '[select(.kind == "HelmRelease") | .metadata.name + " "
+          + (.spec.chartRef // {} | keys | sort | join(",") | sub("^$", "-")) + " " + (.spec.chartRef.kind // "-") + " "
+          + (.spec.chartRef.namespace // "-") + " " + (.spec.chartRef.name // "-")] | .[]' "$file" \
+          | while read -r release fields kind ns chart; do
+            [ "$fields $kind $ns" = "kind,name,namespace HelmChart flux-system" ] && grep -qxF "$chart" <<<"$built" \
+              || echo "$release"
+          done)
+        [ -z "$bad" ] || fail "$cluster/$name: an app's HelmReleases take their chart from a HelmChart the platform" \
+          "builds in flux-system: $bad"
+        # quota-fit reads app-template's values alone.
+        bad=$(yq ea '[select(.kind == "HelmRelease") | .metadata.name + " " + .spec.chartRef.name] | .[]' "$file" \
+          | while read -r release chart; do grep -qxF "$chart app-template" "$w/charts" || echo "$release"; done)
+        [ -z "$bad" ] || fail "$cluster/$name: an app's charts are app-template's, the only one quota-fit can judge:" \
+          $bad
         bad=$(yq ea '[select(.kind != null)
           | ((.kind + "." + (.apiVersion | sub("/?[^/]*$", ""))) | sub("[.]$", "")) as $k
           | select(((strenv(kinds) | split(",")) | any_c(. == $k) | not)
@@ -1771,13 +1867,6 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
         | tostring] | .[]' "$file"
     } | grep -vE '@sha256:[0-9a-f]{64}$' | sort -u | paste -sd' ' || true)
     [ -z "$bad" ] || fail "$cluster/$name: images are pinned by digest: $bad"
-    # Helm repositories and buckets serve whatever they hold at the time, with nothing to pin them by.
-    bad=$(yq ea '[select((.kind == "OCIRepository" and .spec.ref.digest == null)
-      or (.kind == "GitRepository" and .spec.ref.commit == null)
-      or ((.apiVersion // "") | test("^source.toolkit.fluxcd.io/"))
-        and (.kind == "HelmRepository" or .kind == "Bucket"))
-      | .kind + "/" + .metadata.name] | .[]' "$file")
-    [ -z "$bad" ] || fail "$cluster/$name: sources must be pinned to a digest or a commit: $bad"
     if [ "$name" != gateway ]; then
       bad=$(yq ea '[select(.kind == "Namespace" and .metadata.labels."suveraen/publish" == "true") | .metadata.name]
         | .[]' "$file")
@@ -1917,11 +2006,12 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     done <"$w/listeners"
   fi
   # A cluster directory adds only what Flux runs with, and the names the cluster's DNS answers for its tenants' Kanidm.
-  bad=$(yq ea '[select(.kind != null and .metadata.namespace != "flux-system") | .kind + "/"
-    + (.metadata.namespace // "") + "/" + .metadata.name] | .[]' "$rendered/cluster.yaml" \
+  bad=$(yq ea "[select(.kind != null) | select(.metadata.namespace != \"flux-system\" or (($fluxks
+    or .apiVersion == \"v1\" and (.kind == \"ConfigMap\" or .kind == \"Secret\")) | not)) | .kind + \"/\"
+    + (.metadata.namespace // \"\") + \"/\" + .metadata.name] | .[]" "$rendered/cluster.yaml" \
     | grep -vxF ConfigMap/kube-system/coredns-custom || true)
-  [ -z "$bad" ] || fail "$cluster: a cluster directory adds objects to flux-system alone, and the cluster DNS's names" \
-    "for its tenants' Kanidm (coredns-custom in kube-system): $bad"
+  [ -z "$bad" ] || fail "$cluster: a cluster directory adds Kustomizations, ConfigMaps and Secrets to flux-system" \
+    "alone, and the cluster DNS's names for its tenants' Kanidm (coredns-custom in kube-system): $bad"
   # Apps reach their tenant's Kanidm at its public name, which the cluster's DNS answers with Kanidm's Service. k3s
   # reads the *.override keys of coredns-custom into CoreDNS.
   yq ea '[select(.kind == "ConfigMap" and .metadata.namespace == "kube-system" and .metadata.name == "coredns-custom")]
@@ -2137,6 +2227,19 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
   yq ea '[select(.kind == "Secret" and .metadata.name == "cluster-secrets")]
     | (.[0].stringData // .[0].data // {}) | keys | .[]' "$rendered/cluster.yaml" >>"$w/keys"
 done
+
+# Every tree the release vendors is built as a chart or applied in some cluster, and every chart built is installed.
+used=$(yq ea "[(select(.kind == \"HelmChart\") | .spec.chart), (select($fluxks) | .spec.path)] | .[]" "$out"/*/*.yaml)
+bad=$(for record in kubernetes/platform/*/vendor/*.json; do
+  [ ! -e "$record" ] || grep -qxF "./${record%.json}" <<<"$used" || echo "./${record%.json}"
+done | paste -sd' ')
+[ -z "$bad" ] || fail "every tree the release vendors is a HelmChart's chart or a Kustomization's path in some cluster:" \
+  "$bad"
+bad=$(comm -23 <(yq ea '[select(.kind == "HelmChart") | .metadata.namespace + "/" + .metadata.name] | .[]' \
+  "$out"/*/*.yaml | sort -u) <(yq ea '[select(.kind == "HelmRelease" and .spec.chartRef.kind == "HelmChart")
+  | (.spec.chartRef.namespace // .metadata.namespace) + "/" + .spec.chartRef.name] | .[]' "$out"/*/*.yaml | sort -u) \
+  | paste -sd' ')
+[ -z "$bad" ] || fail "every HelmChart is the chart of a HelmRelease in some cluster: $bad"
 
 bad=$(python3 -I -c "$migrations" "$founding" <"$work/migrations.jsonl")
 [ -z "$bad" ] || fail "Kanidm's migrations: $bad"
