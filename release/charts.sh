@@ -328,7 +328,7 @@ prune() {
 
 add() {
   [ $# -ge 4 ] || usage
-  local tree=${1%/} source=$2 version=$3 signer='' url='' path='' licence=null drops=() key='' digest='' commit='' drop file
+  local tree=${1%/} source=$2 version=$3 signer='' url='' path='' licence=null drops=() key='' digest='' commit='' drop file fpr
   shift 3
   while [ $# -gt 0 ]; do
     case $1 in
@@ -383,10 +383,17 @@ add() {
   esac
   if [ -n "$url" ]; then
     key=$tmp/key.asc
-    curl -fsSL --proto =https "$url" -o "$key"
-    grep -q '^-----BEGIN PGP PUBLIC KEY BLOCK-----' "$key" || die "$url doesn't hold an ASCII-armoured key."
-    [ "$(fingerprint "$key")" = "$(jq -r .pgp <<<"$signer")" ] ||
-      die "$url doesn't hold exactly one key, with fingerprint $(jq -r .pgp <<<"$signer")."
+    fpr=$(jq -r .pgp <<<"$signer")
+    curl -fsSL --proto =https "$url" -o "$tmp/key"
+    [ "$(fingerprint "$tmp/key")" = "$fpr" ] || die "$url doesn't hold exactly one key, with fingerprint $fpr."
+    # The release keeps keys armoured, as some upstreams don't publish theirs.
+    if grep -q '^-----BEGIN PGP PUBLIC KEY BLOCK-----' "$tmp/key"; then
+      mv "$tmp/key" "$key"
+    else
+      gpg --batch --quiet --import "$tmp/key"
+      gpg --batch --armor --export "$fpr" >"$key"
+      [ "$(fingerprint "$key")" = "$fpr" ] || die "$url's key doesn't armour to one key with fingerprint $fpr."
+    fi
   fi
   drop=[]
   for file in "${drops[@]}"; do drop=$(jq -c --arg file "$file" '. + [$file]' <<<"$drop"); done
