@@ -38,34 +38,12 @@ let
   path = "./kubernetes/clusters/test";
   adminKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN9QsUU2i+9+MwdvtxOsPVD6L24UHYJXVJRI2oe+9oHP example";
 
-  # ntfy tokens are "tk_" plus 29 characters.
-  publisherToken = "tk_suveraentestpublisher00000000";
-  gatusToken = "tk_suveraentestgatus000000000000";
-  heartbeatToken = "heartbeattesttoken";
-  phonePassword = "phone-test-password";
-
-  secrets = pkgs.runCommand "watcher-test-secrets" { nativeBuildInputs = [ pkgs.ntfy-sh ]; } ''
-    mkdir $out
-    hash() { printf '%s\n%s\n' "$1" "$1" | ntfy user hash | grep -o '\$2a\$.*'; }
-    cat > $out/ntfy.env <<EOF
-    NTFY_AUTH_USERS='phone:$(hash ${phonePassword}):user,publisher:$(hash unused):user,gatus:$(hash unused):user'
-    NTFY_AUTH_TOKENS='publisher:${publisherToken},gatus:${gatusToken}'
-    EOF
-    cat > $out/gatus.env <<EOF
-    NTFY_TOPIC=ops
-    NTFY_TOKEN=${gatusToken}
-    HEARTBEAT_TOKEN_SERVER=${heartbeatToken}
-    EOF
-    printf '%s' ${publisherToken} > $out/publisher-token
-    printf '%s' ${heartbeatToken} > $out/heartbeat-token
-  '';
+  watching = import ./vm-watcher.nix pkgs;
+  inherit (watching) secrets phone ops;
 
   # nixpkgs' well-known test keys: the ed25519 one signs releases, the other one isn't a signer.
   keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
   signer = keys.snakeOilEd25519PublicKey;
-
-  # "en*" would also match eth1, the test network, through its alternative names.
-  uplink = "eth0";
 
   # The tenant policies match these kinds by group and resource, and the servers' checks read their status; their real
   # definitions come with the platform, which this test doesn't deploy.
@@ -179,9 +157,6 @@ let
           ];
     }
   );
-  phone = "-u phone:${phonePassword}";
-  # Phones read through the public host name and nginx, as the apps do.
-  ops = "curl -fsS ${phone} 'http://alerts.test/ops/json?poll=1'";
 
   # The two providers the server copies its own state to, on the watcher at addresses of their own; its nginx holds
   # port 80.
@@ -198,6 +173,7 @@ pkgs.testers.runNixOSTest {
       {
         imports = [
           module
+          watching.module
           (import ./providers.nix {
             cluster = null;
             platform = {
@@ -209,20 +185,12 @@ pkgs.testers.runNixOSTest {
           })
         ];
 
-        # Plain HTTP in the VM; certificates are nginx's ordinary ACME setup.
-        services.nginx.virtualHosts = lib.genAttrs [ "alerts.test" "status.test" ] (_: {
-          forceSSL = lib.mkForce false;
-          enableACME = lib.mkForce false;
-        });
-
         # The server's IPv6 node address is on the test network's link, but outside its prefix.
         networking.interfaces.eth1.ipv6.routes = map (address: {
           inherit address;
           prefixLength = 128;
         }) (lib.filter (lib.hasInfix ":") nodes.server.suveraen.cluster.nodeIP);
 
-        networking.hostId = "5c1e0a7d";
-        system.stateVersion = "26.05";
         environment.systemPackages = [
           pkgs.netcat
           pkgs.jq
@@ -234,18 +202,7 @@ pkgs.testers.runNixOSTest {
 
         suveraen = {
           adminKeys = [ adminKey ];
-          storage = {
-            systemDisks = [ "/dev/disk/by-id/test-0" ];
-            encrypted = false;
-          };
-          network.interface = uplink;
           watcher = {
-            enable = true;
-            ntfyHost = "alerts.test";
-            statusHost = "status.test";
-            readers = [ "phone" ];
-            ntfyEnvironmentFile = "${secrets}/ntfy.env";
-            gatusEnvironmentFile = "${secrets}/gatus.env";
             servers = [ "server" ];
             heartbeatTimeout = "30s";
             unlockPorts = [
@@ -254,11 +211,6 @@ pkgs.testers.runNixOSTest {
                 address = nodes.server.networking.primaryIPAddress;
               }
             ];
-          };
-          alerts = {
-            urlFile = toString (pkgs.writeText "alerts-url" "http://127.0.0.1:2586/ops");
-            tokenFile = "${secrets}/publisher-token";
-            smart = false;
           };
         };
       };
@@ -355,9 +307,7 @@ pkgs.testers.runNixOSTest {
               );
             });
           };
-          alerts = {
-            urlFile = toString (pkgs.writeText "alerts-url" "http://alerts.test/ops");
-            tokenFile = "${secrets}/publisher-token";
+          alerts = watching.alerts // {
             fallback = {
               urlFile = toString (pkgs.writeText "fallback-url" "http://127.0.0.1:2587/fallback");
               tokenFile = "${secrets}/publisher-token";
