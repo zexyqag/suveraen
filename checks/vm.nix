@@ -269,6 +269,7 @@ pkgs.testers.runNixOSTest {
         imports = [
           module
           ./vm-server.nix
+          ./vm-ceph.nix
         ];
 
         virtualisation = {
@@ -382,6 +383,28 @@ pkgs.testers.runNixOSTest {
       inherit (nodes.server.systemd.services.nixos-upgrade) postStart;
       staleDays = toString (nodes.server.suveraen.upgrade.staleAfterDays + 1);
       unlock = pkgs.lib.head nodes.watcher.suveraen.watcher.unlockPorts;
+      # What pods find of the host's ports: the mirror's too, at the node's addresses and the resolver's, each beside a
+      # port pods reach there, so that a probe that can't reach the address at all doesn't pass for the port closed.
+      hostPorts =
+        let
+          node = nodes.server.networking.primaryIPAddress;
+          inherit (nodes.server.suveraen.cluster.nodeServices) resolver;
+          mirror = toString nodes.server.suveraen.mirror.port;
+        in
+        [
+          "open ${node} 6443"
+          "open ${node} 10250"
+          # etcd answers on the node's address, but only to the API server.
+          "closed ${node} 2379"
+        ]
+        ++ pkgs.lib.concatMap (address: [
+          "open ${address} 6443"
+          "closed ${address} ${mirror}"
+        ]) nodes.server.suveraen.cluster.nodeIP
+        ++ [
+          "open ${resolver} 53"
+          "closed ${resolver} ${mirror}"
+        ];
     in
     ''
       import ipaddress
@@ -709,18 +732,19 @@ pkgs.testers.runNixOSTest {
           server.succeed("kubectl -n probe logs dns-probe-host | grep -F 192.0.2.53")
 
       with subtest("Pods reach only the API server, the kubelet and the resolver on the host"):
+          host_ports = ${builtins.toJSON hostPorts}
+          probes = " ".join(",".join(line.split()[1:]) for line in host_ports)
           server.succeed(
               f"kubectl -n probe run host-ports --image={busybox} --image-pull-policy=Never --restart=Never --command -- sh -c"
-              " 'for port in 6443 10250 2379; do timeout 10 nc -w 3 ${nodes.server.networking.primaryIPAddress} $port </dev/null"
-              " && echo open $port || echo closed $port; done'"
+              f" 'for probe in {probes}; do"
+              " address=''${probe%,*} port=''${probe#*,}; timeout 10 nc -w 3 $address $port </dev/null"
+              " && echo open $address $port || echo closed $address $port; done'"
           )
           server.wait_until_succeeds(
               "kubectl -n probe get pod host-ports -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
           )
-          ports = server.succeed("kubectl -n probe logs host-ports")
-          # etcd answers on the node's address, but only to the API server.
-          for line in ["open 6443", "open 10250", "closed 2379"]:
-              assert line in ports, ports
+          ports = server.succeed("kubectl -n probe logs host-ports").splitlines()
+          assert not [line for line in host_ports if line not in ports], ports
 
       with subtest("A load balancer with local traffic policy hands pods the client's own address"):
           # As the gateway's Service is (platform/gateway): ServiceLB only publishes the node's addresses, and

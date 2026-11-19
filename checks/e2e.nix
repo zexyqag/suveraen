@@ -1,7 +1,8 @@
 # Boots a server built from the same modules as a real one, with internet access, and lets Flux deploy
 # kubernetes/clusters/test from a signed commit on a git server inside the test, with two test ACME CAs and a nameserver
 # standing in for the internet's. Every Kustomization and HelmRelease becomes Ready, every Secret is stored encrypted
-# with secretbox, no pod is refused and no job fails; both CAs know our accounts, and every host's certificate comes
+# with secretbox, no pod is refused and no job fails, and the server's mirror holds images of every registry it lists,
+# through which alone containerd pulled them; both CAs know our accounts, and every host's certificate comes
 # over DNS-01, its challenge answered in our ACME zone through the node's Knot and removed again, also where an
 # organisation's own DNS points the challenge there; the standby CA, which requires our external account, issues too;
 # every route answers through the host firewall, kube-proxy, the gateway and the app's network policy with a certificate
@@ -511,6 +512,7 @@ runTest {
       imports = [
         module
         ./vm-server.nix
+        ./vm-ceph.nix
       ];
 
       networking.interfaces.eth1.ipv6.routes = [
@@ -1061,7 +1063,7 @@ runTest {
               prefixes = server.succeed("secret-prefixes").split()
               assert prefixes == ["k8s:enc:secretbox:v1:secretboxkey:"], prefixes
 
-          with subtest("Every workload runs, Pod Security refused nothing, and no rule on the server's own metrics, which it keeps on loopback behind a password, fires but those on how the workload fares"):
+          with subtest("Every workload runs, Pod Security refused nothing, and no rule on the server's own metrics, which it keeps on loopback behind a password, fires but those on how the workload fares; the mirror holds images of every registry it lists"):
               def items(kind):
                   return parsed(f"kubectl get {kind} -A -o json")["items"]
 
@@ -1088,6 +1090,9 @@ runTest {
               assert not pending, pending
               classes = sorted(c["metadata"]["name"] for c in items("storageclasses"))
               assert classes == ["ceph-block", "ceph-bucket"], classes
+              # containerd pulls through the mirror alone, so the workload's images from each registry are there.
+              in_mirror = server.succeed("ls ${nodes.server.suveraen.storage.unsnapshotted.mirror.path}").split()
+              assert set(${builtins.toJSON (lib.attrNames nodes.server.suveraen.mirror.upstreams)}) <= set(in_mirror), in_mirror
               # The Barman plugin's certificates for its connection with the operator, from its own namespace's CA.
               server.succeed("kubectl -n cloudnative-pg wait certificate --all --for=condition=Ready --timeout=0")
               for port, path in [(8428, "/api/v1/query?query=up"), (8880, "/api/v1/rules"), (9100, "/metrics")]:
