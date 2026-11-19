@@ -907,6 +907,21 @@ refuses cronjob-image-tag "images are pinned by digest: busybox:1" \
   "append platform/reloader/app/helmrelease.yaml '---\napiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: x
   namespace: reloader\nspec:\n  schedule: \"0 0 * * *\"\n  jobTemplate:\n    spec:\n      template:\n        spec:
           restartPolicy: Never\n          containers:\n            - name: x\n              image: busybox:1\n'"
+refuses image-volume-tag "images are pinned by digest: busybox:2" \
+  "append platform/reloader/app/helmrelease.yaml '---\napiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: x
+  namespace: reloader\nspec:\n  schedule: \"0 0 * * *\"\n  jobTemplate:\n    spec:\n      template:\n        spec:
+          restartPolicy: Never\n          containers:\n            - name: x
+              image: busybox@sha256:'$(printf %064d 0)'\n          volumes:\n            - name: x
+              image:\n                reference: busybox:2\n'"
+refuses chart-image-volume-tag "images are pinned by digest: ghcr.io/example/tools:1" \
+  "yq -i '.spec.values.persistence.tools = {\"type\": \"image\", \"image\": \"ghcr.io/example/tools:1\",
+   \"globalMounts\": [{\"path\": \"/tools\"}]}' apps/hello/app/helmrelease.yaml"
+kubesystem="test: kube-system is k3s's own, where the release puts nothing but the cluster DNS's names"
+refuses helmrelease-kube-system "$kubesystem" \
+  "yq -i '.spec.targetNamespace = \"kube-system\"' platform/reloader/app/helmrelease.yaml"
+refuses object-kube-system "$kubesystem" \
+  "append platform/reloader/app/helmrelease.yaml '---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x
+  namespace: kube-system\n'"
 
 # Tenants' databases.
 C=apps/postgres/cluster/cluster.yaml

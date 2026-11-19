@@ -1856,15 +1856,18 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       and (.metadata.namespace + "/" + .metadata.name) != "flux-system/volsync"))) | .metadata.name] | .[]' "$file")
     [ -z "$bad" ] || fail "$cluster/$name: a HelmRelease takes its values from itself alone, and only VolSync's" \
       "changes what its chart renders: $bad"
-    # Images in what is rendered here, the PostgreSQL images clusters take from catalogs, Ceph's, and the tags charts
-    # are given.
+    # Images in what is rendered here, containers' and volumes', the PostgreSQL images clusters take from catalogs,
+    # Ceph's, and the tags and images charts are given.
     bad=$({
       yq ea '[select(.kind == "ClusterImageCatalog" or .kind == "ImageCatalog") | .spec.images[].image] | .[]' "$file"
       yq ea '[.spec.template.spec // .spec.jobTemplate.spec.template.spec // {}
-        | ((.containers // []) + (.initContainers // []))[] | .image] | .[]' "$file"
+        | ((((.containers // []) + (.initContainers // []))[] | .image),
+          ((.volumes // [])[] | select(has("image")) | .image.reference // "-"))] | .[]' "$file"
       yq ea '[select(.kind == "CephCluster") | .spec.cephVersion.image] | .[]' "$file"
       yq ea '[select(.kind == "HelmRelease") | .spec.values // {} | .. | select(tag == "!!map" and has("tag")) | .tag
         | tostring] | .[]' "$file"
+      yq ea '[select(.kind == "HelmRelease") | .spec.values // {} | .. | select(tag == "!!map" and has("image"))
+        | .image | select(tag == "!!str")] | .[]' "$file"
     } | grep -vE '@sha256:[0-9a-f]{64}$' | sort -u | paste -sd' ' || true)
     [ -z "$bad" ] || fail "$cluster/$name: images are pinned by digest: $bad"
     if [ "$name" != gateway ]; then
@@ -2012,6 +2015,13 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     | grep -vxF ConfigMap/kube-system/coredns-custom || true)
   [ -z "$bad" ] || fail "$cluster: a cluster directory adds Kustomizations, ConfigMaps and Secrets to flux-system" \
     "alone, and the cluster DNS's names for its tenants' Kanidm (coredns-custom in kube-system): $bad"
+  # pinned-images and Pod Security leave kube-system to k3s's own pods.
+  bad=$(yq ea '[select(.kind != null) | select(.metadata.namespace == "kube-system" or .kind == "HelmRelease"
+    and ((.spec.targetNamespace // "") == "kube-system" or (.spec.storageNamespace // "") == "kube-system"))
+    | .kind + "/" + (.metadata.namespace // "") + "/" + .metadata.name] | .[]' "$rendered"/*.yaml \
+    | grep -vxF ConfigMap/kube-system/coredns-custom | paste -sd' ' || true)
+  [ -z "$bad" ] || fail "$cluster: kube-system is k3s's own, where the release puts nothing but the cluster DNS's" \
+    "names, and installs no chart: $bad"
   # Apps reach their tenant's Kanidm at its public name, which the cluster's DNS answers with Kanidm's Service. k3s
   # reads the *.override keys of coredns-custom into CoreDNS.
   yq ea '[select(.kind == "ConfigMap" and .metadata.namespace == "kube-system" and .metadata.name == "coredns-custom")]

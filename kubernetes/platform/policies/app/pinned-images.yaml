@@ -1,0 +1,47 @@
+---
+# A pod runs, and mounts as volumes, only images named by digest, which no registry can point at other bytes; which
+# registries they come from is containerd's to say (nixos/mirror.nix). kube-system holds k3s's own pods, whose images
+# the servers load from k3s's release tarball. An image a pod already has stays allowed, so a pod made before this
+# policy still takes changes to its metadata.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: pinned-images
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods, pods/ephemeralcontainers]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system]
+  variables:
+    - name: images
+      expression: >-
+        object.spec.containers.map(c, c.image) + object.spec.?initContainers.orValue([]).map(c, c.image) +
+        object.spec.?ephemeralContainers.orValue([]).map(c, c.image) +
+        object.spec.?volumes.orValue([]).filter(v, has(v.image)).map(v, v.image.?reference.orValue(''))
+    - name: had
+      expression: >-
+        oldObject == null ? [] : oldObject.spec.containers.map(c, c.image) +
+        oldObject.spec.?initContainers.orValue([]).map(c, c.image) +
+        oldObject.spec.?ephemeralContainers.orValue([]).map(c, c.image) +
+        oldObject.spec.?volumes.orValue([]).filter(v, has(v.image)).map(v, v.image.?reference.orValue(''))
+    - name: unpinned
+      expression: variables.images.filter(i, !i.matches('@sha256:[0-9a-f]{64}$') && !(i in variables.had))
+  validations:
+    - expression: size(variables.unpinned) == 0
+      messageExpression: "'pods run only images named by digest: ' + variables.unpinned.join(' ')"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: pinned-images
+spec:
+  policyName: pinned-images
+  validationActions: [Deny]

@@ -4,8 +4,9 @@
 # secretbox and only SSH, web and STUN ports open. Ceph's disks have stable names, their DB volumes lie on an array over
 # both system disks, the kernel maps and decrypts Ceph's volumes without loading modules, and k3s keeps no volumes of
 # its own. An app's charts reach only its own namespace and can neither widen who may act there nor publish ports, no
-# namespace but Ceph's leaves restricted Pod Security, and no Service takes external IPs. A tenant's namespaces, names
-# in flux-system and hosts are its own, Gateways stay in the gateway namespace, and so do certificates and ACME
+# namespace but Ceph's leaves restricted Pod Security, pods outside kube-system run only images named by digest, and no
+# Service takes external IPs. A tenant's namespaces, names in flux-system and hosts are its own, Gateways stay in the
+# gateway namespace, and so do certificates and ACME
 # orders unless an app terminates TLS for its one host itself, Issuers sign a namespace's own names only where
 # the platform allows a private CA, a tenant's PostgreSQL takes no restore while it runs, and the platform's
 # pods, and Ceph's, run at priorities no tenant's may ask for. Only the platform's backup jobs and movers reach out of a
@@ -534,14 +535,32 @@ pkgs.testers.runNixOSTest {
               out = server.fail(f"{candidate} 2>&1")
               assert "ValidatingAdmissionPolicy 'release-sources'" in out, (candidate, out)
 
+      # The busybox k3s loads with its own images, by the digest k3s names it with beside its tag, as pinned-images has
+      # pods name their images; pods here run it without a pull.
+      busybox = server.succeed("k3s crictl images -o json | jq -r '.images[].repoDigests[]?' | grep busybox | head -n1").strip()
+      assert re.search(r"@sha256:[0-9a-f]{64}$", busybox), busybox
+
+      # A pod as the restricted standard has it, that runs busybox.
+      def pod(namespace, priority=None):
+          spec = {
+              "securityContext": {"runAsNonRoot": True, "runAsUser": 65534, "seccompProfile": {"type": "RuntimeDefault"}},
+              "containers": [
+                  {
+                      "name": "probe",
+                      "image": busybox,
+                      "imagePullPolicy": "Never",
+                      "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
+                  }
+              ],
+          }
+          if priority:
+              spec["priorityClassName"] = priority
+          return {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "probe", "namespace": namespace}, "spec": spec}
+
       with subtest("Pods must meet the restricted Pod Security Standard unless the platform labels their namespace"):
-          out = server.fail(f"kubectl run root --image=busybox --restart=Never {member} 2>&1")
+          out = server.fail(f"kubectl run root --image={busybox} --image-pull-policy=Never --restart=Never {member} 2>&1")
           assert "violates PodSecurity" in out, out
-          server.succeed(
-              f"kubectl run restricted --image=busybox --restart=Never --dry-run=server {member}"
-              """ --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"""
-              """"containers":[{"name":"restricted","image":"busybox","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}'"""
-          )
+          server.succeed(f"echo {shlex.quote(json.dumps(pod('member')))} | kubectl create --dry-run=server -f - {member}")
           out = server.fail(f"kubectl label namespace member pod-security.kubernetes.io/enforce=privileged {member} 2>&1")
           assert "forbidden" in out, out
           # Flux's own pods are created, so they meet the standard too.
@@ -631,6 +650,47 @@ pkgs.testers.runNixOSTest {
               "kubectl create namespace published && kubectl label namespace published suveraen/publish=true"
               " && kubectl -n published create service loadbalancer published --tcp=80 --dry-run=server"
           )
+
+      with subtest("Pods run only images named by digest, ephemeral containers and image volumes too"):
+          tagged = server.succeed("k3s crictl images -o json | jq -r '.images[].repoTags[]?' | grep busybox | head -n1").strip()
+          # Made by tag before the policy, as a pod of the first install could be.
+          before = pod("member")
+          before["metadata"]["name"] = "tagged"
+          [container] = before["spec"]["containers"]
+          container |= {"image": tagged, "command": ["sleep", "3600"]}
+          server.succeed(f"echo {shlex.quote(json.dumps(before))} | kubectl create -f -")
+          server.succeed("kubectl apply -f ${../kubernetes/platform/policies/app/pinned-images.yaml}")
+
+          def dry_pod(namespace="member", image=busybox, **spec):
+              obj = pod(namespace)
+              obj["spec"]["containers"][0]["image"] = image
+              obj["spec"] |= spec
+              return f"echo {shlex.quote(json.dumps(obj))} | kubectl create --dry-run=server -f -"
+
+          refused(dry_pod(image=tagged), "pinned-images")
+          server.succeed(dry_pod())
+          refused(dry_pod(initContainers=[pod("member")["spec"]["containers"][0] | {"name": "init", "image": tagged}]), "pinned-images")
+          # Mounted as a volume, which the restricted standard allows.
+          refused(dry_pod(volumes=[{"name": "tools", "image": {"reference": tagged}}]), "pinned-images")
+          server.succeed(dry_pod(volumes=[{"name": "tools", "image": {"reference": busybox}}]))
+          # k3s's own pods, whose images the servers load by tag from k3s's release tarball.
+          server.succeed(dry_pod("kube-system", tagged))
+
+          # As kubectl debug adds one, as a dry run, whatever the kubelet has changed of the pod since.
+          def ephemeral(image):
+              obj = json.loads(server.succeed("kubectl -n member get pod tagged -o json"))
+              del obj["metadata"]["resourceVersion"]
+              obj["spec"]["ephemeralContainers"] = [pod("member")["spec"]["containers"][0] | {"name": "debug", "image": image}]
+              path = "/api/v1/namespaces/member/pods/tagged/ephemeralcontainers?dryRun=All"
+              return f"echo {shlex.quote(json.dumps(obj))} | kubectl replace --raw {shlex.quote(path)} -f -"
+
+          refused(ephemeral("busybox:musl"), "pinned-images")
+          server.succeed(ephemeral(busybox))
+          # The pod made by tag still takes a change of its metadata, and busybox by digest, but no other tag.
+          server.succeed("kubectl -n member label pod tagged probe=x --dry-run=server")
+          server.succeed(f"kubectl -n member set image pod/tagged probe={busybox} --dry-run=server")
+          refused("kubectl -n member set image pod/tagged probe=busybox:musl --dry-run=server", "pinned-images")
+          server.succeed("kubectl -n member delete pod tagged --wait=false")
 
       with subtest("No Service takes external IPs, which would be forwarded before the host firewall sees them"):
           out = server.fail(
@@ -744,7 +804,6 @@ pkgs.testers.runNixOSTest {
           server.succeed(
               "kubectl create namespace probe && kubectl label namespace probe pod-security.kubernetes.io/enforce=privileged"
           )
-          busybox = server.succeed("k3s crictl images -o json | jq -r '.images[].repoTags[]' | grep busybox | head -n1").strip()
           server.succeed(
               f"kubectl -n probe run dns-probe --image={busybox} --image-pull-policy=Never --restart=Never --command -- nslookup probe.test."
           )
@@ -1279,22 +1338,6 @@ pkgs.testers.runNixOSTest {
           classes = server.succeed("kubectl -n flux-system get pods -o jsonpath='{.items[*].spec.priorityClassName}'").split()
           assert classes and set(classes) == {"platform"}, classes
           server.succeed("kubectl apply -f ${../kubernetes/platform/policies/app/tenant-priority.yaml}")
-
-          def pod(namespace, priority=None):
-              spec = {
-                  "securityContext": {"runAsNonRoot": True, "runAsUser": 65534, "seccompProfile": {"type": "RuntimeDefault"}},
-                  "containers": [
-                      {
-                          "name": "probe",
-                          "image": "busybox",
-                          "securityContext": {"allowPrivilegeEscalation": False, "capabilities": {"drop": ["ALL"]}},
-                      }
-                  ],
-              }
-              if priority:
-                  spec["priorityClassName"] = priority
-              return {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "probe", "namespace": namespace}, "spec": spec}
-
           refused(dry(pod("alpha-hello", "platform")), "tenant-priority")
           refused(dry(pod("alpha-hello", "system-node-critical")), "tenant-priority")
           out = server.succeed(f"{dry(pod('alpha-hello'))} -o jsonpath='{{.spec.priorityClassName}}'")
@@ -1347,7 +1390,9 @@ pkgs.testers.runNixOSTest {
           # volume that is copied off-site.
           mover = labelled_pod("alpha-hello", {"suveraen/egress": "internet"})
           server.succeed(f"echo {shlex.quote(json.dumps(mover))} | kubectl create -f - {by('kube-system:job-controller')}")
-          refused(f"kubectl -n alpha-hello set image pod/probe probe=busybox:musl {deployer}", "egress-labels")
+          # To another image, by digest as pinned-images holds every image to.
+          another = busybox.split("@")[0] + "@sha256:" + "0" * 64
+          refused(f"kubectl -n alpha-hello set image pod/probe probe={another} {deployer}", "egress-labels")
           refused(f"kubectl -n alpha-hello label pod probe suveraen/egress- {deployer}", "egress-labels")
           server.succeed(f"kubectl -n alpha-hello annotate pod probe probe=x {deployer}")
           server.succeed("kubectl -n alpha-hello delete pod probe --wait=false")
@@ -1894,7 +1939,7 @@ pkgs.testers.runNixOSTest {
           obj["metadata"]["name"] = name
           obj["spec"]["restartPolicy"] = restart
           [container] = obj["spec"]["containers"]
-          container |= {"name": name, "image": busybox, "imagePullPolicy": "Never", "command": command}
+          container |= {"name": name, "command": command}
           if memory:
               container["resources"] = {"limits": {"memory": memory}}
           return obj

@@ -1,7 +1,8 @@
 # Boots a server built from the same modules as a real one, with internet access, and lets Flux deploy
 # kubernetes/clusters/test from a signed commit on a git server inside the test, with two test ACME CAs and a nameserver
 # standing in for the internet's. Every Kustomization and HelmRelease becomes Ready, every Secret is stored encrypted
-# with secretbox, no pod is refused and no job fails; both CAs know our accounts, and every host's certificate comes
+# with secretbox, every pod outside kube-system runs images named by digest, no pod is refused and no job fails; both
+# CAs know our accounts, and every host's certificate comes
 # over DNS-01, its challenge answered in our ACME zone through the node's Knot and removed again, also where an
 # organisation's own DNS points the challenge there; the standby CA, which requires our external account, issues too;
 # every route answers through the host firewall, kube-proxy, the gateway and the app's network policy with a certificate
@@ -910,7 +911,6 @@ runTest {
           ]:
               print(f"$ {cmd}\n{shown(cmd)}")
           print(acme.execute("journalctl -u pebble -u knot -u 's3-*' --no-pager | tail -n 80")[1])
-          images()
           diagnose_ceph()
 
       # Rook, Ceph through the operator (there's no toolbox), the object store and who may reach it, the CSI drivers,
@@ -973,14 +973,6 @@ runTest {
           ]:
               print(f"$ {cmd}\n{shown(cmd)}")
 
-      # What each container runs, by digest: how images only known by tag here get pinned.
-      def images():
-          status, out = server.execute(
-              "kubectl get pods -A -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}"
-              "{.image}{\" \"}{.imageID}{\"\\n\"}{end}{end}' | sort -u"
-          )
-          print(out)
-
       # Seconds from the first Flux object to each one Ready, which says where a slow run spent its first half hour.
       readiness = []
 
@@ -1030,13 +1022,23 @@ runTest {
 
           with subtest("Every Kustomization and HelmRelease becomes Ready"):
               # The root Kustomization is Ready only once it has created the others, so --all covers them all. A failed
-              # OSD prepare job ends the wait at once: the rest of it would only run out.
+              # OSD prepare job ends the wait at once, and so, looked for every half minute, does a pod a controller or
+              # an operator couldn't make for Pod Security or pinned-images: the rest of it would only run out.
+              admission_refusals = ["violates PodSecurity", "ValidatingAdmissionPolicy 'pinned-images'"]
+              refusals_seen = [0.0]
+
               def ready(_):
                   failed = server.execute(
                       "kubectl -n rook-ceph get jobs -l app=rook-ceph-osd-prepare"
                       " -o jsonpath='{..conditions[?(@.type==\"Failed\")].status}'"
                   )[1]
                   assert "True" not in failed, "an OSD prepare job failed"
+                  if time.monotonic() - refusals_seen[0] >= 30:
+                      refusals_seen[0] = time.monotonic()
+                      code, events = server.execute(
+                          "kubectl get events -A --field-selector reason=FailedCreate -o jsonpath='{.items[*].message}'"
+                      )
+                      assert code != 0 or not any(by in events for by in admission_refusals), events
                   return server.execute(
                       "kubectl -n flux-system wait kustomization --all --for=condition=Ready --timeout=0"
                   )[0] == 0
@@ -1050,7 +1052,6 @@ runTest {
                    o["metadata"]["name"])
                   for o in flux_objects for c in o["status"]["conditions"] if c["type"] == "Ready"
               ))
-              images()
               memory()
 
           with subtest("Charts come from the release: one GitRepository, a HelmChart per vendored chart at its recorded version, and every release at its chart's version"):
@@ -1102,7 +1103,7 @@ runTest {
               prefixes = server.succeed("secret-prefixes").split()
               assert prefixes == ["k8s:enc:secretbox:v1:secretboxkey:"], prefixes
 
-          with subtest("Every workload runs, Pod Security refused nothing, and no rule on the server's own metrics, which it keeps on loopback behind a password, fires but those on how the workload fares; the mirror holds images of every registry it lists, and all of every image the node holds, and answers"):
+          with subtest("Every workload runs, every pod outside kube-system on images named by digest, Pod Security and pinned-images refused nothing, and no rule on the server's own metrics, which it keeps on loopback behind a password, fires but those on how the workload fares; the mirror holds images of every registry it lists, and all of every image the node holds, and answers"):
               def items(kind):
                   return parsed(f"kubectl get {kind} -A -o json")["items"]
 
@@ -1111,8 +1112,21 @@ runTest {
                   assert d["status"].get("readyReplicas", 0) == want, (d["metadata"], d["status"])
               for d in items("daemonsets"):
                   assert d["status"].get("numberReady", 0) == d["status"]["desiredNumberScheduled"], (d["metadata"], d["status"])
-              refused = [e["message"] for e in items("events") if "violates PodSecurity" in e.get("message", "")]
+              # What a controller or an operator couldn't make, and what was made before pinned-images held.
+              refused = [
+                  e["message"] for e in items("events") if any(by in e.get("message", "") for by in admission_refusals)
+              ]
               assert not refused, refused
+              unpinned = sorted({
+                  f"{p['metadata']['namespace']}/{p['metadata']['name']} {image}"
+                  for p in items("pods") if p["metadata"]["namespace"] != "kube-system"
+                  for image in [
+                      c["image"] for c in p["spec"]["containers"] + p["spec"].get("initContainers", [])
+                      + p["spec"].get("ephemeralContainers", [])
+                  ] + [v["image"].get("reference", "") for v in p["spec"].get("volumes", []) if "image" in v]
+                  if not re.search(r"@sha256:[0-9a-f]{64}$", image)
+              })
+              assert not unpinned, unpinned
               # Such as a chart's hook, whose release then only got through on a retry.
               failed = [
                   j["metadata"]["name"] for j in items("jobs")
