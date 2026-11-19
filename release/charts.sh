@@ -1,4 +1,4 @@
-# charts add <tree> <source> <version> (--pgp <fingerprint> <key-url> | --cosign <identity> <issuer> | --unsigned)
+# charts add <tree> <source> <version> (--pgp <fingerprint> <key-url> | --cosign <workflow> <issuer> | --unsigned)
 #        [--path <dir>] [--license <url-or-path>] [--drop <path>]...
 # charts bump <tree> <version>
 # charts check
@@ -50,7 +50,8 @@ valid='def rel: type == "string" and (split("/") | all(. != "" and . != "." and 
       and (.license | . == null or keys == ["path"] and (.path | rel) or keys == ["sha256", "url"])
     end)
   and (.signer == "none" or (.signer | objects | keys == ["pgp"] and (.pgp | test("^[0-9A-F]{40}$"))
-    or keys == ["cosign"] and (.cosign | objects | keys == ["identity", "issuer"] and all(.[]; type == "string"))))
+    or keys == ["cosign"] and (.cosign | objects | keys == ["issuer", "workflow"] and all(.[]; type == "string")
+      and (.workflow | test("^https://[^/@]+/[^/@]+/[^/@]+/\\.github/workflows/[^/@]+$")))))
   and (.license | . == null or has("path")
     or (.url | type == "string" and startswith("https://")) and (.sha256 | hex(64)))
   and (.drop | . == null or type == "array" and length > 0 and all(.[]; rel))
@@ -77,7 +78,7 @@ fingerprint() {
 
 # Why a tree doesn't stand as its record describes it, one line each; nothing if it does.
 problems() {
-  local tree=$1 record=$2 name path chart identity sources
+  local tree=$1 record=$2 name path chart workflow sources
   while IFS= read -r path; do
     echo "$tree: holds $path, where only files and directories with plain names may be"
   done < <(odd "$tree")
@@ -102,11 +103,11 @@ problems() {
     ' "$record"
   # A signature by any workflow would only show that someone signed: it must be one in the chart's own repository, which
   # a source names only as https://<host>/<owner>/<repository>.
-  identity=$(jq -r '.signer.cosign?.identity // empty' "$record")
+  workflow=$(jq -r '.signer.cosign?.workflow // empty' "$record")
   sources=$(jq -c '[.sources[] | strings | ascii_downcase | sub("(\\.git)?/*$"; "")
     | select(test("^https://[^/]+/[^/]+/[^/]+$")) | . + "/"]' <<<"$chart")
-  if [ -n "$identity" ] && ! jq -e --arg id "${identity,,}" 'any(.[]; . as $s | $id | startswith($s))' <<<"$sources" >/dev/null; then
-    echo "$tree: its signer $identity isn't in a repository its Chart.yaml gives as its source:" \
+  if [ -n "$workflow" ] && ! jq -e --arg id "${workflow,,}" 'any(.[]; . as $s | $id | startswith($s))' <<<"$sources" >/dev/null; then
+    echo "$tree: its signer $workflow isn't in a repository its Chart.yaml gives as its source:" \
       "$(jq -c .sources <<<"$chart")"
   fi
 }
@@ -156,7 +157,7 @@ provenance() {
 
 # Fetches an OCI chart by its record's digest, checks its signer and unpacks it as <dir>.
 oci() {
-  local record=$1 dir=$2 key=$3 ref digest name version size top fpr identity tags referrers
+  local record=$1 dir=$2 key=$3 ref digest name version size top fpr workflow tags referrers
   ref=$(jq -r '.source | ltrimstr("oci://")' "$record")
   digest=$(jq -r .digest "$record")
   name=${ref##*/}
@@ -181,9 +182,11 @@ oci() {
     provenance "$key" "$fpr" "$tmp/chart.prov" "$tmp/chart.tgz" "$name-$version.tgz"
     ;;
   cosign)
-    identity=$(jq -r .signer.cosign.identity "$record")
-    cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$(jq -r .signer.cosign.issuer "$record")" \
-      "$ref@$digest" >/dev/null
+    # A workflow's certificate names the ref its run started from, a tag, a branch or a merged pull request, so the
+    # signer is the workflow, from any ref of its repository.
+    workflow=$(jq -r .signer.cosign.workflow "$record" | sed 's/[].[*^()+?{}|$\\]/\\&/g')
+    cosign verify --certificate-identity-regexp "^$workflow@refs/" \
+      --certificate-oidc-issuer "$(jq -r .signer.cosign.issuer "$record")" "$ref@$digest" >/dev/null
     ;;
   none)
     # So that upstream starting to sign is noticed: a provenance, a signature's tag, or any referrer.
@@ -339,7 +342,7 @@ add() {
       ;;
     --cosign)
       [ $# -ge 3 ] || usage
-      signer=$(jq -n --arg identity "$2" --arg issuer "$3" '{cosign: {identity: $identity, issuer: $issuer}}')
+      signer=$(jq -n --arg workflow "$2" --arg issuer "$3" '{cosign: {workflow: $workflow, issuer: $issuer}}')
       shift 3
       ;;
     --unsigned) signer='"none"' && shift ;;

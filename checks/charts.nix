@@ -148,7 +148,7 @@ pkgs.runCommand "charts-test"
         version: "1.1.0", digest: "sha256:\("0" * 64)", signer: $signer, tree: $tree}' > good/$vendor/$1.json
     }
     record signed "{\"pgp\": \"$signer\"}"
-    record cosigned '{"cosign": {"identity": "https://example.org/owner/demo/.github/workflows/release.yaml@refs/heads/main",
+    record cosigned '{"cosign": {"workflow": "https://example.org/owner/demo/.github/workflows/release.yaml",
       "issuer": "https://token.actions.githubusercontent.com"}}'
     (cd good && charts check)
 
@@ -174,7 +174,9 @@ pkgs.runCommand "charts-test"
       "mkdir -p ../../../apps/demo/vendor/chart"
     refused "signed.json isn't a record this tool writes" "jq '.signer = \"unsigned\"' signed.json > x && mv x signed.json"
     refused "isn't in a repository its Chart.yaml gives as its source" \
-      "jq '.signer.cosign.identity = \"https://example.org/owner/other/.github/workflows/release.yaml@refs/heads/main\"' cosigned.json > x && mv x cosigned.json"
+      "jq '.signer.cosign.workflow = \"https://example.org/owner/other/.github/workflows/release.yaml\"' cosigned.json > x && mv x cosigned.json"
+    refused "cosigned.json isn't a record this tool writes" \
+      "jq '.signer.cosign.workflow += \"@refs/heads/main\"' cosigned.json > x && mv x cosigned.json"
     refused "isn't in a repository its Chart.yaml gives as its source" \
       "sed -i 's,https://example.org/owner/demo,https://example.org/owner,' cosigned/Chart.yaml"
     refused "doesn't hold exactly one key, with fingerprint $signer" \

@@ -143,7 +143,7 @@ charts() {
     jq -n -r --arg stem "$stem" --argjson old "$old" --argjson new "$new" --argjson same "$same" '
       def called: .version // .tag;
       def signer: if . == "none" then "unsigned" elif .pgp? then "PGP key \(.pgp)"
-        elif .cosign? then "cosign \(.cosign.identity), issued by \(.cosign.issuer)" else error end;
+        elif .cosign? then "cosign \(.cosign.workflow), issued by \(.cosign.issuer)" else error end;
       "  \($stem): " + if $new == null and $old == null then "holds no record"
       elif $new == null then "removed"
       else [if $old == null then "new at \($new | called)" elif ($old | called) == ($new | called) then $new | called
