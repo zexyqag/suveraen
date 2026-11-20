@@ -2244,8 +2244,8 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     [ -z "$bad" ] || fail "$cluster: tenant secrets are encrypted in every value: $bad"
     bundle=$(yq ea '[select(.kind == "ConfigMap" and .metadata.name == "cluster-settings")] | .[0].data.PUBLIC_CA_BUNDLE
       // ""' "$rendered/cluster.yaml")
-    [ -z "$bundle" ] || fail "$cluster: the public issuer's certificates chain to roots the images hold, so" \
-      "PUBLIC_CA_BUNDLE is empty"
+    [ "$bundle" = Cg== ] || fail "$cluster: the public issuer's certificates chain to roots the images hold, so" \
+      "PUBLIC_CA_BUNDLE is one empty line, Cg=="
   fi
 
   # Two copies off-site at two providers, which a real cluster reaches over TLS only.

@@ -14,6 +14,7 @@ spec:
     - ../../../components/app
     - ../../../components/db-client
     - ../../../components/sso-client
+    - ../../../components/public-roots
     - ../../../components/passthrough-app
   dependsOn:
     - name: policies

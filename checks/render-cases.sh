@@ -1148,6 +1148,9 @@ refuses passthrough-app-for-hello "kubernetes/apps/hello/ks.yaml: a host is \${T
    | (select(documentIndex == 1) | .spec.dependsOn) |= map(select(.name != \"issuer\"))' apps/hello/ks.yaml"
 refuses real-cluster-public-ca "prod: the public issuer's certificates chain to roots the images hold" \
   "$real; yq -i '.data.PUBLIC_CA_BUNDLE = \"eA==\"' clusters/prod/settings.yaml"
+refuses real-cluster-public-ca-empty \
+  "prod: the public issuer's certificates chain to roots the images hold, so PUBLIC_CA_BUNDLE is one empty line" \
+  "$real; yq -i '.data.PUBLIC_CA_BUNDLE = \"\"' clusters/prod/settings.yaml"
 refuses mesh-group-session "netbird-users states each of" \
   "sed -i 's/^          \"credential_type_minimum\": \"passkey\",\$/&\n          \"authsession_expiry\": 3600,/' \
   apps/netbird/sso/configmap.yaml"

@@ -807,7 +807,7 @@ runTest {
               ).strip() + "\n"
           bundle = base64.b64encode(roots.encode()).decode()
           forge.succeed(
-              f"${asCgit} sed -i 's|^  PUBLIC_CA_BUNDLE: \"\"$|  PUBLIC_CA_BUNDLE: {bundle}|' ${checkout}/settings.yaml"
+              f"${asCgit} sed -i 's|^  PUBLIC_CA_BUNDLE: Cg==$|  PUBLIC_CA_BUNDLE: {bundle}|' ${checkout}/settings.yaml"
               f" && grep -qxF '  PUBLIC_CA_BUNDLE: {bundle}' ${checkout}/settings.yaml"
           )
           # A tenant's mesh starts at the release before its own, which a later release upgrades.

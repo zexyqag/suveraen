@@ -1,0 +1,8 @@
+---
+# For an app that reaches the cluster's hosts at their public names, such as its tenant's Kanidm: ConfigMap roots,
+# whose extra.pem holds the roots the public issuer's certificates chain to beyond those images hold (cluster-settings'
+# PUBLIC_CA_BUNDLE), for the app to trust besides its image's own.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ./configmap.yaml

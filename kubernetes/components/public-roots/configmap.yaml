@@ -1,0 +1,7 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: roots
+binaryData:
+  extra.pem: ${PUBLIC_CA_BUNDLE}
