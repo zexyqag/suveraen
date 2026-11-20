@@ -65,6 +65,17 @@
 # not; a token from another tenant's Kanidm gets nowhere. The mesh keeps no device's address and calls nowhere, and its
 # devices keep to it through an upgrade by a signed release, through the restore, whose lost changes they leave behind,
 # and through the server's reboot, without signing in again.
+# A tenant's password vault makes accounts for the members of its Kanidm alone: a member's first sign-in there makes
+# their account, linked to their person and never their mail, to which their device gives keys under a master password
+# and no hint; another of their devices, by the account's API key, reads back an item and an attachment that neither the
+# database nor the volume holds in the clear. No one outside members gets in, nor a person given the mail of one who
+# left, nor one whose mail an account holds alone, and a person Kanidm lets go keeps their sessions and signs new
+# devices in by the API key; there is no password sign-in, sign-up, organisation, emergency contact, hint, mail change,
+# attachment past a person's 100 MiB, admin page or saved setting, nor a place on its root to write one, and it fetches
+# no icon and logs none, nor a sign-in or a member's mail. Through the gateway it sees a pseudonym, holds a device's
+# notifications open past the gateway's timeouts, and cuts an upload too slow for them, which the device takes back as
+# the apps do, leaving nothing; it goes unready while its database is restored, never restarted, and its vault and
+# sessions come back with its PostgreSQL and with its volume.
 # Kanidm's volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all
 # replaces; the server's checks alert once when an app holds a wrong one, or has no pod behind its edges, and when that
 # clears.
@@ -282,6 +293,10 @@ let
   signin = pkgs.writers.writePython3Bin "signin" { flakeIgnore = [ "E501" ]; } (
     builtins.readFile ./signin.py
   );
+  bitwarden = pkgs.writers.writePython3Bin "bitwarden" {
+    libraries = [ pkgs.python3Packages.cryptography ];
+    flakeIgnore = [ "E501" ];
+  } (builtins.readFile ./bitwarden.py);
 
   # The driver's builder gets the script in an environment variable, which holds no more than 128 KiB, so each driver,
   # the interactive one and the one the test's own run uses too, gets its attributes from a file instead.
@@ -402,8 +417,9 @@ runTest {
         pkgs.rclone
         # To decrypt the server's own copies as the operator does.
         pkgs.age
-        # The browser of the people whose devices sign in here.
+        # The browser of the people whose devices sign in here, and a Bitwarden app of theirs.
         signin
+        bitwarden
       ];
       # Two CAs, two nameservers, two object stores and two NetBird clients.
       virtualisation.memorySize = 1536;
@@ -1578,11 +1594,11 @@ runTest {
               "Client-Ip", "X-Forwarded", "Forwarded-For", "X-Originating-Ip", "Proxy-Client-Ip", "WL-Proxy-Client-IP",
               "X-Appengine-User-Ip", "Cf-Pseudo-Ipv4", "HTTP_CLIENT_IP",
           ]
+          forging = " ".join(f"-H '{name}: 192.0.2.1'" for name in forged)
           ranges = [ipaddress.ip_network(setting(f"GATEWAY_PSEUDONYM_V{v}")) for v in [4, 6]]
 
           # The client's address as hello's podinfo is told it, from the headers it echoes.
           def pseudonym(node, host, address="${server}", source=None):
-              forging = " ".join(f"-H '{name}: 192.0.2.1'" for name in forged)
               bind = f" --interface {source}" if source else ""
               out = node.succeed(f"{fetch(host, address)}headers {forging}{bind}")
               assert "192.0.2.1" not in out, out
@@ -2382,14 +2398,17 @@ runTest {
                   t: [("right", True)] for t in tenants
               }, found
 
+          # The tenant's PostgreSQL primary, which holds every app's database, and psql there as PostgreSQL's own user.
+          pg_primary = f"$(kubectl -n {first}-postgres get pod -l cnpg.io/instanceRole=primary -o name)"
+          pg_psql = f"kubectl -n {first}-postgres exec {pg_primary} -c postgres -- psql -tA -v ON_ERROR_STOP=1"
+
           # A tenant's mesh as people use it: its owner through the dashboard's API, members' devices that run
           # NetBird's own client and sign in at the tenant's Kanidm or join by a setup key, and a camera behind a box at
           # someone's home.
           nb_ns = f"{first}-netbird"
           [nb_host] = [h for h, namespace in passthrough.items() if namespace == nb_ns]
           nb_reach = f"--cacert {kanidm_ca} --resolve {nb_host}:443:${server}"
-          nb_pod = f"$(kubectl -n {first}-postgres get pod -l cnpg.io/instanceRole=primary -o name)"
-          nb_db = f"kubectl -n {first}-postgres exec {nb_pod} -c postgres -- psql -tA -d netbird -c"
+          nb_db = f"{pg_psql} -d netbird -c"
           nb_devices = ${builtins.toJSON (lib.genAttrs (lib.attrNames (devices nodes)) (device nodes))}
           nb_nodes = {"acme": acme, "forge": forge}
           nb_camera, nb_other = "${camera}", "${other}"
@@ -2604,7 +2623,7 @@ runTest {
           # it runs, and grep exits 2 when one it listed is gone before it opens it; any other error fails.
           def nb_wal(strings):
               status, out = server.execute(
-                  f"kubectl -n {first}-postgres exec {nb_pod} -c postgres -- {nb_grep(strings)}"
+                  f"kubectl -n {first}-postgres exec {pg_primary} -c postgres -- {nb_grep(strings)}"
                   " /var/lib/postgresql/data/pgdata/pg_wal 2>&1 | sort -u"
               )
               said = set(out.splitlines()) - set(strings)
@@ -2615,7 +2634,7 @@ runTest {
           # Which of these strings a dump of the mesh's database holds.
           def nb_dumped(strings):
               server.succeed(
-                  f"kubectl -n {first}-postgres exec {nb_pod} -c postgres -- pg_dump -d netbird > /tmp/mesh.sql"
+                  f"kubectl -n {first}-postgres exec {pg_primary} -c postgres -- pg_dump -d netbird > /tmp/mesh.sql"
               )
               status, out = server.execute(f"{nb_grep(strings)} /tmp/mesh.sql | sort -u")
               server.succeed("rm /tmp/mesh.sql")
@@ -2934,6 +2953,240 @@ runTest {
               for name in nb_devices:
                   assert not nb_reconnects(name, since[name]).strip(), (name, nb_reconnects(name, since[name]))
 
+          # A tenant's password vault as its members use it, from acme: devices of theirs, each a file of what it holds,
+          # which bitwarden speaks Bitwarden's own protocol for, and Kanidm's pages, which signin walks. Every sign-in
+          # counts toward the vault's own limit of ten at once, then one a minute, for the one address it sees acme at:
+          # the gateway's pseudonym of it. These sign in six times.
+          vw_ns = f"{first}-vaultwarden"
+          [vw_host] = hosts_of(first, vw_ns)
+          vw_pinned = f"--cacert /tmp/ca.crt --resolve {vw_host}:${server}"
+          vw_curl = f"curl -sS --cacert /tmp/ca.crt --resolve {vw_host}:443:${server}"
+          vw_pod = f"kubectl -n {vw_ns} exec vaultwarden-0 -c app --"
+          vw_db = f"{pg_psql} -d vaultwarden -c"
+          # Its pod, and how often its container restarted.
+          vw_pod_state = (
+              f"kubectl -n {vw_ns} get pod vaultwarden-0"
+              " -o jsonpath='{.metadata.uid} {.status.containerStatuses[0].restartCount}'"
+          )
+          vw_domain = read(f"${cluster}/tenants/{first}/secrets.yaml", "TENANT_DOMAIN")
+          vw_master = str(uuid.uuid4())
+          vw_people = {}
+
+          def vw_device(device, *words):
+              return f"bitwarden {vw_pinned} https://{vw_host} /tmp/vault-{device}.json {shlex.join(words)}"
+
+          def vw(device, *words):
+              return json.loads(acme.succeed(vw_device(device, *words)))
+
+          # The gateway reaches the vault again a moment after it is back in its Service.
+          def vw_served():
+              acme.wait_until_succeeds(f"{vw_curl} -fsS -o /dev/null https://{vw_host}/alive", timeout=120)
+
+          def vw_memory():
+              print("vaultwarden's memory at its peak and now:", server.succeed(f"{vw_pod} grep -E '^Vm(HWM|RSS)' /proc/1/status").split())
+
+          # A person's first sign-in on a device, through Kanidm's pages: whether the device got in, and what it said.
+          def vw_sign_in(device, person):
+              page = acme.succeed(vw_device(device, "authorize")).strip()
+              status, out = acme.execute(
+                  f"signin {vw_pinned} --resolve {idm[first]}:${server} app {shlex.quote(page)} {person}"
+                  f" {shlex.quote(vw_people[person]['password'])} 2>&1"
+              )
+              if status == 0:
+                  status, out = acme.execute(f"{vw_device(device, 'sso', json.loads(out)['url'])} 2>&1")
+              return status == 0, out
+
+          with subtest("A member's first sign-in through the tenant's Kanidm makes their account, linked to their person and never their mail, and their device sets its keys under a master password, with no hint"):
+              server.succeed(f"kubectl -n {vw_ns} rollout status statefulset vaultwarden --timeout=300s")
+              # Three members, one of them with no mail yet, and a person outside members.
+              as_idm_admin(first)
+              for vw_who in ["vera", "vito", "vince", "vivian"]:
+                  server.succeed(cli(first, f"person create {vw_who} {vw_who.capitalize()}"))
+                  vw_people[vw_who] = {"uuid": kanidm(first, f"person get {vw_who}")["attrs"]["uuid"][0], "mail": f"{vw_who}@{vw_domain}"}
+                  if vw_who != "vito":
+                      server.succeed(cli(first, f"person update {vw_who} --mail {vw_people[vw_who]['mail']}"))
+              server.succeed(cli(first, "group add-members members vera vito vince"))
+              disable_idm_admin(first)
+              for vw_who in vw_people:
+                  vw_people[vw_who]["password"] = recovered(first, vw_who)
+              vw_since = server.succeed("date -u +%Y-%m-%dT%H:%M:%SZ").strip()
+              vw_started = server.succeed(vw_pod_state)
+              vw_signed, vw_out = vw_sign_in("vera", "vera")
+              assert vw_signed and json.loads(vw_out)["keys"] is False, vw_out
+              vw_user = json.loads(vw_out)["user"]
+              vw_linked = server.succeed(
+                  f"{vw_db} 'select u.uuid, u.email, s.identifier from users u join sso_users s on s.user_uuid = u.uuid'"
+              ).split()
+              assert vw_linked == [
+                  f"{vw_user}|{vw_people['vera']['mail']}"
+                  f"|https://{idm[first]}/oauth2/openid/vaultwarden-oidc/{vw_people['vera']['uuid']}"
+              ], vw_linked
+              vw_out = acme.fail(f"{vw_device('vera', 'set-password', vw_master, '--hint', 'e2e')} 2>&1")
+              assert "Password hints have been disabled" in vw_out, vw_out
+              assert vw("vera", "set-password", vw_master) == {"mail": vw_people["vera"]["mail"]}
+              vw_keys = server.succeed(
+                  f"{vw_db} 'select length(akey) > 0, private_key is not null, password_hint is null from users'"
+              ).strip()
+              assert vw_keys == "t|t|t", vw_keys
+
+          with subtest("A device keeps an item and an attachment that another of the person's devices reads back by the account's API key and the master password, and neither the database nor the volume holds them in the clear"):
+              vw_words = {k: f"e2e-{k}-{uuid.uuid4().hex[:12]}" for k in ["name", "username", "password", "note"]}
+              acme.succeed(f"echo {vw_words['note']} > /tmp/vault-note.txt")
+              vw_kept = vw("vera", "put", vw_words["name"], vw_words["username"], vw_words["password"], "/tmp/vault-note.txt")
+              vw_api_key = vw("vera", "api-key", vw_master)
+              assert vw("vera-cli", "login", vw_api_key["id"], vw_api_key["secret"], vw_master) == {
+                  "user": vw_user, "mail": vw_people["vera"]["mail"]
+              }
+              vw_read_back = vw("vera-cli", "get")
+              assert vw_read_back == [{
+                  "id": vw_kept["item"], "name": vw_words["name"], "username": vw_words["username"],
+                  "password": vw_words["password"], "attachments": [{
+                      "id": vw_kept["attachment"], "name": "vault-note.txt",
+                      "sha256": hashlib.sha256(f"{vw_words['note']}\n".encode()).hexdigest(),
+                  }],
+              }], vw_read_back
+              server.succeed(f"kubectl -n {first}-postgres exec {pg_primary} -c postgres -- pg_dump -d vaultwarden > /tmp/vault.sql")
+              server.succeed(f"grep -qF {vw_kept['item']} /tmp/vault.sql")
+              vw_status, _ = server.execute(
+                  f"grep -qF {' '.join(f'-e {w}' for w in vw_words.values())} /tmp/vault.sql"
+              )
+              server.succeed("rm /tmp/vault.sql")
+              assert vw_status == 1, "the database holds a vault's plaintext"
+              server.succeed(f"{vw_pod} test -s /data/attachments/{vw_kept['item']}/{vw_kept['attachment']}")
+              vw_status, _ = server.execute(f"{vw_pod} grep -rqF {vw_words['note']} /data")
+              assert vw_status == 1, "the volume holds an attachment's plaintext"
+              vw_memory()
+
+          with subtest("Through the gateway the vault sees a pseudonym of a client's, never its address or one it names, and an upload lands on its volume as it comes"):
+              # In the background, each with what it said and how it ended: the person's device holding its notifications
+              # while the gateway's 60 seconds for a whole request pass, and an upload of 150 seconds at 64 KiB a second.
+              vw_at = time.monotonic()
+              for vw_job, vw_command in [("hub", ["hub", "90"]), ("upload", ["upload", vw_kept["item"], str(150 * 65536), "65536"])]:
+                  acme.succeed(
+                      f"rm -f /tmp/vault-{vw_job} /tmp/vault-{vw_job}.status; (set +e; {vw_device('vera', *vw_command)}"
+                      f" > /tmp/vault-{vw_job} 2>&1; echo $? > /tmp/vault-{vw_job}.status) < /dev/null > /dev/null 2>&1 &"
+                  )
+              # The upload comes into the vault's folder on the volume.
+              server.wait_until_succeeds(f"{vw_pod} sh -c 'test -n \"$(ls -A /data/tmp)\"'", timeout=60)
+              # The vault logs the address of a client that signs in by a malformed API key.
+              vw_said = acme.succeed(
+                  f"{vw_curl} {forging} -d grant_type=client_credentials -d client_id=e2e -d client_secret=e2e"
+                  f" -d scope=api -d deviceType=25 -d deviceIdentifier={uuid.uuid4()} -d deviceName=e2e"
+                  f" https://{vw_host}/identity/connect/token"
+              )
+              assert "Malformed client_id" in vw_said, vw_said
+              vw_logged = shown(f"kubectl -n {vw_ns} logs vaultwarden-0 -c app --since-time={vw_since}")
+              [vw_seen] = re.findall(r"Malformed client_id\. IP: (\S+)\.$", vw_logged, re.M)
+              print(f"acme is {vw_seen} to {vw_host}")
+              assert any(ipaddress.ip_address(vw_seen) in r for r in ranges), (vw_seen, ranges)
+              assert vw_seen not in ["192.0.2.1", "${nodes.acme.networking.primaryIPAddress}"], vw_seen
+
+          with subtest("The vault holds a device's notifications open past the gateway's timeouts, and cuts an upload too slow for them, which the device takes back as the apps do, leaving nothing, and the vault never restarted"):
+              # Once the gateway would have cut a request that took this long, the person's other device adds an item.
+              time.sleep(max(0, vw_at + 70 - time.monotonic()))
+              acme.succeed("echo second > /tmp/vault-second.txt")
+              vw_second = vw("vera-cli", "put", "second", "second", "second", "/tmp/vault-second.txt")
+              acme.wait_until_succeeds("test -s /tmp/vault-hub.status && test -s /tmp/vault-upload.status", timeout=300)
+              for vw_job in ["hub", "upload"]:
+                  assert acme.succeed(f"cat /tmp/vault-{vw_job}.status").strip() == "0", acme.succeed(f"cat /tmp/vault-{vw_job}")
+              vw_hub = json.loads(acme.succeed("cat /tmp/vault-hub"))
+              assert vw_hub["ended"] == "held", vw_hub
+              assert any(at >= 60 and vw_second["item"] in came for at, came in vw_hub["came"]), vw_hub
+              # Refused, cut short once the gateway's 60 seconds were up, and taken back as the apps do.
+              vw_upload = json.loads(acme.succeed("cat /tmp/vault-upload"))
+              print("an upload too slow for the gateway:", vw_upload)
+              assert vw_upload.get("status") != 200 and 55 <= vw_upload["seconds"] < 140 and vw_upload["rollback"] == 200, vw_upload
+              server.succeed(
+                  f"{vw_pod} sh -c 'test -z \"$(ls -A /data/tmp)\""
+                  f" && ! test -e /data/attachments/{vw_kept['item']}/{vw_upload['attachment']}'"
+              )
+              vw_held = server.succeed(f"{vw_db} 'select id from attachments'").split()
+              assert sorted(vw_held) == sorted([vw_kept["attachment"], vw_second["attachment"]]), vw_held
+              assert server.succeed(vw_pod_state) == vw_started
+              vw_items = vw("vera-cli", "get")
+              assert sorted(i["name"] for i in vw_items) == sorted([vw_words["name"], "second"]), vw_items
+              vw_memory()
+
+          with subtest("The vault takes no password, sign-up, organisation, emergency contact, hint, new mail or attachment past a person's 100 MiB, has no admin page, saves no settings and can write nowhere on its root, and fetches no icon, nor logs one, a sign-in or a member's mail"):
+              vw_said = acme.succeed(
+                  f"{vw_curl} -d grant_type=password -d username={vw_people['vera']['mail']} -d password=e2e"
+                  f" -d 'scope=api offline_access' -d client_id=web -d deviceType=9 -d deviceIdentifier={uuid.uuid4()}"
+                  f" -d deviceName=e2e https://{vw_host}/identity/connect/token"
+              )
+              assert "SSO sign-in is required" in vw_said, vw_said
+              vw_said = acme.succeed(
+                  f"{vw_curl} -H 'Content-Type: application/json'"
+                  f" -d {shlex.quote(json.dumps({'email': f'new@{vw_domain}', 'name': 'e2e'}))}"
+                  f" https://{vw_host}/identity/accounts/register/send-verification-email"
+              )
+              assert "Registration not allowed" in vw_said, vw_said
+              for vw_path, vw_body, vw_refusal in [
+                  ("/api/organizations", {"name": "e2e", "billingEmail": vw_people["vera"]["mail"], "key": "e2e",
+                                          "collectionName": "e2e", "planType": 0}, "User not allowed to create organizations"),
+                  ("/api/emergency-access/invite", {"email": vw_people["vince"]["mail"], "type": 0, "waitTimeDays": 1},
+                   "Emergency access is not enabled."),
+                  ("/api/accounts/password-hint", {"email": vw_people["vera"]["mail"]},
+                   "This server is not configured to provide password hints."),
+                  ("/api/accounts/email-token", {"newEmail": f"new@{vw_domain}", "masterPasswordHash": "e2e"},
+                   "Email change is not allowed."),
+                  (f"/api/ciphers/{vw_kept['item']}/attachment/v2",
+                   {"key": "e2e", "fileName": "e2e", "fileSize": 100 * 1024 * 1024 + 1, "adminRequest": False},
+                   "Attachment storage limit exceeded with this file"),
+              ]:
+                  vw_got = vw("vera-cli", "call", "POST", vw_path, json.dumps(vw_body))
+                  assert (vw_got["status"], vw_got["answer"]["message"]) == (400, vw_refusal), (vw_path, vw_got)
+              vw_said = acme.succeed(f"{vw_curl} -f https://{vw_host}/admin")
+              assert "The admin panel is disabled" in vw_said, vw_said
+              vw_env = server.succeed(
+                  f"kubectl -n {vw_ns} get pod vaultwarden-0 -o jsonpath='{{.spec.containers[*].env[*].name}}'"
+              ).split()
+              assert "ADMIN_TOKEN" not in vw_env and "CONFIG_FILE" in vw_env, vw_env
+              # Settings come from the release alone: none saved, nor a place to save them on the root, which is read-only,
+              # /tmp, which anyone may write to, included.
+              server.succeed(
+                  f"{vw_pod} sh -c '! test -e /data/config.json && ! test -e /etc/vaultwarden.json"
+                  " && ! touch /etc/vaultwarden.json 2>/dev/null && test -d /tmp && ! touch /tmp/e2e 2>/dev/null'"
+              )
+              # A name, an address on a member's network and a name no host has all get the same stand-in.
+              vw_icons = {
+                  icon: acme.succeed(f"{vw_curl} -f https://{vw_host}/icons/{quote(icon)}/icon.png | sha256sum").split()[0]
+                  for icon in ["example.com", "192.168.1.1", "e2e$unlisted"]
+              }
+              assert len(set(vw_icons.values())) == 1, vw_icons
+              server.succeed(f"{vw_pod} sh -c 'test -z \"$(ls -A /data/icon_cache)\"'")
+              vw_logged = shown(f"kubectl -n {vw_ns} logs vaultwarden-0 -c app --since-time={vw_since}")
+              vw_named = ["logged in", "/icons/", *vw_icons, *(p["mail"] for p in vw_people.values())]
+              vw_told = [line for line in vw_logged.splitlines() if any(named in line for named in vw_named)]
+              assert not vw_told, vw_told
+
+          with subtest("Only members sign in through Kanidm, each as their own person: not a person outside members, nor one given the mail of a person who left, nor one whose mail an account of the vault's holds; and the person who left stays signed in, as Kanidm ends no session of the vault's, and signs a new device in by the account's API key, which Kanidm never sees"):
+              vw_signed, vw_out = vw_sign_in("vivian", "vivian")
+              assert not vw_signed and "Access Denied" in vw_out, vw_out
+              # Kanidm gives a person's mail to another only once they are gone.
+              as_idm_admin(first)
+              server.succeed(
+                  cli(first, "person delete vera") + " && " + cli(first, f"person update vito --mail {vw_people['vera']['mail']}")
+              )
+              disable_idm_admin(first)
+              vw_signed, vw_out = vw_sign_in("vito", "vito")
+              assert not vw_signed and "Existing SSO user with same email" in vw_out, vw_out
+              # An account of a mail alone, with keys, as one made before sign-in went through Kanidm would be.
+              vw_alone = str(uuid.uuid4())
+              server.succeed(
+                  f"{vw_db} \"create temp table alone as select * from users where uuid = '{vw_user}';"
+                  f" update alone set uuid = '{vw_alone}', email = '{vw_people['vince']['mail']}', api_key = null;"
+                  " insert into users select * from alone\""
+              )
+              vw_signed, vw_out = vw_sign_in("vince", "vince")
+              assert not vw_signed and "Existing non SSO user with same email" in vw_out, vw_out
+              server.succeed(f"{vw_db} \"delete from users where uuid = '{vw_alone}'\"")
+              assert server.succeed(f"{vw_db} 'select uuid from users'").split() == [vw_user]
+              assert vw("vera", "refresh") == {"user": vw_user}
+              assert vw("vera-new", "login", vw_api_key["id"], vw_api_key["secret"], vw_master) == {
+                  "user": vw_user, "mail": vw_people["vera"]["mail"]
+              }
+              assert vw("vera-new", "get") == vw_items
+
           def psql(namespace, pod, query, **conn):
               # Connects as the app does, with the Secret its namespace holds unless told otherwise.
               target = " ".join(f"{k}={v}" for k, v in conn.items())
@@ -3220,10 +3473,12 @@ runTest {
               assert passed, log
               merge(ns, "cronjob offsite", {"spec": {"suspend": False}})
 
-          with subtest("When the cluster's object store has lost a tenant's backups, a release brings its PostgreSQL back from a provider's copy"):
+          with subtest("When the cluster's object store has lost a tenant's backups, a release brings its PostgreSQL back from a provider's copy, the vault's sessions with it, which the vault rides out unready"):
               ns = f"{first}-postgres"
               # The tenant's mesh, whose state is in that database, with a device that stays on throughout.
               assert first in meshes, meshes
+              # And its vault, whose items and devices were in the bucket before its push off-site above.
+              vw_before_restore = server.succeed(vw_pod_state)
               mesh_accounts = f"{nb_db} 'select id, network_serial from accounts'"
               # Nothing goes off-site from here on, so what the mesh does next is lost with the cluster.
               merge(ns, "cronjob offsite", {"spec": {"suspend": True}})
@@ -3262,6 +3517,8 @@ runTest {
               }
               apply(wipe)
               finished(ns, "wipe")
+              # The vault, its database gone, takes itself out of its Service.
+              server.wait_until_succeeds(f"kubectl -n {vw_ns} wait pod vaultwarden-0 --for=condition=Ready=false --timeout=0", timeout=300)
               knobs = {"POSTGRES_GENERATION": "g2", "POSTGRES_BOOTSTRAP": "recovery", "POSTGRES_ORIGIN": "g1",
                        "POSTGRES_RESTORE_FROM": "offsite-2"}
               lines = "".join(f"      {k}: {v}\\n" for k, v in knobs.items())
@@ -3296,6 +3553,12 @@ runTest {
                   f"kubectl -n flux-system wait kustomization -l suveraen/tenant={first} --for=condition=Ready --timeout=0",
                   timeout=600,
               )
+              # The vault was out of its Service meanwhile, never restarted, and its device's session goes on.
+              server.wait_until_succeeds(f"kubectl -n {vw_ns} wait pod vaultwarden-0 --for=condition=Ready --timeout=0", timeout=300)
+              assert server.succeed(vw_pod_state) == vw_before_restore
+              vw_served()
+              assert vw("vera", "refresh") == {"user": vw_user}
+              assert vw("vera", "get") == vw_items
               # Its mesh runs again under serials past those its devices hold, which they would take no map below.
               out = server.succeed(f"suveraen-mesh after-restore {first}")
               # As the update found and left each one: once management starts again, devices coming back may step it.
@@ -3316,7 +3579,7 @@ runTest {
               nb_scrubbed()
               merge(ns, "cronjob offsite", {"spec": {"suspend": False}})
 
-          with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied, Kanidm's with its people and keys"):
+          with subtest("An app's volume goes to both providers, encrypted, and comes back from either as it was copied, Kanidm's with its people and keys, and the vault's with its attachments and the key it signs sessions with"):
               hello_ns, idm_ns = f"{first}-hello", f"{first}-kanidm"
               # VolSync copies a snapshot of the volume, which holds only what has reached its disk.
               server.succeed(
@@ -3336,9 +3599,9 @@ runTest {
 
               keys_before = signing_keys()
 
-              # Copies both volumes to both providers at once.
+              # Copies the volumes to both providers at once.
               def copy_volumes(value):
-                  copies = [(namespace, f"data-{n}") for namespace in [hello_ns, idm_ns] for n in providers]
+                  copies = [(namespace, f"data-{n}") for namespace in [hello_ns, idm_ns, vw_ns] for n in providers]
                   for namespace, name in copies:
                       # A copy already running would take the new trigger as its own, though its snapshot may predate
                       # the files.
@@ -3352,18 +3615,18 @@ runTest {
                           timeout=600,
                       )
 
-              # Restores both volumes in one release.
-              def restore(value, provider):
+              # Restores apps' volumes in one release.
+              def restore(value, provider, apps):
                   knobs = "".join(
                       f"      {app}_DATA_RESTORE: {value}\\n      {app}_DATA_RESTORE_FROM: offsite-{provider}\\n"
-                      for app in ["HELLO", "KANIDM"]
+                      for app in apps
                   )
                   release(
                       f"restore-volume-{value}",
                       f"${asCgit} sed -i '/_DATA_RESTORE/d' tenants/{first}/tenant.yaml"
                       f" && printf '{knobs}' | ${asCgit} tee -a tenants/{first}/tenant.yaml >/dev/null",
                   )
-                  for namespace in [hello_ns, idm_ns]:
+                  for namespace in [f"{first}-{app.lower()}" for app in apps]:
                       server.wait_until_succeeds(
                           f"kubectl -n {namespace} get replicationdestination data -o jsonpath='{{.status.lastManualSync}}'"
                           f" | grep -x {value}",
@@ -3403,7 +3666,7 @@ runTest {
 
               copy_volumes("first")
               for n in providers:
-                  for app, secret in [("hello", "kept"), ("kanidm", "e2eops")]:
+                  for app, secret in [("hello", "kept"), ("kanidm", "e2eops"), ("vaultwarden", vw_words["note"])]:
                       copies = f"/var/lib/s3-{n}/data/{bucket_at(n, first)}/volsync/{app}"
                       acme.succeed(
                           f"test -f {copies}/config && test -n \"$(find {copies}/data -type f)\""
@@ -3418,7 +3681,7 @@ runTest {
                   refused_at(n, ours, f"s3api delete-object --bucket {bucket} --key {key}")
 
               # Provider 1's copies, restored, hold both files, and Kanidm's database with its own copy beside it.
-              restore("one", 1)
+              restore("one", 1, ["HELLO", "KANIDM"])
               assert read_restored(hello_ns, 65534, "cat /data/marker /data/removed").split() == ["kept", "gone"]
               listed = read_restored(idm_ns, 389, "ls /data").split()
               assert "kanidm.db" in listed and any(re.fullmatch(r"backup-.*\.json\.gz", f) for f in listed), listed
@@ -3429,9 +3692,11 @@ runTest {
               # Kanidm's secret for hello changes after the copies, so the restore brings back one the app no longer
               # holds.
               server.succeed(f"suveraen-idm rotate {first} hello-oidc")
-              restore("two", 2)
+              restore("two", 2, ["HELLO", "KANIDM", "VAULTWARDEN"])
               # Once nothing mounts the lost volume, which its deletion waits for, Flux makes it anew from the restore.
-              for namespace, kind, name in [(hello_ns, "deployment", "hello"), (idm_ns, "statefulset", "kanidm")]:
+              for namespace, kind, name in [
+                  (hello_ns, "deployment", "hello"), (idm_ns, "statefulset", "kanidm"), (vw_ns, "statefulset", "vaultwarden")
+              ]:
                   server.succeed(
                       f"kubectl -n {namespace} scale {kind} {name} --replicas=0"
                       f" && kubectl -n {namespace} delete pvc data --timeout=300s"
@@ -3457,8 +3722,25 @@ runTest {
               assert [c["secret"] for c in hello_client()[first]] == ["wrong"]
               out = server.succeed(f"suveraen-idm rotate --all {first} 2>&1")
               assert f"{first}: hello-oidc: a new secret in {first}-hello/sso" in out, out
+              assert f"{first}: vaultwarden-oidc: a new secret in {vw_ns}/sso" in out, out
               assert [c["secret"] for c in hello_client()[first]] == ["right"]
               hello_holds(first, sso_secret(first))
+              # The vault's device goes on with the session the restored key signed, once the vault holds its new secret,
+              # and reads its attachments whole.
+              vw_secret = server.succeed(f"kubectl -n {vw_ns} get secret sso -o jsonpath='{{.data.client-secret}}' | base64 -d")
+              server.wait_until_succeeds(
+                  f"kubectl -n {vw_ns} rollout status statefulset vaultwarden --timeout=60s"
+                  f" && test \"$({vw_pod} printenv SSO_CLIENT_SECRET)\" = {shlex.quote(vw_secret)}",
+                  timeout=300,
+              )
+              vw_served()
+              assert vw("vera", "refresh") == {"user": vw_user}
+              assert vw("vera", "get") == vw_items
+              # The database and the volume come back each to its own moment, which here are in step.
+              vw_files = server.succeed(f"{vw_pod} find /data/attachments -type f").split()
+              vw_rows = server.succeed(f"{vw_db} \"select cipher_uuid || '/' || id from attachments\"").split()
+              vw_orphans = set(vw_rows) - {f.removeprefix("/data/attachments/") for f in vw_files}
+              print("the vault's attachments without their file:", sorted(vw_orphans))
 
           with subtest("Nothing is left of the volumes copies and restores worked on, and tenants' volumes are backed up"):
               server.wait_until_succeeds(
@@ -3730,7 +4012,7 @@ runTest {
               )["data"])
               used = [
                   *domains.values(), *clients, *(i for ids in held.values() for [i] in ids),
-                  *(p["uuid"] for p in nb_people.values()),
+                  *(p["uuid"] for p in nb_people.values()), *(p["uuid"] for p in vw_people.values()),
               ]
               assert series.count("__name__") > 100 and not [u for u in used if u in series], [u for u in used if u in series]
               # The first run that finds a mesh keeps its owner and its people's tags as it found them.

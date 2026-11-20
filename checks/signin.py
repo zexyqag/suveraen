@@ -5,6 +5,9 @@ usage: signin deliver URL PERSON PASSWORD [--resolve HOST:ADDRESS]... --cacert F
            URL is the one a device's client printed; its loopback listener gets the redirect, as from a browser
        signin token ORIGIN CLIENT REDIRECT PERSON PASSWORD [--resolve HOST:ADDRESS]... --cacert FILE
            asks Kanidm at ORIGIN for CLIENT's tokens by PKCE, as the dashboard does, and prints them
+       signin app URL PERSON PASSWORD [--resolve HOST:ADDRESS]... --cacert FILE
+           opens an app's sign-in at URL, which sends the browser to Kanidm and takes it back, and prints the page the
+           app sends it to last, which must load
 Fails, with the page Kanidm ended at, when it sends the browser nowhere."""
 
 import argparse
@@ -33,7 +36,9 @@ token = modes.add_parser("token")
 token.add_argument("origin")
 token.add_argument("client")
 token.add_argument("redirect")
-for mode in [deliver, token]:
+app = modes.add_parser("app")
+app.add_argument("url")
+for mode in [deliver, token, app]:
     mode.add_argument("person")
     mode.add_argument("password")
 args = parser.parse_args()
@@ -138,6 +143,21 @@ if args.mode == "deliver":
                 raise
             time.sleep(1)
     print(json.dumps({"status": status, "page": re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", page)).strip()[:300]}))
+elif args.mode == "app":
+    # The app sends the browser to Kanidm with a cookie of its own, which its way back checks.
+    status, location, _ = go(args.url)
+    assert status in (302, 303, 307) and location, (status, location)
+    here = walk(urllib.parse.urljoin(args.url, location))
+    for _ in range(10):
+        status, location, body = go(here)
+        if status not in (302, 303, 307) or not location:
+            break
+        here = urllib.parse.urljoin(here, location)
+    else:
+        sys.exit(f"the app kept sending the browser on, last to {here}")
+    if status != 200:
+        sys.exit(f"the app ended the sign-in at {here} with {status}: {body[:300]}")
+    print(json.dumps({"url": here}))
 else:
     verifier = secrets.token_urlsafe(48)
     state = secrets.token_urlsafe(16)
