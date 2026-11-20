@@ -8,8 +8,6 @@ metadata:
   namespace: rook-ceph
 spec:
   driverSpecDefaults:
-    imageSet:
-      name: rook-csi-operator-image-set-configmap
     fsGroupPolicy: File
     nodePlugin:
       # Stopped last on a shutdown, with Ceph, so it serves every unmap.
@@ -24,6 +22,10 @@ metadata:
   name: rook-ceph.rbd.csi.ceph.com
   namespace: rook-ceph
 spec:
+  # The images Rook's chart pins. Named here, not in the defaults: the operator reconciles a Driver it sees before
+  # the OperatorConfig with its own images, by tag, which pods may not run.
+  imageSet:
+    name: rook-csi-operator-image-set-configmap
   # The accounts as the chart names them; the operator's own default depends on a prefix Rook's chart sets.
   nodePlugin:
     serviceAccountName: rook-ceph-rbd-csi-ceph-com-nodeplugin-sa
