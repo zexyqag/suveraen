@@ -27,9 +27,6 @@ spec:
     webhook:
       enabled: false
     controller:
-      image:
-        # The version of Rook's csi-snapshotter sidecar.
-        tag: v8.6.0@sha256:81e79f205083f105e573ba2ebfe5964ede7f69a154e8627f53ebbbccd3ed9f70
       priorityClassName: platform
       podSecurityContext:
         seccompProfile:

@@ -1035,6 +1035,16 @@ passed() { # tenant, app
     yq ".spec.postBuild.substitute | .HOST + \".\" + .$domain" "$w/$edge.build.yaml"
   done
 }
+# What the record of the chart a platform release installs pins at a values path, as <image>:<tag>@<digest>, or none.
+pinned() { # release, values path
+  local chart tree
+  chart=$(release=$1 yq ea '[select(.kind == "HelmRelease" and .metadata.namespace == "flux-system"
+    and .metadata.name == strenv(release))] | .[0].spec.chartRef.name // ""' "$rendered"/*.yaml)
+  tree=$(chart=$chart yq ea '[select(.kind == "HelmChart" and .metadata.namespace == "flux-system"
+    and .metadata.name == strenv(chart))] | .[0].spec.chart // ""' "$rendered"/*.yaml)
+  jq -r --arg path "$2" 'first(.images[]? | select(any(.values[]; . == $path)) | .image + ":" + .tag + "@" + .digest)
+    // "none"' "$tree.json" 2>/dev/null || echo none
+}
 # The Kustomizations a render creates, each after the one that rendered it, to render in turn. Flux applies nothing but
 # the release, which the servers give it as GitRepository suveraen.
 spawned() { # parent, its render
@@ -1368,8 +1378,7 @@ for dir in kubernetes/clusters/*/; do
           yq ea -e '[select(.kind == "CronJob") | .spec.jobTemplate.spec.template.spec.containers[0].command // []
             | .[2] // "" | test("restic check --no-lock ")] | all' "$file" >/dev/null \
             || fail "$cluster/$name: an app's copies are checked without restic's lock"
-          restic=$(yq ea '[select(.kind == "HelmRelease" and .metadata.name == "volsync")] | .[0].spec.values.restic
-            | .repository + ":" + .tag' "$rendered"/*.yaml)
+          restic=$(pinned volsync restic.tag)
           for n in 1 2; do
             check="select(.kind == \"CronJob\" and .metadata.name == \"offsite-check-$n\")"
             yq ea "$check | .spec as \$s | \$s.jobTemplate.spec.template as \$t | \$t.spec.containers[0] as \$c | [
@@ -2190,27 +2199,28 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     "$rendered"/*.yaml | paste -sd' ')
   [ -z "$bad" ] || fail "$cluster: each CSI driver's node plugin runs at system-node-critical, which a shutdown stops" \
     "last: $bad"
-  cephcsi=$(yq ea '[select(.kind == "HelmRelease" and .metadata.name == "rook-ceph")] | .[0].spec.values.csi.cephcsi
-    | .repository + ":" + .tag' "$rendered"/*.yaml)
+  cephcsi=$(pinned rook-ceph csi.cephcsi.tag)
   barrier=$(yq ea '[select(.kind == "DaemonSet" and .metadata.namespace == "rook-ceph"
     and .metadata.name == "unmap-barrier") | .spec.template.spec.containers[].image] | join(" ")' "$rendered"/*.yaml)
   [ "$barrier" = "$cephcsi" ] || fail "$cluster: the DaemonSet unmap-barrier in rook-ceph, which holds a shutdown" \
     "until no volume is mapped, runs the CSI node plugin's image, already on every node that maps volumes," \
     "$cephcsi: $barrier"
-  # cert-manager's controller, webhook and cainjector are of the version of the chart that installs their CRDs.
-  certmanager='[select(.kind == "HelmRelease" and .metadata.namespace == "flux-system"
-    and .metadata.name == "cert-manager")] | .[0]'
-  chart=$(yq ea "$certmanager | .spec.chartRef.name // \"\"" "$rendered"/*.yaml)
-  export chart
-  tree=$(yq ea '[select(.kind == "HelmChart" and .metadata.namespace == "flux-system"
-    and .metadata.name == strenv(chart))] | .[0].spec.chart // ""' "$rendered"/*.yaml)
-  [ -n "$tree" ] && [ -f "$tree.json" ] || fail "$cluster: cert-manager runs as HelmRelease cert-manager in" \
-    "flux-system, from a HelmChart there that builds a tree the release vendors with its record"
-  version=$(yq -p=json -oy '.version' "$tree.json")
-  tags=$(yq ea "$certmanager | .spec.values as \$v | [\$v.image, \$v.webhook.image, \$v.cainjector.image]
-    | map(.tag // \"-\" | tostring | sub(\"@.*\", \"\")) | join(\" \")" "$rendered"/*.yaml)
-  [ "$tags" = "$version $version $version" ] || fail "$cluster: cert-manager's controller, webhook and cainjector run" \
-    "the version of its chart, $version in $tree.json: $tags"
+  # An image a chart's record pins moves with the chart: a release that set anything under it would hold it as it was,
+  # and one that set anything but a map above it would take the pin away.
+  releases=$(yq ea -o=json -I=0 '[select(.kind == "HelmRelease" and .spec.chartRef.kind == "HelmChart"
+    and (.spec.chartRef.namespace // .metadata.namespace) == "flux-system") | {"chart": .spec.chartRef.name,
+    "name": .metadata.namespace + "/" + .metadata.name, "values": (.spec.values // {})}]' "$rendered"/*.yaml)
+  bad=$(yq ea '[select(.kind == "HelmChart" and .metadata.namespace == "flux-system") | .metadata.name + " "
+    + (.spec.chart // "")] | .[]' "$rendered"/*.yaml | while read -r chart tree; do
+      jq -e .images "$tree.json" >/dev/null 2>&1 || continue
+      jq -r --arg chart "$chart" --slurpfile record "$tree.json" '[$record[0].images[].values[] | split(".") | .[:-1]]
+        as $pinned | .[] | select(.chart == $chart) | .name as $release | .values as $values | [$values | paths] as $set
+        | $pinned[] as $at | select(any($set[]; . as $p | $p[:($at | length)] == $at or (($p | length) < ($at | length)
+          and $at[:($p | length)] == $p and ($values | getpath($p) | type) != "object")))
+        | "\($release) (\($at | join(".")))"' <<<"$releases"
+    done | sort -u | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: a HelmRelease sets nothing under an image its chart's record pins, nor anything" \
+    "but a map above one: $bad"
   for issuer in public standby; do
     [ "$(yq ea "[select(.kind == \"ClusterIssuer\" and .metadata.name == \"$issuer\")] | length" "$rendered"/*.yaml)" \
       = 1 ] || fail "$cluster: the cluster has one ClusterIssuer public, which every host's certificate names, and" \

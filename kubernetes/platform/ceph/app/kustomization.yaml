@@ -13,3 +13,25 @@ resources:
   - ./storageclasses.yaml
   - ./objectstore.yaml
   - ./networkpolicy.yaml
+# The pins Rook's record gives its chart, of which the barrier takes the node plugin's (unmap-barrier.yaml).
+configMapGenerator:
+  - name: rook-ceph-images
+    envs:
+      - ../../rook-ceph/vendor/rook-ceph.images.env
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+replacements:
+  - source:
+      kind: ConfigMap
+      name: rook-ceph-images
+      fieldPath: data.[csi.cephcsi.tag]
+    targets:
+      - select:
+          kind: DaemonSet
+          name: unmap-barrier
+        fieldPaths:
+          - spec.template.spec.containers.[name=wait].image
+        options:
+          create: true

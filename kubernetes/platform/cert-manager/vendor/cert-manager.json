@@ -9,5 +9,49 @@
     "url": "https://raw.githubusercontent.com/cert-manager/cert-manager/922a06aa49ee4bb802db268ef72a174af70edd32/LICENSE",
     "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
   },
-  "tree": "sha256:3fc0249c134fb2d67acb9934d6281ce0320cf5c168f5f5e2eb4ca6ac64fdcb86"
+  "images": [
+    {
+      "image": "quay.io/jetstack/cert-manager-cainjector",
+      "values": [
+        "cainjector.image.tag"
+      ],
+      "signer": {
+        "cosign": {
+          "key": "1020CF3C033D4F35BAE1C19E1226061C665DF13E",
+          "hash": "sha512"
+        }
+      },
+      "tag": "v1.21.2",
+      "digest": "sha256:c85268c64f2e0e76684bf5fe8906caff34b82523561c6affe0fae3546bd87562"
+    },
+    {
+      "image": "quay.io/jetstack/cert-manager-controller",
+      "values": [
+        "image.tag"
+      ],
+      "signer": {
+        "cosign": {
+          "key": "1020CF3C033D4F35BAE1C19E1226061C665DF13E",
+          "hash": "sha512"
+        }
+      },
+      "tag": "v1.21.2",
+      "digest": "sha256:70f532fd9cfde0b09d55687200942399d89838bc2d5d5b45152eb799a15912b8"
+    },
+    {
+      "image": "quay.io/jetstack/cert-manager-webhook",
+      "values": [
+        "webhook.image.tag"
+      ],
+      "signer": {
+        "cosign": {
+          "key": "1020CF3C033D4F35BAE1C19E1226061C665DF13E",
+          "hash": "sha512"
+        }
+      },
+      "tag": "v1.21.2",
+      "digest": "sha256:a60e2dac46dbb8a7f3df95c54ce941012f54c2fe022f0ee55aaa1ab40ed957ae"
+    }
+  ],
+  "tree": "sha256:63d64717aaf075f333703d4851e8cc588bca8fe46e2d10a5c55b0cb2fd9e991c"
 }

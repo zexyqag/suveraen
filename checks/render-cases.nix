@@ -17,6 +17,7 @@ pkgs.lib.genAttrs' (pkgs.lib.range 1 shards) (
         nativeBuildInputs = [
           pkgs.fluxcd
           pkgs.yq-go
+          pkgs.jq
           pkgs.python3
         ];
       }

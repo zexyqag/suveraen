@@ -97,7 +97,6 @@ patches:
                     type: RuntimeDefault
                 containers:
                   - name: restic
-                    image: quay.io/backube/volsync:0.16.0@sha256:0d03a6aad57569eba2c0eaa0848cf4a908d9744b372ff2224bb291a320f36d76
                     # The repository's structure in full and a daily share of its data, so all of it is read once
                     # in CYCLE days. Without restic's lock: a check that died holding it would stop every later copy
                     # until someone unlocks it, as the movers don't wait for a lock, and without one restic writes
@@ -152,3 +151,32 @@ patches:
                   - name: tmp
                     emptyDir:
                       sizeLimit: ${DATA_CACHE_SIZE:=256Mi}
+# The pins VolSync's record gives its chart, of which the checks take restic's.
+configMapGenerator:
+  - name: volsync-images
+    envs:
+      - ../../platform/volsync/vendor/volsync.images.env
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+replacements:
+  - source:
+      kind: ConfigMap
+      name: volsync-images
+      fieldPath: data.[restic.tag]
+    targets:
+      - select:
+          kind: CronJob
+          name: offsite-check-1
+        fieldPaths:
+          - spec.jobTemplate.spec.template.spec.containers.[name=restic].image
+        options:
+          create: true
+      - select:
+          kind: CronJob
+          name: offsite-check-2
+        fieldPaths:
+          - spec.jobTemplate.spec.template.spec.containers.[name=restic].image
+        options:
+          create: true

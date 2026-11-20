@@ -30,9 +30,9 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
+        # Runs the node plugin's image, already on every node that maps volumes, as Rook's record pins it
+        # (kustomization.yaml).
         - name: wait
-          # The node plugin's image (platform/rook-ceph), already on every node that maps volumes.
-          image: quay.io/cephcsi/cephcsi:v3.18.1@sha256:a8c0653a9565049ee7b36a585753e5e0e8fe2e4e5a67e9db3a5f8d9d7e890635
           # As PID 1 the shell would ignore TERM without a trap, and every stop would take the whole grace period.
           command: [sh, -c, "trap 'exit 0' TERM; while :; do sleep 3600 & wait; done"]
           lifecycle:

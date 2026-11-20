@@ -12,5 +12,16 @@
     "url": "https://raw.githubusercontent.com/stakater/Reloader/93bac9d625556bdbd7323616fe1b05072072cdda/LICENSE",
     "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
   },
-  "tree": "sha256:2123d173234b79c6b7b6ceead5d8bd91d6d8bae7229ce0d8ba12287a9dd57a47"
+  "images": [
+    {
+      "image": "ghcr.io/stakater/reloader",
+      "values": [
+        "image.tag"
+      ],
+      "signer": "none",
+      "tag": "v1.4.22",
+      "digest": "sha256:def2480040adc164b3a57340e77674eadfd88fb7f0593df25e93297f29c7fd7c"
+    }
+  ],
+  "tree": "sha256:c081b4380c0dc1a9706bb984e0ef1f36cbb21d8c9f77c5f5be48c329e232e76f"
 }

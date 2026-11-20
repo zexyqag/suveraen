@@ -3,5 +3,21 @@
   "version": "5.3.0",
   "digest": "sha256:9026d5c4c86d54ff213b53bb6cb6c854ed5648bb0bf5b32614e4f26651c465d9",
   "signer": "none",
-  "tree": "sha256:084f1c0a63fedd5154f9476554acde4df29b5af7abbd383e0f7a47ae3d81e055"
+  "images": [
+    {
+      "image": "registry.k8s.io/sig-storage/snapshot-controller",
+      "values": [
+        "controller.image.tag"
+      ],
+      "signer": {
+        "cosign": {
+          "identity": "krel-trust@k8s-releng-prod.iam.gserviceaccount.com",
+          "issuer": "https://accounts.google.com"
+        }
+      },
+      "tag": "v8.6.0",
+      "digest": "sha256:81e79f205083f105e573ba2ebfe5964ede7f69a154e8627f53ebbbccd3ed9f70"
+    }
+  ],
+  "tree": "sha256:d6e75834dcf3b6143368cb49560c3b57157de99eac2e1df0c06ec1e37119a682"
 }

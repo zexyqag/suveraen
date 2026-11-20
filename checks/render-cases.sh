@@ -843,7 +843,8 @@ refuses pg-threshold-default "Ceph's autoscaler acts on every change it recommen
 refuses ceph-prunable "Ceph's objects are never pruned: CephCluster/rook-ceph" \
   "yq -i 'del(.metadata.annotations)' $P/cluster.yaml"
 refuses second-ceph-cluster "one CephCluster, rook-ceph/rook-ceph" \
-  "yq '.metadata.name = \"other\"' $P/cluster.yaml >$P/other.yaml && append $P/kustomization.yaml '  - ./other.yaml\n'"
+  "yq '.metadata.name = \"other\"' $P/cluster.yaml >$P/other.yaml && yq -i '.resources += [\"./other.yaml\"]' \
+   $P/kustomization.yaml"
 classes="storage classes are Ceph's, volumes go with their claims and buckets stay, and none is the default"
 refuses storageclass-default "$classes: ceph-block" \
   "yq -i '(select(.metadata.name == \"ceph-block\")
@@ -876,8 +877,9 @@ refuses nodeplugin-default-priority "$nodeplugin: $D" \
 refuses nodeplugin-driver-priority "$nodeplugin: $D" \
   "yq -i '(select(.kind == \"Driver\") | .spec.nodePlugin.priorityClassName) = \"platform\"' $P/csi.yaml"
 barrier="unmap-barrier in rook-ceph, which holds a shutdown until no volume is mapped, runs the CSI node plugin's image"
-refuses barrier-image-stale "$barrier, already on every node that maps volumes, quay.io/cephcsi/cephcsi:v3.18.2@" \
-  "sed -i 's/tag: v3.18.1@sha256:/tag: v3.18.2@sha256:/' platform/rook-ceph/app/helmrelease.yaml"
+cephcsi=$(sed -n 's/^csi[.]cephcsi[.]tag=//p' "$src/platform/rook-ceph/vendor/rook-ceph.images.env")
+refuses barrier-image-stale "$barrier, already on every node that maps volumes, $cephcsi: ${cephcsi%%:*}:v0.0.0@" \
+  "sed -i '/^csi[.]cephcsi[.]tag=/s/:[^@]*@/:v0.0.0@/' platform/rook-ceph/vendor/rook-ceph.images.env"
 refuses barrier-missing "$barrier" "sed -i '/unmap-barrier.yaml/d' $P/kustomization.yaml"
 refuses rook-ceph-partial-labels "$privileged: rook-ceph" \
   "sed -i '/audit: privileged/d' components/privileged/kustomization.yaml"
@@ -894,15 +896,16 @@ refuses catalog-image-tag "images are pinned by digest: ghcr.io/cloudnative-pg/p
   "sed -i 's/@sha256:[0-9a-f]*\$//' platform/pg-catalog/app/catalog.yaml"
 refuses ceph-image-tag "images are pinned by digest: quay.io/ceph/ceph:v20.2.4" \
   "sed -i 's/@sha256:[0-9a-f]*\$//' platform/ceph/app/cluster.yaml"
-refuses chart-image-tag "images are pinned by digest: v3.18.1" \
-  "sed -i 's/tag: v3.18.1@sha256:[0-9a-f]*\$/tag: v3.18.1/' platform/rook-ceph/app/helmrelease.yaml"
-refuses chart-image-number "images are pinned by digest: 0.16" \
-  "sed -i '0,/tag: 0.16.0@sha256:[0-9a-f]*\$/s//tag: 0.16/' platform/volsync/app/helmrelease.yaml"
-refuses cert-manager-image-version \
-  "test: cert-manager's controller, webhook and cainjector run the version of its chart" \
-  "yq -i '.spec.values.webhook.image.tag |= sub(\"^[^@]*\", \"v0.0.0\")' platform/cert-manager/app/helmrelease.yaml"
-refuses cert-manager-renamed "test: cert-manager runs as HelmRelease cert-manager in flux-system" \
-  "yq -i '.metadata.name = \"certificates\"' platform/cert-manager/app/helmrelease.yaml"
+podinfo=$(sed -n 's/^ *tag: \([^@]*\)@sha256:.*/\1/p' "$src/apps/hello/app/helmrelease.yaml")
+refuses chart-image-tag "images are pinned by digest: $podinfo" \
+  "sed -i 's/\(tag: [^@]*\)@sha256:[0-9a-f]*\$/\1/' apps/hello/app/helmrelease.yaml"
+refuses chart-image-number "images are pinned by digest: 6.15" \
+  "sed -i 's/tag: [^@]*@sha256:[0-9a-f]*\$/tag: 6.15/' apps/hello/app/helmrelease.yaml"
+held="test: a HelmRelease sets nothing under an image its chart's record pins, nor anything but a map above one"
+refuses chart-image-held "$held: flux-system/reloader (image)" \
+  "yq -i '.spec.values.image.tag = \"v0.0.0@sha256:$(printf %064d 0)\"' platform/reloader/app/helmrelease.yaml"
+refuses chart-image-above "$held: flux-system/cert-manager (webhook.image)" \
+  "yq -i '.spec.values.webhook = null' platform/cert-manager/app/helmrelease.yaml"
 refuses cronjob-image-tag "images are pinned by digest: busybox:1" \
   "append platform/reloader/app/helmrelease.yaml '---\napiVersion: batch/v1\nkind: CronJob\nmetadata:\n  name: x
   namespace: reloader\nspec:\n  schedule: \"0 0 * * *\"\n  jobTemplate:\n    spec:\n      template:\n        spec:
@@ -1030,8 +1033,7 @@ refuses volsync-check-configmap "offsite-check-1 $copies 1 alone" \
   "yq -i '(select(.metadata.name == \"offsite-check-1\") | .spec.jobTemplate.spec.template.spec.volumes)
    = [{\"name\": \"scripts\", \"configMap\": {\"name\": \"x\"}}]' components/volsync/check.yaml"
 refuses volsync-check-other-image "offsite-check-1 $copies 1 alone" \
-  "sed -i 's|image: quay.io/backube/volsync:.*|image: quay.io/backube/volsync:0.15.0@sha256:$(printf %064d 0)|' \
-  components/volsync/kustomization.yaml"
+  "sed -i 's|^restic[.]tag=\([^:]*\):.*|restic.tag=\1:0.0.0@sha256:$(printf %064d 0)|' platform/volsync/vendor/volsync.images.env"
 refuses volsync-check-other-secret "offsite-check-2 $copies 2 alone" \
   "yq -i '(select(.metadata.name == \"offsite-check-2\") | .spec.jobTemplate.spec.template.spec.containers[0]
    | .envFrom[0].secretRef.name) = \"offsite-1\"' components/volsync/check.yaml"

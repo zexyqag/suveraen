@@ -5,5 +5,22 @@
   "signer": {
     "pgp": "699875E68BBFC9800CBD86AEE3C68F93B50C5EC0"
   },
-  "tree": "sha256:d32068e45de06f9c460b5bed8306915accb0f7685f9b8b53246403467139cd38"
+  "images": [
+    {
+      "image": "ghcr.io/cloudnative-pg/cloudnative-pg",
+      "values": [
+        "image.tag"
+      ],
+      "signer": {
+        "cosign": {
+          "workflow": "https://github.com/cloudnative-pg/cloudnative-pg/.github/workflows/release-publish.yml",
+          "ref": "refs/tags/v",
+          "issuer": "https://token.actions.githubusercontent.com"
+        }
+      },
+      "tag": "1.30.1",
+      "digest": "sha256:923c267ec29636db3bee20f993d0ec4973fa22998e1adad37da79e4d32b5bc07"
+    }
+  ],
+  "tree": "sha256:bdbd52920e862fb00ff49ee1d041459c6e8d796da84cea2708e097a097d9e098"
 }

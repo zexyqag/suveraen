@@ -5,5 +5,25 @@
   "signer": {
     "pgp": "699875E68BBFC9800CBD86AEE3C68F93B50C5EC0"
   },
-  "tree": "sha256:c48da38e3f50ce0f83a9edf807e568ec5d1db65d01414b72e26f7b6a0012ed02"
+  "images": [
+    {
+      "image": "ghcr.io/cloudnative-pg/plugin-barman-cloud",
+      "values": [
+        "image.tag"
+      ],
+      "signer": "none",
+      "tag": "v0.15.1",
+      "digest": "sha256:c75acad19a36e8176cfe2885761ff1b836c6ef977d7257e298c99a28b5c302ef"
+    },
+    {
+      "image": "ghcr.io/cloudnative-pg/plugin-barman-cloud-sidecar",
+      "values": [
+        "sidecarImage.tag"
+      ],
+      "signer": "none",
+      "tag": "v0.15.1",
+      "digest": "sha256:2287a793a804db751edd0d07d44cd549e357677e98a800eb12e2cf7c0d53f9b0"
+    }
+  ],
+  "tree": "sha256:12ca2b73c631e1ac2b2a496640079f5a8ea4c088caaab9ca7d5e9ebd056bc35e"
 }

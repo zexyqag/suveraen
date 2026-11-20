@@ -19,7 +19,7 @@ fullnameOverride: ""
 image:
   name: stakater/reloader
   repository: ghcr.io/stakater/reloader
-  tag: v1.4.22
+  tag: "v1.4.22@sha256:def2480040adc164b3a57340e77674eadfd88fb7f0593df25e93297f29c7fd7c"
   # digest: sha256:1234567
   # repository, tag and digest are rendered with tpl, so they may reference other values.
   pullPolicy: IfNotPresent

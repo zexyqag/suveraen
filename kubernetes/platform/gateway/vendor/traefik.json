@@ -5,5 +5,16 @@
   "signer": {
     "pgp": "B0FBA7678F685E9B7024B79FFD92BB57C5A71A99"
   },
-  "tree": "sha256:1f2634d16bb0cc845903f03694f08c365dae1734daa90d9c33c20bad0bdbbe05"
+  "images": [
+    {
+      "image": "docker.io/traefik",
+      "values": [
+        "image.tag"
+      ],
+      "signer": "none",
+      "tag": "v3.7.14",
+      "digest": "sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c"
+    }
+  ],
+  "tree": "sha256:eb89791ac711d237a36a590005d5e5cd4af2b20b36e0b1a9098ab8bcc2bd1903"
 }

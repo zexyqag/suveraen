@@ -13,6 +13,7 @@ pkgs.runCommand "render"
     nativeBuildInputs = [
       pkgs.fluxcd
       pkgs.yq-go
+      pkgs.jq
       pkgs.python3
     ];
   }
