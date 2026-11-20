@@ -58,6 +58,9 @@
         runtimeInputs = with pkgs; [
           regclient
           cosign
+          kubernetes-helm
+          (python3.withPackages (ps: [ ps.pyyaml ]))
+          openssh
           gnupg
           git
           curl
@@ -70,6 +73,7 @@
           diffutils
           gawk
           gnugrep
+          gnused
         ];
         text = builtins.readFile ./release/charts.sh;
       };
@@ -136,7 +140,8 @@
           meta.description = "Pin each image Flux runs to a digest signed by Flux's release workflow";
         };
 
-        # `nix run .#charts -- add|bump ...`: vendor a chart, as update.yml does when given lines of arguments.
+        # `nix run .#charts -- add|bump|image ...`: vendor a chart or declare its images, as update.yml does when given
+        # lines of arguments.
         charts = {
           type = "app";
           program = pkgs.lib.getExe charts;

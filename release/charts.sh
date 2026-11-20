@@ -1,16 +1,24 @@
 # charts add <tree> <source> <version> (--pgp <fingerprint> <key-url> | --cosign <workflow> <issuer> | --unsigned)
 #        [--path <dir>] [--license <url-or-path>] [--drop <path>]...
 # charts bump <tree> <version>
+# charts image <tree> <image> (--key <fingerprint> <hash> | --workflow <workflow> <ref> <issuer>
+#        | --identity <identity> <issuer> | --unsigned) [--chosen <tag> <file> <key>] <values path>...
+# charts image <tree> <image> --remove
 # charts check
 # charts verify --since <rev>
 # charts summary
 # Run at the top of the repository. Vendors a chart, or a directory of manifests, into <tree>,
 # kubernetes/platform/<piece>/vendor/<name>, from its upstream pin, with its record in <tree>.json: an OCI chart by its
 # manifest's digest, its signature checked, or a directory, given by --path, of the commit a git tag names, the tag
-# being <version>. Docs, tests, images and dot entries are left out, and a licence the package lacks is added from
+# being <version>. Docs, tests, pictures and dot entries are left out, and a licence the package lacks is added from
 # --license. A PGP key goes in release/chart-keys, where no key stays that no record names. check holds every tree to
-# its record offline; verify also fetches every record whose record, tree or key changed since <rev> again from its pin
-# and checks it gives the same tree. summary names what the records and keys change since HEAD.
+# its record offline; verify also fetches every record that, or whose key, changed since <rev> again from its pin and
+# checks it gives the same tree. summary names what the records and keys change since HEAD.
+# image declares in a tree's record an image its chart runs, where its tag goes and who signs it, and drops a key no
+# record names any more. The next add or bump pins each one in the chart's values.yaml and in <tree>.images.env, at the
+# digest of the tag the chart names it by, or that --chosen gives while the tree's <file> gives <key> as it did then,
+# checked against its signer: only a workflow's signature names a tag, the git tag its run started from, while a key's
+# or an identity's names the digest alone.
 chart_type=application/vnd.cncf.helm.chart.content.v1.tar+gzip
 prov_type=application/vnd.cncf.helm.chart.provenance.v1.prov
 keys_dir=release/chart-keys
@@ -27,7 +35,7 @@ die() {
 }
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-export GNUPGHOME=$tmp/gnupg
+export GNUPGHOME=$tmp/gnupg HELM_CACHE_HOME=$tmp/helm HELM_CONFIG_HOME=$tmp/helm HELM_DATA_HOME=$tmp/helm
 mkdir -m 700 "$GNUPGHOME"
 sum() { sha256sum "$1" | cut -d' ' -f1; }
 # A path that stays below where it's joined to.
@@ -37,11 +45,30 @@ treehash() {
 }
 
 valid='def rel: type == "string" and (split("/") | all(. != "" and . != "." and . != ".."));
-  def hex(n): type == "string" and test("^[0-9a-f]{\(n)}$");
-  def version: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._+-]*$");
-  (keys - ["source", "version", "tag", "digest", "commit", "path", "signer", "license", "drop", "tree"] == [])
-  and (if .source | type == "string" and test("^oci://[a-z0-9.:-]+/[a-z0-9._/-]+$") then
-      (.version | version) and .tag == null and (.digest | type == "string" and startswith("sha256:") and (.[7:] | hex(64)))
+  def hex(n): type == "string" and test("^[0-9a-f]{\(n)}\\z");
+  def version: type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._+-]*\\z");
+  def sha256: type == "string" and startswith("sha256:") and (.[7:] | hex(64));
+  def workflow: type == "string" and test("^https://[^/@\\s]+/[^/@\\s]+/[^/@\\s]+/\\.github/workflows/[^/@\\s]+\\z");
+  def https: type == "string" and test("^https://[!-~]+\\z");
+  def image: (keys - ["image", "values", "signer", "chosen", "tag", "digest"] == [])
+    and (.image | type == "string" and test("^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?(/[a-z0-9._-]+)+\\z"))
+    and (.values | type == "array" and length > 0 and all(.[]; type == "string" and test("^([A-Za-z0-9_-]+\\.)+tag\\z")))
+    and (.signer == "none" or (.signer | type == "object" and keys == ["cosign"] and (.cosign | type == "object"
+      and (keys == ["hash", "key"] and (.key | type == "string" and test("^[0-9A-F]{40}\\z"))
+        and (.hash | IN("sha256", "sha384", "sha512"))
+      or keys == ["issuer", "ref", "workflow"] and (.workflow | workflow)
+        and (.ref | type == "string" and test("^refs/tags/[A-Za-z0-9._-]*\\z")) and (.issuer | https)
+      or keys == ["identity", "issuer"] and (.identity | type == "string" and test("^[!-~]+\\z")) and (.issuer | https)))))
+    and (.chosen | . == null or type == "object" and keys - ["value"] == ["file", "key"] and (.file | rel)
+      and (.key | type == "string" and test("^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)*\\z"))
+      and (.value | . == null or type == "string"))
+    and (.tag | . == null or version) and (.digest | . == null or sha256)
+    and if .chosen then .tag != null else (.tag == null) == (.digest == null) end;
+  (keys - ["source", "version", "tag", "digest", "commit", "path", "signer", "license", "drop", "images", "tree"] == [])
+  and (.images | . == null or type == "array" and length > 0 and all(.[]; type == "object" and image)
+    and (map(.image) | . == unique) and ([.[].values[]] | length == (unique | length)))
+  and (if .source | type == "string" and test("^oci://[a-z0-9.:-]+/[a-z0-9._/-]+\\z") then
+      (.version | version) and .tag == null and (.digest | sha256)
       and .commit == null and .path == null
       and (.license | . == null or keys == ["sha256", "url"])
     else
@@ -49,17 +76,17 @@ valid='def rel: type == "string" and (split("/") | all(. != "" and . != "." and 
       and (.commit | hex(40)) and (.path | rel) and .digest == null and .signer == "none"
       and (.license | . == null or keys == ["path"] and (.path | rel) or keys == ["sha256", "url"])
     end)
-  and (.signer == "none" or (.signer | objects | keys == ["pgp"] and (.pgp | test("^[0-9A-F]{40}$"))
-    or keys == ["cosign"] and (.cosign | objects | keys == ["issuer", "workflow"] and all(.[]; type == "string")
-      and (.workflow | test("^https://[^/@]+/[^/@]+/[^/@]+/\\.github/workflows/[^/@]+$")))))
+  and (.signer == "none" or (.signer | objects | keys == ["pgp"] and (.pgp | test("^[0-9A-F]{40}\\z"))
+    or keys == ["cosign"] and (.cosign | objects | keys == ["issuer", "workflow"] and (.issuer | https)
+      and (.workflow | workflow))))
   and (.license | . == null or has("path")
     or (.url | type == "string" and startswith("https://")) and (.sha256 | hex(64)))
   and (.drop | . == null or type == "array" and length > 0 and all(.[]; rel))
-  and (.tree | . == null or type == "string" and startswith("sha256:") and (.[7:] | hex(64)))'
+  and (.tree | . == null or sha256)'
 
 # What a tree may never hold: anything but files and directories, and names a line or git might not carry as they are.
 odd() { (cd "$1" && LC_ALL=C find . -mindepth 1 \( ! -type f ! -type d -o -name '*[!A-Za-z0-9._+@=,~-]*' \) -printf '%P\n'); }
-# Upstream's docs, tests, images and dot entries, which the release leaves out. .helmignore stays: Helm reads it.
+# Upstream's docs, tests, pictures and dot entries, which the release leaves out. .helmignore stays: Helm reads it.
 dropped() {
   (cd "$1" && find . -mindepth 1 \( -name '.*' ! -name .helmignore \
     -o -type d \( -name tests -o -name test -o -name ci \) \
@@ -175,9 +202,191 @@ provenance() {
   [ "$named" = "sha256:$(sum "$archive")" ] || die "The provenance names $named for $file, not its sha256."
 }
 
+# unsigned <repository> <digest>: that neither a signature's tag nor any referrer names the digest, so that upstream
+# starting to sign is noticed.
+unsigned() {
+  local tags referrers
+  tags=$(regctl tag ls "$1") || return
+  ! grep "^sha256-${2#sha256:}" <<<"$tags" ||
+    die "$1@$2 has the tags above, which signatures and attestations take, yet its record says unsigned."
+  referrers=$(regctl artifact list "$1@$2" --format '{{len .Descriptors}}') || return
+  [ "$referrers" = 0 ] || die "$1@$2 has $referrers referrers, yet its record says unsigned."
+}
+
+# signed <image> <digest> <signer> <tag>: checks the digest is signed by an image's signer, or by nobody. An image's
+# signer isn't held to the chart's own repository, as a chart's is: a project may sign them from another repository.
+signed() {
+  local ref=$1@$2 signer=$3 fpr hash identity issuer
+  issuer=$(jq -r '.cosign?.issuer? // empty' <<<"$signer")
+  case $(jq -r 'if . == "none" then "none" else .cosign | keys | join(" ") end' <<<"$signer") in
+  none) unsigned "$1" "$2" ;;
+  "hash key")
+    fpr=$(jq -r .cosign.key <<<"$signer") hash=$(jq -r .cosign.hash <<<"$signer")
+    # The key the release keeps in PGP's form, which cosign reads as the RSA key it holds.
+    { gpg --batch --quiet --import "$keys_dir/$fpr.asc" && gpg --batch --export-ssh-key "$fpr!" >"$tmp/key.ssh" &&
+      ssh-keygen -e -m PKCS8 -f "$tmp/key.ssh" >"$tmp/key.pem" &&
+      cosign verify --key "$tmp/key.pem" --signature-digest-algorithm "$hash" --insecure-ignore-tlog "$ref" \
+        >/dev/null; } ||
+      die "$ref isn't signed by key $fpr over its $hash."
+    ;;
+  "issuer ref workflow")
+    # A workflow's certificate names the ref its run started from: the tag's own.
+    identity=$(jq -r '.cosign.workflow + "@" + .cosign.ref' <<<"$signer")$4
+    cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" "$ref" >/dev/null ||
+      die "$ref isn't signed by $identity, issued by $issuer."
+    ;;
+  "identity issuer")
+    identity=$(jq -r .cosign.identity <<<"$signer")
+    cosign verify --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" "$ref" >/dev/null ||
+      die "$ref isn't signed by $identity, issued by $issuer."
+    ;;
+  *) die "$ref: its record's signer is none this tool checks." ;;
+  esac
+}
+
+# render <chart> <file>: the chart rendered with its defaults alone.
+render() {
+  helm template chart "$1" >"$2" 2>"$tmp/helm.err" || die "$1 doesn't render: $(cat "$tmp/helm.err")"
+}
+# names <file> <image>: each way a render names an image, <image>:<tag> with @<digest> where it gives one, once each.
+names() {
+  { grep -oE "(^|[^A-Za-z0-9./_-])${2//./\\.}:[A-Za-z0-9_][A-Za-z0-9_.-]*(@sha256:[0-9a-f]{64})?" "$1" || true; } |
+    sed -E 's/^[^a-z0-9]//' | LC_ALL=C sort -u
+}
+# guard <tree> <file> <key>: the scalar <file> gives at <key>, as text; nothing, and it fails, where it gives none.
+guard() {
+  [ -f "$1/$2" ] && yq -o=json . "$1/$2" 2>/dev/null |
+    jq -er --arg key "$3" 'try getpath($key | split(".")) catch null | select(. != null) | scalars | tostring' 2>/dev/null
+}
+# The values a record's images pin, a path and its value on each line in one order whatever the record's: each tag's
+# path gives <tag>@<digest>, and a chosen image's repository beside it the image.
+pairs() {
+  jq -r '.images[] | .image as $image | (.tag + "@" + .digest) as $pin | .chosen as $chosen | .values[]
+    | [., $pin], if $chosen then [sub("tag$"; "repository"), $image] else empty end | @tsv' "$1" | LC_ALL=C sort
+}
+# The images file a record gives: each path an image's tag goes at, and the image as its pin names it.
+envfile() {
+  jq -r '.images[] | (.image + ":" + .tag + "@" + .digest) as $ref | .values[] | "\(.)=\($ref)"' "$1" | LC_ALL=C sort
+}
+
+# derive <tree> <dir> <record>: each image the record declares, a tab and what the chart in <dir>, unpinned, gives for
+# it: the one tag its render names a named image by, or a chosen image's guard. Each path is first held to what a tag
+# can be in Helm's own defaults, a string or nothing under a map that holds more, so that a tag's pin, which a template
+# takes as true, can't turn on what the chart leaves off.
+derive() {
+  local tree=$1 dir=$2 record=$3 copy=$tmp/defaults image path chosen shape refs file key now
+  rm -rf "$copy" && cp -r "$dir" "$copy" && mkdir -p "$copy/templates"
+  [ ! -e "$copy/templates/zz-charts-values.yaml" ] ||
+    die "$tree holds templates/zz-charts-values.yaml, the template the tool adds to read its defaults."
+  echo '{{ .Values | toJson }}' >"$copy/templates/zz-charts-values.yaml"
+  helm template chart "$copy" --show-only templates/zz-charts-values.yaml 2>"$tmp/helm.err" |
+    sed '1,/^# Source: /d' >"$tmp/defaults.json" || die "$tree doesn't render: $(cat "$tmp/helm.err")"
+  jq -e 'type == "object"' "$tmp/defaults.json" >/dev/null 2>&1 || die "$tree: Helm gives its defaults as no map."
+  while IFS=$'\t' read -r image path chosen; do
+    shape=$(jq -r --arg path "$path" --arg chosen "$chosen" '
+      (try getpath($path | split(".") | .[:-1]) catch null) as $map
+      | if ($map | type) != "object" or $map == {} then "map" elif $map.tag | . != null and type != "string" then "tag"
+        elif $chosen == "true" and ($map.repository | . != null and . != "") then "repository" else "" end' \
+      "$tmp/defaults.json")
+    case $shape in
+    map) die "$tree: $path: the chart's defaults hold no map with keys at ${path%.tag}." ;;
+    tag) die "$tree: $path: the chart's defaults give it as something other than a string." ;;
+    repository)
+      die "$tree: $path: the chart's defaults name a repository beside it, so $image isn't one the chart leaves unnamed."
+      ;;
+    esac
+  done < <(jq -r '.images[] | (.chosen != null) as $chosen | .image as $image | .values[] | [$image, ., $chosen] | @tsv' \
+    "$record")
+  render "$dir" "$tmp/unpinned"
+  while IFS=$'\t' read -r image file key; do
+    refs=$(names "$tmp/unpinned" "$image")
+    if [ -z "$file" ]; then
+      [[ -n $refs && $refs != *@* && $refs != *$'\n'* ]] ||
+        die "$tree: its chart names $image as $(paste -sd' ' <<<"${refs:-nothing}"), not by one tag alone."
+      now=${refs#"$image:"}
+      [[ $now =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || die "$tree: its chart names $image by $now, not a tag a record takes."
+    else
+      [ -z "$refs" ] ||
+        die "$tree: its chart names $image itself, as $(paste -sd' ' <<<"$refs"): declare it without --chosen."
+      now=$(guard "$dir" "$file" "$key") || die "$tree: its $file gives no scalar at $key, which $image is chosen for."
+    fi
+    printf '%s\t%s\n' "$image" "$now"
+  done < <(jq -r '.images[] | [.image, .chosen.file // "", .chosen.key // ""] | @tsv' "$record")
+}
+
+# splice <file> <path> <value>: the file with one string set, spliced in at the parser's marks, so that every other byte
+# stays as upstream wrote it. Keys missing on the way go on new lines below the deepest key there is.
+splice='
+import json, sys, yaml
+file, keys, value = sys.argv[1], sys.argv[2].split("."), json.dumps(sys.argv[3])
+text = open(file, newline="").read()
+lines = text.splitlines(keepends=True)
+start = [0]
+for line in lines:
+    start.append(start[-1] + len(line))
+at = lambda mark: start[mark.line] + mark.column
+node, key = yaml.compose(text), None
+for depth, name in enumerate(keys):
+    if not isinstance(node, yaml.MappingNode) or node.flow_style:
+        sys.exit(file + ": " + (".".join(keys[:depth]) or "the top") + " is not a block mapping")
+    found = [(k, v) for k, v in node.value if isinstance(k, yaml.ScalarNode) and k.value == name]
+    if not found:
+        indent = node.value[0][0].start_mark.column if node.value else key.start_mark.column + 2
+        block = "".join(" " * (indent + 2 * i) + k + ":" + (" " + value if i == len(keys) - depth - 1 else "") + "\n"
+            for i, k in enumerate(keys[depth:]))
+        if key is None:
+            sys.stdout.write(text + ("" if text.endswith("\n") else "\n") + block)
+        else:
+            below = key.start_mark.line + 1
+            sys.stdout.write("".join(lines[:below]) + block + "".join(lines[below:]))
+        sys.exit()
+    key, node = found[0]
+if not isinstance(node, yaml.ScalarNode) or not node.start_mark.line == node.end_mark.line == key.start_mark.line:
+    sys.exit(file + ": " + sys.argv[2] + " is not a scalar on its key line")
+begin, end = at(node.start_mark), at(node.end_mark)
+if begin == end:
+    begin = end = at(key.end_mark) + 1
+    value = " " + value
+sys.stdout.write(text[:begin] + value + text[end:])
+'
+# pin <values file> <path> <value>, refused if what YAML reads in the file would change anywhere else.
+pin() {
+  local want
+  want=$(yq -o=json -I=0 . "$1" | jq -cS --arg path "$2" --arg value "$3" 'setpath($path | split("."); $value)')
+  python3 -I -c "$splice" "$1" "$2" "$3" >"$tmp/pinned" || die "$1: $2 can't be pinned in place."
+  [ "$(yq -o=json -I=0 . "$tmp/pinned" | jq -cS .)" = "$want" ] || die "$1: pinning $2 would change more than $2."
+  cat "$tmp/pinned" >"$1"
+}
+# pins <dir> <record>: writes the values the record's images pin into the chart's values.yaml.
+pins() {
+  local path value
+  pairs "$2" >"$tmp/pairs"
+  while IFS=$'\t' read -r path value; do
+    pin "$1/values.yaml" "$path" "$value"
+  done <"$tmp/pairs"
+}
+# unpinned <tree> <dir> <record>: why the chart in <dir> doesn't name each image its record pins by its pin alone, and
+# at least once, or gives another name one of their digests, one line each; nothing if neither.
+unpinned() {
+  local image pin refs digest images ref name
+  render "$2" "$tmp/pinned.yaml"
+  while IFS=$'\t' read -r image pin; do
+    refs=$(names "$tmp/pinned.yaml" "$image" | paste -sd' ')
+    [ "$refs" = "$pin" ] || echo "$1: its chart names $image as ${refs:-nothing}, not as $pin alone"
+  done < <(jq -r '.images[] | [.image, .image + ":" + .tag + "@" + .digest] | @tsv' "$3")
+  # A declared path that a template takes for another image gives that image this one's digest.
+  while IFS=$'\t' read -r digest images; do
+    while IFS= read -r ref; do
+      name=${ref%@*}
+      [[ ! $name =~ ^(.+):[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || name=${BASH_REMATCH[1]}
+      [[ " $images " = *" $name "* ]] || echo "$1: its chart names $ref, by a digest its record pins for $images alone"
+    done < <(grep -oE "[A-Za-z0-9./_:-]*@$digest" "$tmp/pinned.yaml" | LC_ALL=C sort -u)
+  done < <(jq -r '.images | group_by(.digest)[] | [.[0].digest, (map(.image) | join(" "))] | @tsv' "$3")
+}
+
 # Fetches an OCI chart by its record's digest, checks its signer and unpacks it as <dir>.
 oci() {
-  local record=$1 dir=$2 key=$3 ref digest name version size top fpr workflow tags referrers
+  local record=$1 dir=$2 key=$3 ref digest name version size top fpr workflow
   ref=$(jq -r '.source | ltrimstr("oci://")' "$record")
   digest=$(jq -r .digest "$record")
   name=${ref##*/}
@@ -209,13 +418,8 @@ oci() {
       --certificate-oidc-issuer "$(jq -r .signer.cosign.issuer "$record")" "$ref@$digest" >/dev/null
     ;;
   none)
-    # So that upstream starting to sign is noticed: a provenance, a signature's tag, or any referrer.
     [ "$(layer "$prov_type" | jq length)" = 0 ] || die "$ref@$digest has a provenance, yet its record says unsigned."
-    tags=$(regctl tag ls "$ref")
-    ! grep "^sha256-${digest#sha256:}" <<<"$tags" ||
-      die "$ref@$digest has the tags above, which signatures and attestations take, yet its record says unsigned."
-    referrers=$(regctl artifact list "$ref@$digest" --format '{{len .Descriptors}}')
-    [ "$referrers" = 0 ] || die "$ref@$digest has $referrers referrers, yet its record says unsigned."
+    unsigned "$ref" "$digest"
     ;;
   esac
   top=$(unpack "$tmp/chart.tgz" "$tmp/chart" "$ref@$digest")
@@ -302,7 +506,7 @@ change() {
 
 # Builds a record's tree, holds it to the rules and writes both, after showing what changes.
 write() {
-  local tree=$1 record=$2 key=$3 new=$tmp/tree old='' problem
+  local tree=$1 record=$2 key=$3 new=$tmp/tree old='' problem committed image now entry digest
   build "$record" "$new" "$key"
   # A git source's version is its chart's, when it holds one.
   if jq -e .commit "$record" >/dev/null; then
@@ -313,16 +517,43 @@ write() {
     fi
     mv "$record.chart" "$record"
   fi
+  if jq -e .images "$record" >/dev/null; then
+    derive "$tree" "$new" "$record" >"$tmp/derived"
+    problem=$(jq -r --rawfile derived "$tmp/derived" --arg tree "$tree" '
+      ($derived | split("\n") | map(select(. != "") | split("\t") | {key: .[0], value: .[1]}) | from_entries) as $now
+      | .images[] | select(.chosen.value != null and .chosen.value != $now[.image]) | "\($tree): \(.image) is chosen for"
+        + " \(.chosen.file) \(.chosen.key) \(.chosen.value), which the tree now gives as \($now[.image])"' "$record")
+    [ -z "$problem" ] || die "$problem
+Give each its tag again with image ... --chosen, before the bump."
+    # A digest stays while its tag does, so that a tag moved upstream changes nothing. The list comes on fd 3, which no
+    # command in the loop reads as its input.
+    while IFS=$'\t' read -r -u 3 image now; do
+      entry=$(jq -c --arg image "$image" --arg now "$now" '.images[] | select(.image == $image)
+        | if .chosen then .chosen.value = $now elif .tag == $now then . else .tag = $now | del(.digest) end' "$record")
+      if ! jq -e .digest <<<"$entry" >/dev/null; then
+        digest=$(regctl image digest "$image:$(jq -r .tag <<<"$entry")")
+        signed "$image" "$digest" "$(jq -c .signer <<<"$entry")" "$(jq -r .tag <<<"$entry")"
+        echo "$image:$(jq -r .tag <<<"$entry"): $digest" >&2
+        entry=$(jq -c --arg digest "$digest" '.digest = $digest' <<<"$entry")
+      fi
+      jq --argjson entry "$entry" '(.images[] | select(.image == $entry.image)) = $entry' "$record" >"$record.image"
+      mv "$record.image" "$record"
+    done 3<"$tmp/derived"
+    pins "$new" "$record"
+    problem=$(unpinned "$tree" "$new" "$record")
+    [ -z "$problem" ] || die "$problem"
+  fi
   jq --arg tree "$(treehash "$new")" '.tree = $tree' "$record" >"$record.tree"
   mv "$record.tree" "$record"
   jq -e "$valid" "$record" >/dev/null || die "$new/Chart.yaml has version $(jq -r .version "$record"), not one a record takes."
   problem=$(problems "$new" "$record")
   [ -z "$problem" ] || die "$problem"
-  if [ -f "$tree.json" ]; then
-    old=$(called "$tree.json")
-    # Flux installs a chart again only once its version changes.
-    jq -e --slurpfile old "$tree.json" '.version == null or .tree == $old[0].tree or .version != $old[0].version' \
-      "$record" >/dev/null || die "$tree would change at version $old, which Flux never installs again."
+  [ ! -f "$tree.json" ] || old=$(called "$tree.json")
+  # Flux installs a chart again only once its version changes from the last commit's, which a cluster may run.
+  if committed=$(git show "HEAD:./$tree.json" 2>/dev/null); then
+    jq -e --argjson old "$committed" '.version == null or .tree == $old.tree or .version != $old.version' "$record" \
+      >/dev/null ||
+      die "$tree would change at version $(jq -r '.version // .tag' <<<"$committed"), which Flux never installs again."
   fi
   mkdir -p "$tmp/diff/old"
   [ ! -d "$tree" ] || cp -r "$tree/." "$tmp/diff/old"
@@ -332,16 +563,21 @@ write() {
   mkdir -p "$(dirname "$tree")"
   cp -r "$new" "$tree"
   cp "$record" "$tree.json"
+  if jq -e .images "$record" >/dev/null; then envfile "$record" >"$tree.images.env"; else rm -f "$tree.images.env"; fi
   change "charts: ${tree##*/}" "$old" "$(called "$record")"
 }
+
+# The fingerprints of the keys a record's chart and images are signed with.
+signers() { jq -r '.signer.pgp?, .images[]?.signer.cosign?.key? | strings' "$1" | LC_ALL=C sort -u; }
 
 # Removes every key no record is signed by, as a record's signer may have changed.
 prune() {
   local record fpr entry
   local -A used=()
   while IFS= read -r -d '' record; do
-    fpr=$(jq -r '.signer.pgp? // empty' "$record")
-    [ -z "$fpr" ] || used[$fpr.asc]=1
+    while IFS= read -r fpr; do
+      used[$fpr.asc]=1
+    done < <(signers "$record")
   done < <(records)
   [ -d "$keys_dir" ] || return 0
   while IFS= read -r -d '' entry; do
@@ -351,7 +587,8 @@ prune() {
 
 add() {
   [ $# -ge 4 ] || usage
-  local tree=${1%/} source=$2 version=$3 signer='' url='' path='' licence=null drops=() key='' digest='' commit='' drop file fpr
+  local tree=${1%/} source=$2 version=$3 signer='' url='' path='' licence=null drops=() key='' digest='' commit='' images=null
+  local drop file fpr
   shift 3
   while [ $# -gt 0 ]; do
     case $1 in
@@ -420,13 +657,17 @@ add() {
   fi
   drop=[]
   for file in "${drops[@]}"; do drop=$(jq -c --arg file "$file" '. + [$file]' <<<"$drop"); done
+  # Added again, a tree keeps the images its record declares, pinned anew as a bump pins them.
+  [ ! -f "$tree.json" ] || images=$(jq -c '.images // null' "$tree.json")
   jq -n --arg source "$source" --arg version "$version" --arg digest "$digest" --arg commit "$commit" \
-    --arg path "$path" --argjson signer "$signer" --argjson license "$licence" --argjson drop "$drop" '
+    --arg path "$path" --argjson signer "$signer" --argjson license "$licence" --argjson drop "$drop" \
+    --argjson images "$images" '
     {source: $source}
     + if $digest != "" then {version: $version, digest: $digest} else {tag: $version, commit: $commit, path: $path} end
     + {signer: $signer}
     + if $license then {license: $license} else {} end
-    + if $drop != [] then {drop: $drop} else {} end' >"$tmp/record.json"
+    + if $drop != [] then {drop: $drop} else {} end
+    + if $images then {images: $images} else {} end' >"$tmp/record.json"
   write "$tree" "$tmp/record.json" "$key"
   if [ -n "$key" ]; then
     mkdir -p "$keys_dir"
@@ -454,6 +695,64 @@ bump() {
   write "$tree" "$tmp/record.json" "$key"
 }
 
+image() {
+  [ $# -ge 3 ] || usage
+  local tree=${1%/} image=$2 signer chosen=null
+  shift 2
+  [[ $tree =~ $named ]] && [ -f "$tree.json" ] || die "$tree has no record: add it first."
+  [ -f "$tree/Chart.yaml" ] || die "$tree holds no chart, in whose values an image's pin could go."
+  if [ "$*" = --remove ]; then
+    jq -e --arg image "$image" 'any(.images[]?; .image == $image)' "$tree.json" >/dev/null ||
+      die "$tree.json declares no image $image."
+    jq --arg image "$image" 'del(.tree) | .images -= [.images[] | select(.image == $image)]
+      | if .images == [] then del(.images) end' "$tree.json" >"$tmp/record.json"
+  else
+    case $1 in
+    --key)
+      [ $# -ge 3 ] || usage
+      [ -f "$keys_dir/$2.asc" ] || die "$keys_dir/$2.asc doesn't exist: an image's key is one the release keeps for a chart."
+      signer=$(jq -n --arg key "$2" --arg hash "$3" '{cosign: {key: $key, hash: $hash}}')
+      shift 3
+      ;;
+    --workflow)
+      [ $# -ge 4 ] || usage
+      signer=$(jq -n --arg workflow "$2" --arg ref "$3" --arg issuer "$4" \
+        '{cosign: {workflow: $workflow, ref: $ref, issuer: $issuer}}')
+      shift 4
+      ;;
+    --identity)
+      [ $# -ge 3 ] || usage
+      signer=$(jq -n --arg identity "$2" --arg issuer "$3" '{cosign: {identity: $identity, issuer: $issuer}}')
+      shift 3
+      ;;
+    --unsigned) signer='"none"' && shift ;;
+    *) usage ;;
+    esac
+    if [ "${1:-}" = --chosen ]; then
+      [ $# -ge 4 ] || usage
+      chosen=$(jq -n --arg tag "$2" --arg file "$3" --arg key "$4" '{tag: $tag, file: $file, key: $key}')
+      shift 4
+    fi
+    [ $# -gt 0 ] || usage
+    # Its digest stays while its tag and signer do, as a bump keeps it then. A chosen image's tag, given again, holds for
+    # whatever the next bump's tree gives at its key.
+    jq --arg image "$image" --argjson signer "$signer" --argjson chosen "$chosen" '
+      def kind: {signer, chosen: (.chosen | if . then {file, key} else null end), tag: (if .chosen then .tag else null end)};
+      ([.images[]? | select(.image == $image)] | .[0]) as $old
+      | ({image: $image, values: $ARGS.positional, signer: $signer}
+        + if $chosen then {chosen: ($chosen | {file, key}), tag: $chosen.tag} else {} end) as $entry
+      | del(.tree)
+      | .images = ([.images[]? | select(.image != $image)]
+        + [$entry + if $old and ($old | kind) == ($entry | kind) then $old | {tag, digest} | with_entries(select(.value))
+          else {} end]
+        | sort_by(.image))' "$tree.json" --args "$@" >"$tmp/record.json"
+  fi
+  jq -e "$valid" "$tmp/record.json" >/dev/null 2>&1 || die "That isn't an image a record takes: see its name, its signer," \
+    "--chosen, and its values paths, a.b.tag each, and no other image's."
+  cp "$tmp/record.json" "$tree.json"
+  prune
+}
+
 # Every vendor directory under kubernetes/, outside the trees themselves, and every record where records go.
 vendors() { find kubernetes -type d -name vendor -prune -print0; }
 records() {
@@ -463,7 +762,7 @@ records() {
 # Holds every tree to its record and every key to the records it signs, saying each way one fails.
 holds() {
   [ -d kubernetes ] || die "Run at the top of the repository, which holds kubernetes/."
-  local failed=0 vendor entry record tree fpr problem
+  local failed=0 vendor entry record tree fpr problem values path value image file key now
   local -A used=()
   refuse() {
     echo "$*" >&2
@@ -477,6 +776,14 @@ holds() {
     while IFS= read -r -d '' entry; do
       case $entry in
       *.json) tree=${entry%.json} ;;
+      *.images.env)
+        tree=${entry%.images.env}
+        if ! { [ -f "$entry" ] && [ ! -L "$entry" ] && [ -f "$tree.json" ] &&
+          jq -e .images "$tree.json" >/dev/null 2>&1; }; then
+          refuse "$entry: in a vendor directory, but not the images file of a record that pins images"
+        fi
+        continue
+        ;;
       *) tree=$entry ;;
       esac
       [[ $tree =~ $named ]] && [ -d "$tree" ] && [ ! -L "$tree" ] && [ -f "$tree.json" ] && [ ! -L "$tree.json" ] ||
@@ -490,16 +797,34 @@ holds() {
       refuse "$record isn't a record this tool writes."
       continue
     fi
-    problem=$(problems "$tree" "$record")
-    [ -z "$problem" ] || refuse "$problem"
-    [ "$(treehash "$tree")" = "$(jq -r .tree "$record")" ] ||
-      refuse "$tree: its files aren't the ones its record names."
-    fpr=$(jq -r '.signer.pgp? // empty' "$record")
-    if [ -n "$fpr" ]; then
+    while IFS= read -r fpr; do
       used[$fpr.asc]=1
       [ -f "$keys_dir/$fpr.asc" ] && [ "$(fingerprint "$keys_dir/$fpr.asc")" = "$fpr" ] ||
         refuse "$record: $keys_dir/$fpr.asc doesn't hold exactly one key, with fingerprint $fpr."
+    done < <(signers "$record")
+    problem=$(problems "$tree" "$record")
+    [ -z "$problem" ] || refuse "$problem"
+    # Only image takes a tree's hash or a pin from its record, and the next bump gives both back.
+    if jq -e '.tree == null or any(.images[]?; .digest == null or .chosen != null and .chosen.value == null)' "$record" \
+      >/dev/null; then
+      refuse "$tree: its record changed since its tree was written: bump it"
+      continue
     fi
+    [ "$(treehash "$tree")" = "$(jq -r .tree "$record")" ] ||
+      refuse "$tree: its files aren't the ones its record names."
+    jq -e .images "$record" >/dev/null || continue
+    cmp -s "$tree.images.env" <(envfile "$record") || refuse "$tree.images.env: not the images file its record gives"
+    values=$(yq -o=json . "$tree/values.yaml" 2>/dev/null) || values=null
+    while IFS=$'\t' read -r path value; do
+      [ "$(jq -r --arg path "$path" 'getpath($path | split(".")) | strings' <<<"$values")" = "$value" ] ||
+        refuse "$tree: its values don't give $path as $value"
+    done < <(pairs "$record")
+    while IFS=$'\t' read -r image file key value; do
+      now=$(guard "$tree" "$file" "$key") || now=nothing
+      [ "$now" = "$value" ] || refuse "$tree: $image is chosen for $file $key $value, which the tree gives as $now"
+    done < <(jq -r '.images[] | select(.chosen) | [.image, .chosen.file, .chosen.key, .chosen.value] | @tsv' "$record")
+    problem=$(unpinned "$tree" "$tree" "$record")
+    [ -z "$problem" ] || refuse "$problem"
   done < <(records)
   if [ -d "$keys_dir" ]; then
     while IFS= read -r -d '' entry; do
@@ -515,19 +840,50 @@ check() {
 
 verify() {
   [ $# = 2 ] && [ "$1" = --since ] || usage
-  local rev=$2 record tree key old problem
+  local rev=$2 record tree key keys fpr old problem image now tag digest signer
   holds
   git rev-parse -q --verify "$rev^{commit}" >/dev/null || die "$rev isn't a commit."
   while IFS= read -r -d '' record; do
     tree=${record%.json}
     key=
     if jq -e .signer.pgp? "$record" >/dev/null; then key=$keys_dir/$(jq -r .signer.pgp "$record").asc; fi
-    if git cat-file -e "$rev:./$record" 2>/dev/null && git diff --quiet "$rev" -- "$record" "$tree" ${key:+"$key"}; then
+    keys=()
+    while IFS= read -r fpr; do keys+=("$keys_dir/$fpr.asc"); done < <(signers "$record")
+    # holds has held each tree and images file to its record.
+    if git cat-file -e "$rev:./$record" 2>/dev/null && git diff --quiet "$rev" -- "$record" "${keys[@]}"; then
       continue
     fi
     echo "$tree: from its pin"
     rm -rf "$tmp/verify"
     build "$record" "$tmp/verify" "$key"
+    # Tags aren't resolved again, as upstream moves them: the chart names the tags, and each digest its signer holds.
+    if jq -e .images "$record" >/dev/null; then
+      derive "$tree" "$tmp/verify" "$record" >"$tmp/derived"
+      while IFS=$'\t' read -r image now; do
+        problem=$(jq -r --arg tree "$tree" --arg image "$image" --arg now "$now" '.images[] | select(.image == $image)
+          | if .chosen then select(.chosen.value != $now) | "\($tree): \($image) is chosen for \(.chosen.file)"
+            + " \(.chosen.key) \(.chosen.value), which its pin gives as \($now)."
+          else select(.tag != $now) | "\($tree): its chart names \($image) by \($now), not by \(.tag) as its record says."
+          end' "$record")
+        [ -z "$problem" ] || die "$problem"
+      done <"$tmp/derived"
+      while IFS=$'\t' read -r -u 3 image tag digest signer; do
+        if ! regctl manifest head "$image@$digest" >/dev/null || ! (signed "$image" "$digest" "$signer" "$tag"); then
+          # Only to help find the pin the record should hold, never to take it.
+          if ! now=$(regctl image digest "$image:$tag" 2>/dev/null); then
+            now="$image:$tag gives no digest now"
+          elif ! (signed "$image" "$now" "$signer" "$tag") >/dev/null 2>&1; then
+            now="$image:$tag gives $now now, which its signer doesn't pass either"
+          elif [ "$signer" = '"none"' ]; then
+            now="$image:$tag gives $now now, which shows no signature"
+          else
+            now="$image:$tag gives $now now, which its signer passes"
+          fi
+          die "$tree: its record pins $image at $digest, which its registry doesn't hold or its signer doesn't pass; $now."
+        fi
+      done 3< <(jq -r '.images[] | [.image, .tag, .digest, (.signer | tojson)] | @tsv' "$record")
+      pins "$tmp/verify" "$record"
+    fi
     problem=$(problems "$tmp/verify" "$record")
     [ -z "$problem" ] || die "$problem"
     if [ "$(treehash "$tmp/verify")" != "$(jq -r .tree "$record")" ]; then
@@ -569,6 +925,6 @@ summary() {
 command=${1:-}
 [ $# = 0 ] || shift
 case $command in
-add | bump | check | verify | summary) "$command" "$@" ;;
+add | bump | image | check | verify | summary) "$command" "$@" ;;
 *) usage ;;
 esac
