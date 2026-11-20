@@ -1254,10 +1254,12 @@ runTest {
                   datetime.fromisoformat(p["metadata"]["creationTimestamp"])
                   for p in parsed("kubectl -n flux-system get pods -l app=source-controller -o json")["items"]
               )
+              # While the new pod fetches the release again, a chart can still read Ready from before with no artifact.
               retry(lambda _: {
                   c["metadata"]["name"]: (c["status"]["artifact"]["revision"], c["status"]["observedSourceArtifactRevision"])
                   for c in items("helmcharts")
-                  if [x["status"] for x in c["status"].get("conditions", []) if x["type"] == "Ready"] == ["True"]
+                  if "artifact" in c["status"]
+                  and [x["status"] for x in c["status"].get("conditions", []) if x["type"] == "Ready"] == ["True"]
                   and datetime.fromisoformat(c["status"]["artifact"]["lastUpdateTime"]) >= afresh
               } == charts_held, timeout_seconds=300)
               # Pods that still run the image keep its layers unpacked, so containerd fetches from the mirror only its
