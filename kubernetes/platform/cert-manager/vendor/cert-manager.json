@@ -1,7 +1,7 @@
 {
   "source": "oci://quay.io/jetstack/charts/cert-manager",
-  "version": "v1.21.2",
-  "digest": "sha256:634dce9c13b56677a2c05e2ab76c312d0be2664022d5dd05815da67e1fd5f610",
+  "version": "v1.21.3",
+  "digest": "sha256:e482675aec32862d323a9218293ff7de81192337998615e4378c56498473f240",
   "signer": {
     "pgp": "1020CF3C033D4F35BAE1C19E1226061C665DF13E"
   },
@@ -10,6 +10,20 @@
     "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
   },
   "images": [
+    {
+      "image": "quay.io/jetstack/cert-manager-acmesolver",
+      "values": [
+        "acmesolver.image.tag"
+      ],
+      "signer": {
+        "cosign": {
+          "key": "1020CF3C033D4F35BAE1C19E1226061C665DF13E",
+          "hash": "sha512"
+        }
+      },
+      "tag": "v1.21.3",
+      "digest": "sha256:c8c1225bb2fe8ab37a330b77f0d8c2ee6a41210fcb54fc07ca606ab9a022b8b7"
+    },
     {
       "image": "quay.io/jetstack/cert-manager-cainjector",
       "values": [
@@ -21,8 +35,8 @@
           "hash": "sha512"
         }
       },
-      "tag": "v1.21.2",
-      "digest": "sha256:c85268c64f2e0e76684bf5fe8906caff34b82523561c6affe0fae3546bd87562"
+      "tag": "v1.21.3",
+      "digest": "sha256:083d0e906f8eb44e255fe4ff817ae54e49f9ed82e22f1011bb4e9e4f4b8a641f"
     },
     {
       "image": "quay.io/jetstack/cert-manager-controller",
@@ -35,8 +49,8 @@
           "hash": "sha512"
         }
       },
-      "tag": "v1.21.2",
-      "digest": "sha256:70f532fd9cfde0b09d55687200942399d89838bc2d5d5b45152eb799a15912b8"
+      "tag": "v1.21.3",
+      "digest": "sha256:9f4f96a33c7774cef24466fcd85031997531a03a8d117f151126baa8d1290dcc"
     },
     {
       "image": "quay.io/jetstack/cert-manager-webhook",
@@ -49,9 +63,9 @@
           "hash": "sha512"
         }
       },
-      "tag": "v1.21.2",
-      "digest": "sha256:a60e2dac46dbb8a7f3df95c54ce941012f54c2fe022f0ee55aaa1ab40ed957ae"
+      "tag": "v1.21.3",
+      "digest": "sha256:055ac8e9de6a0ba6763794838fe38944acc650f68ebe1b01dd8be079e580f458"
     }
   ],
-  "tree": "sha256:63d64717aaf075f333703d4851e8cc588bca8fe46e2d10a5c55b0cb2fd9e991c"
+  "tree": "sha256:168c711d3def8b5b444f181691c3af7fce6829f803e717754db7bc265a966da8"
 }
