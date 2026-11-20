@@ -86,8 +86,8 @@ other() { # a second app like hello, which bravo also runs, with IDs of its own 
   rm apps/other/edge-apex.yaml
   sed -i 's/hello/other/g; s/HELLO/OTHER/g' apps/other/ks.yaml apps/other/*/*.yaml
   ids bravo OTHER_SSO_ID OTHER_USERS_ID OTHER_OIDC_ID OTHER_USERS_CREATE_ID OTHER_OIDC_CREATE_ID
-  yq -i '.spec.values.persistence.migrations.sources += [{"configMap": {"name": "sso-other", "optional": true}}]' \
-    apps/kanidm/app/helmrelease.yaml
+  yq -i '.spec.values.persistence.migrations.sources |= (. + [{"configMap": {"name": "sso-other", "optional": true}}]
+    | sort_by(.configMap.name))' apps/kanidm/app/helmrelease.yaml
   sed -i 's|  - ../../../../../apps/hello/ks.yaml|&\n  - ../../../../../apps/other/ks.yaml|' \
     $T/bravo/apps/kustomization.yaml
   append $T/bravo/secrets.yaml '  OTHER_DB_PASSWORD: x\n  OTHER_RESTIC_PASSWORD: x\n'
@@ -382,8 +382,8 @@ refuses tlsroute-other-host ",evil.one.test, which isn't its listener's host" \
 refuses tlsroute-terminating-listener "route alpha-kanidm/idm attaches to gateway/https/alpha-kanidm-idm" \
   "sed -i 's/      sectionName: tls/      sectionName: https/' $E/tlsroute.yaml"
 own="an app that terminates TLS itself holds one certificate, tls, for the host passed through to it"
-refuses passthrough-other-host "$own, login.one.test" \
-  "yq -i '(select(documentIndex == 1) | .spec.postBuild.substitute.HOST) = \"login\"' apps/kanidm/ks.yaml"
+refuses passthrough-other-host "$own, idm.one.test" \
+  "sed -i 's/^    - \${HOST}[.]/    - \${HOST}x./' components/passthrough/certificate.yaml"
 refuses passthrough-no-certificate "$own" "sed -i '/certificate.yaml/d' components/passthrough/kustomization.yaml"
 refuses passthrough-label-value "an app that terminates TLS itself is labelled suveraen/passthrough" \
   "sed -i 's|suveraen/passthrough: \"true\"|suveraen/passthrough: \"yes\"|' components/passthrough/kustomization.yaml"
@@ -1102,8 +1102,6 @@ refuses mesh-image-version "signal image ghcr.io/netbirdio/signal:0.81.5@" \
   "sed -i '0,/tag: 0.82.0@/s//tag: 0.81.5@/' $H"
 refuses mesh-management-root "management runAsUser and runAsGroup" \
   "yq -i 'del(.spec.values.controllers.management.containers.management.securityContext.runAsUser)' $H"
-refuses mesh-rollback "an upgrade that fails is rolled back" \
-  "yq -i '.spec.upgrade.remediation.strategy = \"rollback\"' $H"
 refuses mesh-ephemeral-quota "the quota holds every pod the app's charts run at once" \
   "yq -i '.spec.postBuild.substitute.NETBIRD_QUOTA_EPHEMERAL_STORAGE = \"512Mi\"' $T/alpha/tenant.yaml"
 refuses mesh-internet "network policies ['default-deny', 'dns', 'internet'," \
@@ -1146,6 +1144,10 @@ refuses mesh-api-elsewhere "nginx.conf /api/ not routed to http://netbird-manage
 refuses passthrough-app-for-hello "kubernetes/apps/hello/ks.yaml: a host is \${TENANT}-hello-edge-<EDGE>" \
   "yq -i '(select(documentIndex == 1) | .spec.path) = \"./kubernetes/edge/passthrough-app\"
    | (select(documentIndex == 1) | .spec.dependsOn) |= map(select(.name != \"issuer\"))' apps/hello/ks.yaml"
+refuses app-host-elsewhere "kubernetes/apps/vaultwarden/ks.yaml: an app's HOST is the HOST of one of its edges: vault" \
+  "yq -i '(select(documentIndex == 1) | .spec.postBuild.substitute.HOST) = \"pass\"' apps/vaultwarden/ks.yaml"
+refuses rollback-onto-database "alpha-vaultwarden: an app with a database is uninstalled when an upgrade fails" \
+  "yq -i 'del(.spec.upgrade)' apps/vaultwarden/app/helmrelease.yaml"
 refuses real-cluster-public-ca "prod: the public issuer's certificates chain to roots the images hold" \
   "$real; yq -i '.data.PUBLIC_CA_BUNDLE = \"eA==\"' clusters/prod/settings.yaml"
 refuses real-cluster-public-ca-empty \

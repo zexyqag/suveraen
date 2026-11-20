@@ -1,0 +1,99 @@
+---
+# A tenant's password manager: Vaultwarden, which Bitwarden's own apps sign in to, behind the gateway on the tenant's
+# app domain. Members make their accounts through the tenant's own Kanidm alone. Each vault is encrypted on their
+# devices and kept in the tenant's PostgreSQL; its attachments and Sends, and the key Vaultwarden signs sessions with,
+# are on the volume.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-vaultwarden
+spec:
+  path: ./kubernetes/apps/vaultwarden/app
+  targetNamespace: ${TENANT}-vaultwarden
+  components:
+    - ../../../components/app
+    - ../../../components/db-client
+    - ../../../components/volsync
+    - ../../../components/sso-client
+    - ../../../components/sso-secret
+    - ../../../components/public-roots
+  dependsOn:
+    - name: policies
+    - name: app-charts
+    - name: volsync
+    - name: ceph
+    - name: ${TENANT}-vaultwarden-db
+    - name: ${TENANT}-vaultwarden-sso
+  postBuild:
+    substitute:
+      APP: vaultwarden
+      # Its sign-in names the host as it is, as an attachment substitutes APP alone. Fixed once anyone has signed in:
+      # passkeys, the sign-in's way back and every app's saved server go by it.
+      HOST: vault
+      QUOTA_CPU: ${VAULTWARDEN_QUOTA_CPU:=200m}
+      # The app, up to three movers and a check, 256Mi each, and one more pod at the defaults.
+      QUOTA_MEMORY: ${VAULTWARDEN_QUOTA_MEMORY:=1408Mi}
+      # The same pods, with 256Mi of scratch space each.
+      QUOTA_EPHEMERAL_STORAGE: ${VAULTWARDEN_QUOTA_EPHEMERAL_STORAGE:=1536Mi}
+      # The volume and the three movers' copies of it, each mover with a 256Mi cache.
+      QUOTA_STORAGE: ${VAULTWARDEN_QUOTA_STORAGE:=17Gi}
+      QUOTA_VOLUMES: "8"
+      QUOTA_PODS: "7"
+      QUOTA_SERVICES: "1"
+      QUOTA_SECRETS: "12"
+      QUOTA_CONFIGMAPS: "4"
+      QUOTA_JOBS: "7"
+      DATA_SIZE: ${VAULTWARDEN_DATA_SIZE:=4Gi}
+      DATA_UID: "65534"
+      DATA_SCHEDULE_1: ${VAULTWARDEN_DATA_SCHEDULE_1:=21 * * * *}
+      DATA_SCHEDULE_2: ${VAULTWARDEN_DATA_SCHEDULE_2:=51 * * * *}
+      DATA_MAX_AGE: ${VAULTWARDEN_DATA_MAX_AGE:=3h}
+      DATA_CHECK_SCHEDULE_1: ${VAULTWARDEN_DATA_CHECK_SCHEDULE_1:=36 2 * * *}
+      DATA_CHECK_SCHEDULE_2: ${VAULTWARDEN_DATA_CHECK_SCHEDULE_2:=36 14 * * *}
+      DATA_CHECK_CYCLE: ${VAULTWARDEN_DATA_CHECK_CYCLE:=7d}
+      # A new value restores the latest copy again, from offsite-1 or offsite-2.
+      DATA_RESTORE: ${VAULTWARDEN_DATA_RESTORE:=once}
+      DATA_RESTORE_FROM: ${VAULTWARDEN_DATA_RESTORE_FROM:=offsite-1}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-vaultwarden-edge-vault
+spec:
+  path: ./kubernetes/edge/app
+  dependsOn:
+    - name: ${TENANT}-vaultwarden
+    - name: gateway
+    - name: issuer
+  postBuild:
+    substitute:
+      APP: vaultwarden
+      EDGE: vault
+      HOST: vault
+      ROUTE_PORT: "8080"
+---
+# Its database and role in the tenant's PostgreSQL (apps/postgres, components/db).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-vaultwarden-db
+spec:
+  path: ./kubernetes/apps/vaultwarden/db
+  dependsOn:
+    - name: ${TENANT}-postgres-cluster
+  postBuild:
+    substitute:
+      APP: vaultwarden
+---
+# Its client in the tenant's Kanidm (apps/kanidm, components/sso).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ${TENANT}-vaultwarden-sso
+spec:
+  path: ./kubernetes/apps/vaultwarden/sso
+  dependsOn:
+    - name: ${TENANT}-kanidm
+  postBuild:
+    substitute:
+      APP: vaultwarden

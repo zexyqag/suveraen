@@ -231,8 +231,6 @@ def one(kind, name):
     return found[0] if len(found) == 1 else {}
 
 release = one("HelmRelease", "netbird").get("spec") or {}
-if ((release.get("upgrade") or {}).get("remediation") or {}).get("strategy") != "uninstall":
-    bad.append("an upgrade that fails is rolled back")
 controllers = (release.get("values") or {}).get("controllers") or {}
 shape = {name: (sorted(c.get("initContainers") or {}), sorted(c.get("containers") or {}))
          for name, c in controllers.items()}
@@ -923,6 +921,13 @@ for dir in kubernetes/apps/*/; do
       [ "$file" = "$dir/edge-$key.yaml" ] || fail "$file holds host $key, so it is edge-$key.yaml"
     fi
   done
+  # An app that names its own host, HOST, is served at it.
+  host=$(yq 'select(documentIndex == 0) | .spec.postBuild.substitute.HOST // ""' "$dir/ks.yaml")
+  if [ -n "$host" ]; then
+    hosts=$(yq ea '[select(.spec.path // "" | test("^[.]/kubernetes/edge/")) | .spec.postBuild.substitute.HOST // ""]
+      | .[]' $(find "$dir" -maxdepth 1 \( -name ks.yaml -o -name 'edge-*.yaml' \) | sort))
+    grep -qxF -- "$host" <<<"$hosts" || fail "$dir/ks.yaml: an app's HOST is the HOST of one of its edges: $host"
+  fi
 done
 
 bad=$(grep -rhoE "[$][{]($(paste -sd'|' <<<"$appnames"))_[A-Z0-9_]*" kubernetes/components kubernetes/edge | cut -c3- \
@@ -1322,6 +1327,12 @@ for dir in kubernetes/clusters/*/; do
           or .spec.serviceAccountName != "flux-deployer" or .spec.install.crds != "Skip" or .spec.upgrade.crds != "Skip"
           or (.spec | has("targetNamespace") or has("storageNamespace"))) | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: app HelmReleases must run as flux-deployer in the app's namespace: $bad"
+        # An app may migrate the database it reaches (components/db-client) as it starts.
+        database=$(yq ea '[select(.kind == "NetworkPolicy" and .metadata.name == "to-postgres")] | length' "$file")
+        bad=$(yq ea '[select(.kind == "HelmRelease" and .spec.upgrade.remediation.strategy != "uninstall")
+          | .metadata.name] | .[]' "$file")
+        [ "$database" = 0 ] || [ -z "$bad" ] || fail "$cluster/$name: an app with a database is uninstalled when an" \
+          "upgrade fails, never rolled back onto what the new release migrated: $bad"
         built=$(cut -d' ' -f1 "$w/charts")
         bad=$(yq ea '[select(.kind == "HelmRelease") | .metadata.name + " "
           + (.spec.chartRef // {} | keys | sort | join(",") | sub("^$", "-")) + " " + (.spec.chartRef.kind // "-") + " "

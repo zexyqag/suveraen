@@ -1,0 +1,154 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: vaultwarden
+spec:
+  interval: 1h
+  # Past the five minutes its startup probe gives the migrations it runs as it starts.
+  timeout: 10m
+  chartRef:
+    kind: HelmChart
+    name: app-template-5
+    namespace: flux-system
+  upgrade:
+    remediation:
+      # A rollback would run the previous release on a database the new one has migrated.
+      strategy: uninstall
+  values:
+    controllers:
+      vaultwarden:
+        # One pod on the volume, the old one gone before the new one starts: it migrates its database as it starts,
+        # with no lock against another, and keeps its notifications' connections and its login limits in memory.
+        type: statefulset
+        annotations:
+          reloader.stakater.com/auto: "true"
+        pod:
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+        containers:
+          app:
+            image:
+              repository: docker.io/vaultwarden/server
+              tag: 1.37.5-alpine@sha256:bbe684a02d6b0db54256ff88eac9754f4519284a7b26314afc241fd7d0918191
+            env:
+              DOMAIN: https://${HOST}.${TENANT_APP_DOMAIN}
+              ROCKET_PORT: "8080"
+              # Its temporary folder too, data/tmp, where an upload of up to 525 MB lands whole before any limit is
+              # checked: on the volume, not in the pod's scratch space.
+              DATA_FOLDER: /data
+              # Settings come from here alone: Vaultwarden prefers a saved config.json to its environment, and looks for
+              # one on the read-only root, where nothing can write it.
+              CONFIG_FILE: /etc/vaultwarden.json
+              # libpq reads the role's password from PGPASSWORD, so the address holds no secret.
+              DATABASE_URL: postgresql://${APP}@postgres-rw.${TENANT}-postgres.svc:5432/${APP}?sslmode=require
+              PGPASSWORD:
+                valueFrom:
+                  secretKeyRef:
+                    name: vaultwarden
+                    key: db-password
+              SSO_ENABLED: "true"
+              SSO_ONLY: "true"
+              SSO_AUTHORITY: https://idm.${TENANT_DOMAIN}/oauth2/openid/${APP}-oidc
+              SSO_CLIENT_ID: ${APP}-oidc
+              SSO_CLIENT_SECRET:
+                valueFrom:
+                  secretKeyRef:
+                    name: sso
+                    key: client-secret
+              # An account is the Kanidm person who made it, by their ID, never whoever has its mail.
+              SSO_SIGNUPS_MATCH_EMAIL: "false"
+              # Its own sessions, renewed as they are used, for 30 days and 90 on phones, so Kanidm's daily session
+              # signs no phone out; nor can Kanidm end one.
+              SSO_AUTH_ONLY_NOT_SESSION: "true"
+              # The apps hold a new master password to it.
+              SSO_MASTER_PASSWORD_POLICY: '{"minComplexity":4,"minLength":20,"requireLower":false,"requireNumbers":false,"requireSpecial":false,"requireUpper":false}'
+              SIGNUPS_ALLOWED: "false"
+              # Nor accounts made ahead for an address, which whoever first signs in with it would take.
+              INVITATIONS_ALLOWED: "false"
+              EMAIL_CHANGE_ALLOWED: "false"
+              PASSWORD_HINTS_ALLOWED: "false"
+              SHOW_PASSWORD_HINT: "false"
+              # Without mail, the grantor would hear nothing of a recovery, which Vaultwarden grants itself once its
+              # wait is over.
+              EMERGENCY_ACCESS_ALLOWED: "false"
+              # Without mail, a person is added to an organisation without being asked.
+              ORG_CREATION_USERS: none
+              DISABLE_ICON_DOWNLOAD: "true"
+              TRASH_AUTO_DELETE_DAYS: "30"
+              # In KB: 100 MiB of attachments and 100 MiB of Sends a person.
+              USER_ATTACHMENT_LIMIT: "102400"
+              USER_SEND_LIMIT: "102400"
+              # A person could otherwise give it Duo keys of their own, whose calls nothing here lets out.
+              _ENABLE_DUO: "false"
+              # At info it names everyone who signs in and every path their apps ask for, and at warn its icons name
+              # the hosts of members' saved addresses it refuses.
+              LOG_LEVEL: warn,vaultwarden::api::icons=error
+              # Kanidm's certificate chains to the public issuer's roots, which may be beyond those the image holds.
+              SSL_CERT_DIR: /etc/ssl/certs:/etc/extra-roots
+            probes:
+              startup:
+                enabled: true
+                custom: true
+                spec:
+                  httpGet:
+                    path: /alive
+                    port: 8080
+                  periodSeconds: 5
+                  failureThreshold: 60
+              # /api/now never touches the database, and /alive takes a connection to it: a database that is down takes
+              # the pod out of its Service, never restarts it.
+              liveness:
+                enabled: true
+                custom: true
+                spec:
+                  httpGet:
+                    path: /api/now
+                    port: 8080
+              readiness:
+                enabled: true
+                custom: true
+                spec:
+                  httpGet:
+                    path: /alive
+                    port: 8080
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: [ALL]
+            resources:
+              requests:
+                cpu: 20m
+                memory: 64Mi
+                ephemeral-storage: 16Mi
+              limits:
+                memory: 256Mi
+                ephemeral-storage: 256Mi
+    defaultPodOptions:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+    service:
+      app:
+        controller: vaultwarden
+        ports:
+          http:
+            port: 8080
+    persistence:
+      data:
+        type: persistentVolumeClaim
+        existingClaim: data
+        globalMounts:
+          - path: /data
+      roots:
+        type: configMap
+        name: roots
+        globalMounts:
+          - path: /etc/extra-roots
+            readOnly: true

@@ -1,0 +1,27 @@
+---
+# Vaultwarden's confidential client in its tenant's Kanidm (components/sso), which any member may sign in with, made
+# once by 10-vaultwarden-oidc.json, which never changes, and changed by 50-vaultwarden.json. Its IDs come from the
+# tenant's Secret: VAULTWARDEN_OIDC_ID for the client, VAULTWARDEN_OIDC_CREATE_ID for the file that makes it. Its name
+# is part of every account's link to its person, so it is fixed for good.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sso-vaultwarden
+  namespace: ${TENANT}-kanidm
+data:
+  10-vaultwarden-oidc.json: |
+    {"id":"${VAULTWARDEN_OIDC_CREATE_ID}","assertions":[{"state":"present","id":"${VAULTWARDEN_OIDC_ID}","class":["account","oauth2_resource_server","oauth2_resource_server_basic"],"name":"vaultwarden-oidc","displayname":"vaultwarden-oidc","oauth2_rs_origin_landing":"https://pending.invalid/"}]}
+  50-vaultwarden.json: |
+    {
+      "id": "${VAULTWARDEN_SSO_ID}",
+      "assertions": [
+        {
+          "state": "present",
+          "id": "${VAULTWARDEN_OIDC_ID}",
+          "displayname": "Passwords",
+          "oauth2_rs_origin": ["https://vault.${TENANT_APP_DOMAIN}/identity/connect/oidc-signin"],
+          "oauth2_rs_origin_landing": "https://vault.${TENANT_APP_DOMAIN}/",
+          "oauth2_rs_scope_map": [{ "group": "members", "scopes": ["openid", "email", "profile"] }]
+        }
+      ]
+    }

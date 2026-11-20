@@ -113,6 +113,9 @@ spec:
           - configMap:
               name: sso-netbird
               optional: true
+          - configMap:
+              name: sso-vaultwarden
+              optional: true
         globalMounts:
           - path: /migrations
             readOnly: true
