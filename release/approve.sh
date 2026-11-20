@@ -131,27 +131,47 @@ if ! git diff --quiet "$release" "$candidate" -- flake.lock; then
   echo "Inputs that change:"
   { diff <(locks "$release") <(locks "$candidate") || true; } | clean
 fi
-# Each vendored tree that changes, by its record's path without .json, with its versions, signer and source. Only the
-# tool writes a tree from upstream, and it writes the record too: a tree that changes alone was changed some other way.
+# Each vendored tree that changes, by its record's path without .json, with its versions, signer and source, and below
+# it each image its record pins that changes. Only the tool writes a tree from upstream, and it writes the record and
+# the images file too: a tree or images file that changes alone was changed some other way.
 charts() {
   git diff --name-only --no-renames "$release" "$candidate" -- 'kubernetes/platform/*/vendor/*' |
-    sed -E 's,/vendor/([^/]*)(\.json$|/.*),/vendor/\1,' | sort -u | while IFS= read -r stem; do
+    sed -E 's,/vendor/([^/]*)(\.json$|\.images\.env$|/.*),/vendor/\1,' | sort -u | while IFS= read -r stem; do
     old=$(git show "$release:$stem.json" 2>/dev/null || echo null)
     new=$(git show "$candidate:$stem.json" 2>/dev/null || echo null)
     same=false
     if git diff --quiet "$release" "$candidate" -- "$stem.json"; then same=true; fi
     jq -n -r --arg stem "$stem" --argjson old "$old" --argjson new "$new" --argjson same "$same" '
       def called: .version // .tag;
-      def signer: if . == "none" then "unsigned" elif .pgp? then "PGP key \(.pgp)"
-        elif .cosign? then "cosign \(.cosign.workflow), issued by \(.cosign.issuer)" else error end;
+      def signer: .tag as $tag | .signer | if . == "none" then "unsigned" elif .pgp? then "PGP key \(.pgp)"
+        elif .cosign? | not then error
+        else .cosign | if .key then "cosign key \(.key) (\(.hash))"
+          elif .identity then "cosign \(.identity), issued by \(.issuer)"
+          else "cosign \(.workflow)\(if .ref then "@\(.ref)\($tag)" else "" end), issued by \(.issuer)" end end;
       "  \($stem): " + if $new == null and $old == null then "holds no record"
       elif $new == null then "removed"
       else [if $old == null then "new at \($new | called)" elif ($old | called) == ($new | called) then $new | called
-          else "\($old | called) to \($new | called)" end, ($new.signer | signer)]
+          else "\($old | called) to \($new | called)" end, ($new | signer)]
         + if $old != null and $old.signer != $new.signer then ["signer changes"] else [] end
         + if $old != null and $old.source != $new.source then ["source changes from \($old.source)"] else [] end
-        + if $same then ["tree changed, record didn\u0027t"] else [] end
-        | join(", ") end' || die "$(printf %s "$stem" | clean).json isn't a chart's record."
+        + if $same then ["tree or images changed, record didn\u0027t"] else [] end
+        | join(", ") end,
+      (select($new != null) | [$old.images, $new.images] | map(. // [] | INDEX(.image)) as [$was, $is]
+        | ($was + $is | keys[]) as $image | $was[$image] as $o | $is[$image] as $n | select($o != $n)
+        | "    \($image): " + if $n == null then "no longer pinned"
+        else [if $o == null then "new at \($n.tag)" elif $o.tag == $n.tag then $n.tag else "\($o.tag) to \($n.tag)" end,
+            ($n | signer)]
+          + if $o == null then ["values \($n.values | join(" "))"] else [] end
+          + if $o != null and $o.tag == $n.tag and $o.digest != $n.digest then ["another digest"] else [] end
+          + if $o != null and $o.signer != $n.signer then ["signer changes from \($o | signer)"] else [] end
+          + if $o != null and $o.values != $n.values then
+            ["values change from \($o.values | join(" ")) to \($n.values | join(" "))"] else [] end
+          + if $n.chosen then [$n.chosen | "chosen for \(.file) \(.key) \(.value)"]
+              + if $o.chosen and $o.chosen != $n.chosen then [$o.chosen | "from "
+                + if [.file, .key] == ($n.chosen | [.file, .key]) then .value else "\(.file) \(.key) \(.value)" end]
+              else [] end
+            elif $o.chosen then ["no longer chosen"] else [] end
+          | join(", ") end)' || die "$(printf %s "$stem" | clean).json isn't a chart's record."
   done
 }
 vendored=$(charts | clean)

@@ -3,9 +3,10 @@
 # a key change done in two releases, the canary signed in only when confirmed, a file that makes a Kanidm entry
 # refused once its text is other than main first held under its ID or for its entry, in any layout and from any
 # directory of the clone, while added, moved, deleted and restored ones pass, the vendored charts a release changes
-# with their versions, signers and sources, a moved one where it went and where it was, a tree changed without its
-# record flagged, a note on when each part of a release that changes both nixos/ and kubernetes/ applies, and refusals
-# while checks fail or can't be read.
+# with their versions, signers and sources, a moved one where it went and where it was, a tree or images file changed
+# without its record flagged, the images their records pin that change with their tags, signers, values and guards, a
+# note on when each part of a release that changes both nixos/ and kubernetes/ applies, and refusals while checks fail
+# or can't be read.
 { pkgs, approve }:
 pkgs.runCommand "approve-test"
   {
@@ -191,12 +192,12 @@ pkgs.runCommand "approve-test"
     # Each vendored chart that changes, by its record: its versions or tag, its signer and whether that or its source
     # changes, where one that moved went and where it was, and a tree that changes while its record doesn't.
     vendor=kubernetes/platform/demo/vendor
-    # record <name> version|tag:<value> <values.yaml> <PGP key or none> [<source>]
+    # record <name> version|tag:<value> <values.yaml> <PGP key or none> [<source>] [<images>]
     record() {
       mkdir -p $vendor/$1 && echo "$3" > $vendor/$1/values.yaml
       if [ "$4" = none ]; then signer='"none"'; else signer="{\"pgp\": \"$4\"}"; fi
-      echo "{\"source\": \"''${5:-oci://registry.example.org/demo/$1}\", \"''${2%%:*}\": \"''${2#*:}\", \"signer\": $signer}" \
-        > $vendor/$1.json
+      echo "{\"source\": \"''${5:-oci://registry.example.org/demo/$1}\", \"''${2%%:*}\": \"''${2#*:}\"," \
+        "\"signer\": $signer''${6:+, \"images\": [$6]}}" > $vendor/$1.json
     }
     stage "record chart version:1.0.0 one none && record crds tag:v1.0.0 one none" "charts"
     echo release | approve > ../out
@@ -224,13 +225,87 @@ pkgs.runCommand "approve-test"
     stage "echo three > $vendor/chart/values.yaml" "chart by hand"
     echo release | approve > ../out
     released
-    grep -qx "  $vendor/chart: 1.1.0, PGP key 0123ABCD, tree changed, record didn't" ../out
+    grep -qx "  $vendor/chart: 1.1.0, PGP key 0123ABCD, tree or images changed, record didn't" ../out
     ! grep -q "nixos/ and kubernetes/" ../out || exit 1
     # A release that changes both says when each applies.
     stage "mkdir -p nixos && echo '{ }' > nixos/default.nix && echo four > $vendor/chart/values.yaml" "both"
     echo release | approve > ../out
     released
     grep -q "^This changes both nixos/ and kubernetes/: the cluster applies kubernetes/ within minutes" ../out
+
+    # Below its record, each image a record pins that changes: new with its values, at another tag or digest, with
+    # another signer or values, chosen for another guard, from the one it had, or no longer, or gone, by its signer as
+    # the tool checks it; and none where only the images file changes, which is flagged, or where the record goes.
+    # image <name> <values paths> <signer> <tag> <digest's number> [<file> <key> <value>]
+    image() {
+      chosen=
+      [ -z "''${6:-}" ] || chosen=", \"chosen\": {\"file\": \"$6\", \"key\": \"$7\", \"value\": \"$8\"}"
+      echo "{\"image\": \"registry.example.org/demo/$1\", \"values\": [\"''${2// /\", \"}\"], \"signer\": $3," \
+        "\"tag\": \"$4\", \"digest\": \"$(printf 'sha256:%064d' "$5")\"$chosen}"
+    }
+    app() { record app "version:$1" "$1" none "" "$2" && echo "$2" > $vendor/app.images.env; }
+    pinned() { grep -qxF "    registry.example.org/demo/$1" ../out; }
+    run=https://github.com/example/app/.github/workflows/release.yml
+    issuer=https://token.actions.githubusercontent.com
+    workflow="{\"cosign\": {\"workflow\": \"$run\", \"ref\": \"refs/tags/v\", \"issuer\": \"$issuer\"}}"
+    identity='{"cosign": {"identity": "csi@example.org", "issuer": "https://accounts.example.org"}}'
+    keyed='{"cosign": {"key": "0123456789ABCDEF0123456789ABCDEF01234567", "hash": "sha512"}}'
+    csi="cosign csi@example.org, issued by https://accounts.example.org"
+    sidecar="cosign key 0123456789ABCDEF0123456789ABCDEF01234567 (sha512)"
+    guard="chosen for charts/csi/Chart.yaml appVersion"
+    pins="$(image app image.tag "$workflow" 1.0.0 1)"
+    pins+=",$(image csi csi.tag "$identity" v3.0.0 2 charts/csi/Chart.yaml appVersion 1.0.0)"
+    pins+=",$(image sidecar sidecar.tag "$keyed" 1.0.0 3)"
+    stage 'app 1.0.0 "$pins"' "app pins its images"
+    echo release | approve > ../out
+    released
+    grep -qx "  $vendor/app: new at 1.0.0, unsigned" ../out
+    pinned "app: new at 1.0.0, cosign $run@refs/tags/v1.0.0, issued by $issuer, values image.tag"
+    pinned "csi: new at v3.0.0, $csi, values csi.tag, $guard 1.0.0"
+    pinned "sidecar: new at 1.0.0, $sidecar, values sidecar.tag"
+    pins="$(image app image.tag "$workflow" 1.1.0 4)"
+    pins+=",$(image csi csi.tag "$identity" v3.1.0 5 charts/csi/Chart.yaml appVersion 1.1.0)"
+    pins+=",$(image sidecar sidecar.tag "$keyed" 1.0.0 6)"
+    stage 'app 1.1.0 "$pins"' "app 1.1.0"
+    echo release | approve > ../out
+    released
+    grep -qx "  $vendor/app: 1.0.0 to 1.1.0, unsigned" ../out
+    pinned "app: 1.0.0 to 1.1.0, cosign $run@refs/tags/v1.1.0, issued by $issuer"
+    pinned "csi: v3.0.0 to v3.1.0, $csi, $guard 1.1.0, from 1.0.0"
+    pinned "sidecar: 1.0.0, $sidecar, another digest"
+    pins="$(image app image.tag "$workflow" 1.1.0 4)"
+    pins+=",$(image csi csi.tag "$identity" v3.1.0 5 charts/csi/Chart.yaml version 1.1.0)"
+    pins+=",$(image sidecar sidecar.tag "$keyed" 1.0.0 6)"
+    stage 'app 1.1.0 "$pins"' "csi chosen for another key"
+    echo release | approve > ../out
+    released
+    pinned "csi: v3.1.0, $csi, chosen for charts/csi/Chart.yaml version 1.1.0, from charts/csi/Chart.yaml appVersion 1.1.0"
+    [ "$(grep -c "^    registry.example.org/" ../out)" = 1 ]
+    pins="$(image app image.tag '"none"' 1.1.0 4),$(image csi csi.tag "$identity" v3.1.0 5)"
+    pins+=",$(image sidecar "sidecar.tag extra.tag" "$keyed" 1.0.0 6)"
+    stage 'app 1.2.0 "$pins"' "app's images declared again"
+    echo release | approve > ../out
+    released
+    pinned "app: 1.1.0, unsigned, signer changes from cosign $run@refs/tags/v1.1.0, issued by $issuer"
+    pinned "csi: v3.1.0, $csi, no longer chosen"
+    pinned "sidecar: 1.0.0, $sidecar, values change from sidecar.tag to sidecar.tag extra.tag"
+    stage "echo edited > $vendor/app.images.env" "app's images by hand"
+    echo release | approve > ../out
+    released
+    grep -qx "  $vendor/app: 1.2.0, unsigned, tree or images changed, record didn't" ../out
+    ! grep -q "^    registry.example.org/" ../out || exit 1
+    pins="$(image app image.tag '"none"' 1.1.0 4),$(image sidecar "sidecar.tag extra.tag" "$keyed" 1.0.0 6)"
+    stage 'app 1.2.0 "$pins"' "csi no longer pinned"
+    echo release | approve > ../out
+    released
+    grep -qx "  $vendor/app: 1.2.0, unsigned" ../out
+    pinned "csi: no longer pinned"
+    [ "$(grep -c "^    registry.example.org/" ../out)" = 1 ]
+    stage "rm -r $vendor/app $vendor/app.json $vendor/app.images.env" "app gone"
+    echo release | approve > ../out
+    released
+    grep -qx "  $vendor/app: removed" ../out
+    ! grep -q "^    registry.example.org/" ../out || exit 1
 
     git config user.signingkey $keys/owner
     stage "echo four > four" four
