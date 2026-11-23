@@ -11,8 +11,6 @@ kind: Component
 resources:
   - ./volume.yaml
   - ./check.yaml
-components:
-  - ../internet
 patches:
   - target:
       group: volsync.backube

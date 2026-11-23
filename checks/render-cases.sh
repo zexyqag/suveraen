@@ -987,10 +987,10 @@ refuses namespace-without-app "labelled suveraen/tier=app, suveraen/tenant=alpha
 
 # Off-site copies.
 internet="the network policy internet opens web ports to all but the cluster's own pods, Services and nodes"
-refuses internet-other-port "$internet" "sed -i 's/port: 443/port: 22/' components/internet/networkpolicy.yaml"
-refuses internet-link-local "$internet" "sed -i '/169.254.0.0/d' components/internet/networkpolicy.yaml"
-refuses internet-own-pods "$internet" "sed -i '/POD_CIDR_V6/d' components/internet/networkpolicy.yaml"
-refuses internet-for-all "$internet" "yq -i '.spec.podSelector = {}' components/internet/networkpolicy.yaml"
+refuses internet-other-port "$internet" "sed -i 's/port: 443/port: 22/' components/app/internet.yaml"
+refuses internet-link-local "$internet" "sed -i '/169.254.0.0/d' components/app/internet.yaml"
+refuses internet-own-pods "$internet" "sed -i '/POD_CIDR_V6/d' components/app/internet.yaml"
+refuses internet-for-all "$internet" "yq -i '.spec.podSelector = {}' components/app/internet.yaml"
 api="the network policy api-server opens the API server on the nodes to CloudNativePG's pods"
 refuses api-server-other-port "$api" "sed -i 's/port: 6443/port: 10250/' apps/postgres/app/networkpolicies.yaml"
 refuses api-server-all-pods "$api" \
@@ -1114,8 +1114,13 @@ refuses mesh-management-root "management runAsUser and runAsGroup" \
   "yq -i 'del(.spec.values.controllers.management.containers.management.securityContext.runAsUser)' $H"
 refuses mesh-ephemeral-quota "the quota holds every pod the app's charts run at once" \
   "yq -i '.spec.postBuild.substitute.NETBIRD_QUOTA_EPHEMERAL_STORAGE = \"512Mi\"' $T/alpha/tenant.yaml"
-refuses mesh-internet "network policies ['default-deny', 'dns', 'internet'," \
-  "sed -i 's|^    - ../../../components/passthrough-app\$|&\n    - ../../../components/internet|' apps/netbird/ks.yaml"
+refuses mesh-internet "$internet" \
+  "sed -i 's/name: ^to-(kanidm|postgres)/name: ^(to-kanidm|to-postgres|internet)/' apps/netbird/app/kustomization.yaml"
+refuses mesh-reaches-app \
+  "network policies ['default-deny', 'dns', 'internet', 'same-namespace', 'to-kanidm', 'to-postgres', 'x']" \
+  "append $N '---\napiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n  name: x\nspec:\n  podSelector: {}
+  policyTypes: [Egress]\n  egress:\n    - to:\n        - namespaceSelector:\n            matchLabels:
+              kubernetes.io/metadata.name: alpha-hello\n'"
 refuses mesh-edge-reaches-backends "to-kanidm for more than management" "yq -i 'del(.patches)' apps/netbird/app/kustomization.yaml"
 refuses mesh-extra-container "controllers {" \
   "yq -i '.spec.values.controllers.management.initContainers.x = .spec.values.controllers.netbird.initContainers[\"web-env\"]' $H"

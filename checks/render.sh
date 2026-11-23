@@ -302,7 +302,7 @@ if not isinstance(aliases, list) or [(a.get("ip"), sorted(a.get("hostnames") or 
         != [("127.0.0.1", ["api.github.com", "metrics.netbird.io", "pkgs.netbird.io"])]:
     bad.append("management hostAliases")
 policies = sorted(d["metadata"]["name"] for d in docs if d.get("kind") == "NetworkPolicy")
-if policies != ["default-deny", "dns", "same-namespace", "to-kanidm", "to-postgres"]:
+if policies != ["default-deny", "dns", "internet", "same-namespace", "to-kanidm", "to-postgres"]:
     bad.append(f"network policies {policies}")
 # The edge pod faces the internet, and needs neither.
 for name in "to-kanidm", "to-postgres":
@@ -1807,7 +1807,7 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           | select([((.spec.ingress // [])[] | (.from // [])), ((.spec.egress // [])[] | (.to // []))]
             | any_c(length == 0 or any_c((keys | length) == 0))) | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: a network policy rule without peers reaches everything: $bad"
-        # The way to the internet is components/internet alone, for what the cluster's own ranges leave out.
+        # The way to the internet is components/app's policy internet alone, for what the cluster's own ranges leave out.
         vars=$w/$name.vars.yaml
         v() { yq ".$1 // \"\"" "$vars"; }
         want='{"egress":[{"ports":[{"port":80,"protocol":"TCP"},{"port":443,"protocol":"TCP"}],"to":[{"ipBlock":'

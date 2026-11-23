@@ -15,6 +15,5 @@ configMapGenerator:
       annotations:
         kustomize.toolkit.fluxcd.io/substitute: disabled
 components:
-  - ../../../components/internet
   - ../fetch
   - ../check
