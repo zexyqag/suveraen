@@ -1344,22 +1344,22 @@ pkgs.testers.runNixOSTest {
           assert out.strip() == "tenant", out
           server.succeed(dry(pod("member", "platform")))
 
-      with subtest("Only the platform's backup jobs reach out of a tenant's namespace, never its apps' charts"):
+      with subtest("Only the platform's backup jobs and an app's proxy reach out of a tenant's namespace, never its apps' charts"):
           server.succeed(
               "kubectl apply -f ${../kubernetes/platform/policies/app/egress-labels.yaml}"
               " && kubectl -n alpha-hello create rolebinding flux-deployer --clusterrole=flux-app"
               " --serviceaccount=alpha-hello:flux-deployer"
           )
 
-          def labelled_pod(namespace, labels):
+          def labelled_pod(namespace, labels, name="probe"):
               obj = pod(namespace)
-              obj["metadata"]["labels"] = labels
+              obj["metadata"] |= {"name": name, "labels": labels}
               return obj
 
-          def template(kind, labels):
+          def template(kind, labels, name="probe"):
               spec = {"metadata": {"labels": labels}, "spec": pod("alpha-hello")["spec"] | {"restartPolicy": "Never"}}
-              obj = {"metadata": {"name": "probe", "namespace": "alpha-hello"}}
-              if kind == "Deployment":
+              obj = {"metadata": {"name": name, "namespace": "alpha-hello"}}
+              if kind in ["Deployment", "ReplicaSet"]:
                   spec["spec"]["restartPolicy"] = "Always"
                   return obj | {"apiVersion": "apps/v1", "kind": kind, "spec": {
                       "selector": {"matchLabels": labels}, "template": spec}}
@@ -1396,6 +1396,38 @@ pkgs.testers.runNixOSTest {
           refused(f"kubectl -n alpha-hello label pod probe suveraen/egress- {deployer}", "egress-labels")
           server.succeed(f"kubectl -n alpha-hello annotate pod probe probe=x {deployer}")
           server.succeed("kubectl -n alpha-hello delete pod probe --wait=false")
+          # An app's proxy (components/egress): Flux alone makes its Deployment, the deployment controller its
+          # ReplicaSets and the ReplicaSet controller their pods, and the app's charts change nothing of its spec. The
+          # controllers make its pod as the cluster names them. Its objects have a name of their own, as the mover's pod
+          # may still be on its way out.
+          proxied = {"suveraen/egress": "internet", "app": "proxy"}
+          proxy = template("Deployment", proxied, "proxy")
+          proxy_set = template("ReplicaSet", proxied, "proxy")
+          proxy_pod = labelled_pod("alpha-hello", proxied, "proxy")
+          flux = by("flux-system:kustomize-controller")
+          server.succeed(f"{dry(proxy)} {flux}")
+          refused(f"{dry(proxy_set)} {flux}", "egress-labels")
+          server.succeed(f"{dry(proxy_set)} {by('kube-system:deployment-controller')}")
+          refused(f"{dry(proxy_pod)} {flux}", "egress-labels")
+          server.succeed(f"{dry(proxy_pod)} {by('kube-system:replicaset-controller')}")
+          server.succeed(f"echo {shlex.quote(json.dumps(proxy))} | kubectl create -f - {flux}")
+          server.wait_until_succeeds("kubectl -n alpha-hello get pods -l app=proxy -o name | grep -q .", timeout=120)
+          args = json.dumps([{"op": "add", "path": "/spec/template/spec/containers/0/args", "value": ["x"]}])
+          patch = "kubectl -n alpha-hello patch deployment proxy --dry-run=server"
+          refused(f"{patch} --type=json -p {shlex.quote(args)} {deployer}", "egress-labels")
+          refused(f"{patch} -p '{{\"spec\":{{\"replicas\":2}}}}' {deployer}", "egress-labels")
+          server.succeed(f"kubectl -n alpha-hello annotate deployment proxy probe=x --dry-run=server {deployer}")
+          server.succeed("kubectl -n alpha-hello delete deployment proxy")
+          # Nor does Flux give the label to a Deployment the charts made, whose containers its apply would keep.
+          planted = template("Deployment", {"app": "planted"}, "planted")
+          planted["spec"]["replicas"] = 0
+          server.succeed(f"echo {shlex.quote(json.dumps(planted))} | kubectl create -f - {deployer}")
+          opening = json.dumps({"spec": {"template": {"metadata": {"labels": {"suveraen/egress": "internet"}}}}})
+          refused(
+              f"kubectl -n alpha-hello patch deployment planted --dry-run=server -p {shlex.quote(opening)} {flux}",
+              "egress-labels",
+          )
+          server.succeed("kubectl -n alpha-hello delete deployment planted")
           # A CronJob's spec holds what its jobs run, such as the script that checks an app's copies.
           check = template("CronJob", {"suveraen/egress": "internet"})
           server.succeed(

@@ -101,7 +101,12 @@ hellofile() { # a file of hello's migrations, by name, from JSON on stdin
   yq -i ".data.\"$1\" = load_str(\"hello.json\")" apps/hello/sso/configmap.yaml
   rm hello.json
 }
-export -f append np encsecret encmap prod ids other knob hellofile
+egress() { # hello's proxy (components/egress), to the hosts given, as a JSON list in its template, if any
+  sed -i 's|    - ../../../components/sso-secret|&\n    - ../../../components/egress|' apps/hello/ks.yaml
+  [ $# = 0 ] || EGRESS_HOSTS=$1 yq -i '(select(documentIndex == 0) | .spec.postBuild.substitute.EGRESS_HOSTS)
+    = strenv(EGRESS_HOSTS)' apps/hello/ks.yaml
+}
+export -f append np encsecret encmap prod ids other knob hellofile egress
 export T sops encrypted
 keymap='---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: key\ndata:\n  KEY: '
 
@@ -1079,6 +1084,37 @@ refuses max-age-weeks "bravo-postgres: $age: ObjectStore/postgres" "knob POSTGRE
 refuses max-age-missing "$age: ReplicationSource/data-2" \
   "yq -i '(select(.metadata.name == \"data-2\") | .metadata) |= del(.annotations)' components/volsync/volume.yaml"
 
+# An app's proxy to the internet.
+relay='["relay.example.net:443"]'
+renders egress "egress '[\"\${HELLO_RELAY_HOST:=relay.example.net}:443\"]'
+  yq -i '(select(documentIndex == 0) | .spec.postBuild.substitute.RELAY) = \"\${HELLO_RELAY_HOST:=relay.example.net}\"' \
+  apps/hello/ks.yaml
+  knob HELLO_RELAY_HOST relay.example.org"
+deployment='---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: x\nspec: {}\n'
+refuses app-deployment "$inapp Deployment.apps/x" "append apps/hello/app/configmap.yaml '$deployment'"
+proxy="an app's one Deployment is egress, as components/egress makes it from the app's EGRESS_HOSTS"
+refuses egress-beside-deployment "$proxy" "egress '$relay'; append apps/hello/app/configmap.yaml '$deployment'"
+refuses egress-patched "$proxy" "egress '$relay'
+  append apps/hello/app/kustomization.yaml 'patches:\n  - target:\n      kind: Deployment\n      name: egress
+    patch: |-\n      - op: replace\n        path: /spec/template/spec/containers/0/args/4\n        value: debug\n'"
+hosts="none an address, a wildcard, a name of the cluster's own or one on a domain of the tenant's or the hostname"
+hosts+=" map's:"
+refuses egress-wildcard "$hosts \"*.example.net:443\"" "egress '[\"*.example.net:443\"]'"
+refuses egress-address "$hosts \"192.0.2.10:443\"" "egress '[\"192.0.2.10:443\"]'"
+refuses egress-port "$hosts \"relay.example.net:80\"" "egress '[\"relay.example.net:80\"]'"
+refuses egress-cluster-name "$hosts \"postgres-rw.alpha-postgres.svc:443\"" \
+  "egress '[\"postgres-rw.alpha-postgres.svc:443\"]'"
+refuses egress-tenant-host "$hosts \"hello.example.test:443\"" "egress '[\"hello.example.test:443\"]'"
+refuses egress-twice "$hosts \"relay.example.net:443\"" \
+  "egress '[\"relay.example.net:443\", \"relay.example.net:443\"]'"
+refuses egress-none "$hosts []" "egress '[]'"
+refuses egress-from-settings "$hosts none" \
+  "egress; EGRESS_HOSTS='$relay' yq -i '.data.EGRESS_HOSTS = strenv(EGRESS_HOSTS)' clusters/test/settings.yaml"
+refuses egress-quota "one more pod at the defaults: limits.memory 256Mi of 200Mi" \
+  "egress '$relay'; knob HELLO_QUOTA_MEMORY 200Mi"
+refuses knob-two-defaults "a knob has one default in all of its app's templates: HELLO_QUOTA_STORAGE" \
+  "sed -i 's/\${HELLO_DATA_SIZE:=1Gi}/\${HELLO_QUOTA_STORAGE:=1Gi}/' apps/hello/ks.yaml"
+
 # A tenant's mesh.
 N=apps/netbird/app/configmap.yaml
 H=apps/netbird/app/helmrelease.yaml
@@ -1112,7 +1148,7 @@ refuses mesh-image-version "signal image ghcr.io/netbirdio/signal:0.81.5@" \
   "sed -i '0,/tag: 0.82.0@/s//tag: 0.81.5@/' $H"
 refuses mesh-management-root "management runAsUser and runAsGroup" \
   "yq -i 'del(.spec.values.controllers.management.containers.management.securityContext.runAsUser)' $H"
-refuses mesh-ephemeral-quota "the quota holds every pod the app's charts run at once" \
+refuses mesh-ephemeral-quota "the quota holds every pod the app's charts and Deployments run at once" \
   "yq -i '.spec.postBuild.substitute.NETBIRD_QUOTA_EPHEMERAL_STORAGE = \"512Mi\"' $T/alpha/tenant.yaml"
 refuses mesh-internet "$internet" \
   "sed -i 's/name: ^to-(kanidm|postgres)/name: ^(to-kanidm|to-postgres|internet)/' apps/netbird/app/kustomization.yaml"

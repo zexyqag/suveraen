@@ -129,10 +129,11 @@ for name, ctl in (values.get("controllers") or {}).items():
         bad += [f"{n}:{k}" for k in ("envFrom", "command", "args") if x.get(k)]
 print(" ".join(bad))
 '
-# Prints what the pods of an app's charts, all app-template's, need at their most beyond its namespace's quota, from the
-# rendered app (a JSON list on stdin): each controller's pods, with the one more a rolling update starts, at their
-# requests and limits, the LimitRange's defaults for what a container leaves out, each init container against the
-# others together, and one more pod at the defaults, such as one that only asks the app something.
+# Prints what the pods of an app's charts, all app-template's, and of its own Deployments (components/egress) need at
+# their most beyond its namespace's quota, from the rendered app (a JSON list on stdin): each controller's and
+# Deployment's pods, with the one more a rolling update starts, at their requests and limits, the LimitRange's
+# defaults for what a container leaves out, each init container against the others together, and one more pod at
+# the defaults, such as one that only asks the app something.
 quotafit='
 import json, math, re, sys
 docs = [d for d in json.load(sys.stdin) if isinstance(d, dict)]
@@ -177,7 +178,18 @@ def resources(ctl, c, init):
 def enabled(ctl, group):
     return [c for c in (ctl.get(group) or {}).values() if c.get("enabled", True) is not False]
 
+def surged(count, surge):
+    surge = str(surge)
+    return count + (math.ceil(count * int(surge[:-1]) / 100) if surge.endswith("%") else int(surge))
+
 need, pods = container({}), 1
+
+def run(count, running, once):
+    global pods
+    pods += count
+    for k in keys:
+        need[k] += count * max([sum(r[k] for r in running)] + [r[k] for r in once])
+
 for release in docs:
     if release.get("kind") != "HelmRelease":
         continue
@@ -188,16 +200,25 @@ for release in docs:
         running = [container(resources(ctl, c, False)) for c in enabled(ctl, "containers")]
         running += [container(resources(ctl, c, True)) for c in inits if c.get("restartPolicy") == "Always"]
         once = [container(resources(ctl, c, True)) for c in inits if c.get("restartPolicy") != "Always"]
-        pod = {k: max([sum(r[k] for r in running)] + [r[k] for r in once]) for k in keys}
         replicas = ctl.get("replicas", 1)
         count = 1 if replicas is None else int(replicas)
         if ctl.get("type", "deployment") == "deployment" and ctl.get("strategy", "Recreate") == "RollingUpdate":
             rolling = ctl.get("rollingUpdate") or {}
-            surge = str(rolling.get("maxSurge", rolling.get("surge", "25%")))
-            count += math.ceil(count * int(surge[:-1]) / 100) if surge.endswith("%") else int(surge)
-        pods += count
-        for k in keys:
-            need[k] += count * pod[k]
+            count = surged(count, rolling.get("maxSurge", rolling.get("surge", "25%")))
+        run(count, running, once)
+for deployment in docs:
+    if deployment.get("kind") != "Deployment":
+        continue
+    spec = deployment["spec"]["template"]["spec"]
+    inits = spec.get("initContainers") or []
+    running = [container(c.get("resources") or {}) for c in spec["containers"]]
+    running += [container(c.get("resources") or {}) for c in inits if c.get("restartPolicy") == "Always"]
+    once = [container(c.get("resources") or {}) for c in inits if c.get("restartPolicy") != "Always"]
+    count = int(deployment["spec"].get("replicas", 1))
+    strategy = deployment["spec"].get("strategy") or {}
+    if strategy.get("type", "RollingUpdate") == "RollingUpdate":
+        count = surged(count, (strategy.get("rollingUpdate") or {}).get("maxSurge", "25%"))
+    run(count, running, once)
 
 def shown(key, n):
     return f"{n}m" if key.endswith("cpu") else f"{n / 1000 / 1024**2:g}Mi"
@@ -205,6 +226,29 @@ def shown(key, n):
 bad = [f"{k} {shown(k, need[k])} of {quota[k]}" for k in keys if need[k] > quantity(quota[k])]
 bad += [f"pods {pods} of " + quota["pods"]] if pods > int(quota["pods"]) else []
 print(", ".join(bad))
+'
+# Prints what is wrong with the hosts an app's proxy may tunnel to (components/egress), EGRESS_HOSTS as its template
+# gives it, then the domains its tenant's and the cluster's hosts are on: 1 to 8 names as <name>:443, none twice, none
+# an address, a wildcard, a name of the cluster's own or one on those domains.
+egresshosts='
+import json, re, sys
+given, domains = sys.argv[1], [d for d in sys.argv[2:] if d] + ["svc", "local"]
+label = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+form = re.compile(rf"((?:{label}[.])+[a-z](?:[a-z0-9-]{{0,61}}[a-z0-9])?):443")
+try:
+    hosts = json.loads(given)
+except ValueError:
+    hosts = None
+if not isinstance(hosts, list) or not 1 <= len(hosts) <= 8:
+    print(given or "none")
+    raise SystemExit
+bad = []
+for h in hosts:
+    m = form.fullmatch(h) if isinstance(h, str) else None
+    name = m.group(1) if m else ""
+    if not m or len(name) > 253 or hosts.count(h) > 1 or any(name == d or name.endswith("." + d) for d in domains):
+        bad.append(json.dumps(h))
+print(" ".join(dict.fromkeys(bad)))
 '
 # What is wrong with a tenant's mesh (apps/netbird) as rendered, a JSON list on stdin, for its host, its tenant's Kanidm,
 # the servers' STUN port, its tenant's PostgreSQL image and the tenant given: its two controllers and their images,
@@ -921,6 +965,10 @@ for dir in kubernetes/apps/*/; do
       [ "$file" = "$dir/edge-$key.yaml" ] || fail "$file holds host $key, so it is edge-$key.yaml"
     fi
   done
+  # A knob has one default wherever the app's templates read it, so a tenant that sets none gets one value.
+  bad=$(grep -ohE '[$][{][A-Z0-9_]+:=[^}$]+[}]' $(find "$dir" -maxdepth 1 \( -name ks.yaml -o -name 'edge-*.yaml' \)) \
+    | sort -u | sed -E 's/^[$][{]([A-Z0-9_]+):=.*/\1/' | sort | uniq -d | paste -sd' ' || true)
+  [ -z "$bad" ] || fail "$dir: a knob has one default in all of its app's templates: $bad"
   # An app that names its own host, HOST, is served at it.
   host=$(yq 'select(documentIndex == 0) | .spec.postBuild.substitute.HOST // ""' "$dir/ks.yaml")
   if [ -n "$host" ]; then
@@ -1322,6 +1370,12 @@ for dir in kubernetes/clusters/*/; do
         passthrough=$(grep -qxF "$app" <<<"${passthroughapps// /$'\n'}" && echo true || echo false)
         # Its own key and certificate (components/passthrough).
         [ "$passthrough" = false ] || kinds+=,Certificate.cert-manager.io
+        # Its proxy to the hosts its template lists.
+        egress=false
+        for component in $(yq '.spec.components[]?' "$w/$name.ks.yaml"); do
+          [ "$(realpath -m --relative-to=. "$path/$component")" != kubernetes/components/egress ] || egress=true
+        done
+        [ "$egress" = false ] || kinds+=,Deployment.apps
         export kinds
         bad=$(yq ea '[select(.kind == "HelmRelease") | select(.metadata.namespace == "flux-system"
           or .spec.serviceAccountName != "flux-deployer" or .spec.install.crds != "Skip" or .spec.upgrade.crds != "Skip"
@@ -1348,6 +1402,30 @@ for dir in kubernetes/clusters/*/; do
             or ($k != "Namespace" and .metadata.namespace != strenv(name)))
           | $k + "/" + .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: an app creates only ${kinds//,/, }; in its own namespace: $bad"
+        if [ "$egress" = true ]; then
+          # Built again from the component alone, with the same values, the proxy runs the same: nothing of the app's
+          # own changes it, nor adds a Deployment beside it.
+          ref=$cluster/$name.egress
+          mkdir -p "$ref"
+          printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n' >"$ref/kustomization.yaml"
+          export ref
+          yq '.spec.path = "./" + strenv(ref) | .spec.components = ["../../kubernetes/components/egress"]' \
+            "$w/$name.build.yaml" >"$ref.yaml"
+          flux build kustomization "$name" --path "./$ref" --kustomization-file "$ref.yaml" --dry-run \
+            --strict-substitute >"$ref.out" || fail "$cluster/$name: components/egress doesn't build alone"
+          deployments='[select(.kind == "Deployment") | {"name": .metadata.name, "spec": .spec} | sort_keys(..)]'
+          [ "$(yq ea -o=json -I=0 "$deployments" "$file")" = "$(yq ea -o=json -I=0 "$deployments" "$ref.out")" ] \
+            || fail "$cluster/$name: an app's one Deployment is egress, as components/egress makes it from the app's" \
+              "EGRESS_HOSTS"
+          hosts=$(yq '.spec.postBuild.substitute.EGRESS_HOSTS // ""' "$w/$name.ks.yaml")
+          domains=$(yq '.TENANT_DOMAIN // "", .TENANT_APP_DOMAIN // ""' "$w/$name.vars.yaml"
+            yq ea '[select(.kind == "ConfigMap" and .metadata.namespace == "flux-system"
+              and .metadata.name == "hostnames")] | .[0].data // {} | keys | .[]' "$rendered/cluster.yaml")
+          bad=$(python3 -I -c "$egresshosts" "$hosts" $domains)
+          [ -z "$bad" ] || fail "$cluster/$name: an app's proxy tunnels to the 1 to 8 hosts its template lists in" \
+            "EGRESS_HOSTS, a JSON list of distinct <name>:443, none an address, a wildcard, a name of the cluster's own" \
+            "or one on a domain of the tenant's or the hostname map's: $bad"
+        fi
         yq ea -e '[select(.kind == "Namespace")] | (length == 1 and .[0].metadata.name == strenv(name)
           and .[0].metadata.labels."suveraen/tier" == "app" and .[0].metadata.labels."suveraen/tenant" == strenv(t)
           and .[0].metadata.labels."suveraen/app" == strenv(app))' "$file" >/dev/null \
@@ -1497,9 +1575,9 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
             || fail "$cluster/$name: the LimitRange's $field, $limit, is above the quota's ${pair#*:}, $quota"
         done
         bad=$(yq ea -o=json -I=0 '[.]' "$file" | python3 -I -c "$quotafit")
-        [ -z "$bad" ] || fail "$cluster/$name: the quota holds every pod the app's charts run at once, at its" \
-          "requests and limits or the LimitRange's defaults, with the one more a rolling update starts, and one more" \
-          "pod at the defaults: $bad"
+        [ -z "$bad" ] || fail "$cluster/$name: the quota holds every pod the app's charts and Deployments run at once," \
+          "at their requests and limits or the LimitRange's defaults, with the one more a rolling update starts, and" \
+          "one more pod at the defaults: $bad"
         # Every Job the namespace may hold at once: each CronJob's running one and those it keeps, the others, a mover
         # for each of VolSync's copies and restores, and the one CloudNativePG runs to make an instance.
         need=$({

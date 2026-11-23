@@ -3,7 +3,10 @@
 # suveraen/object-store to the cluster's object store (apps/postgres). An app's charts, which run as its namespace's
 # deployer, must not hand them to their own pods, nor change what a pod or job that carries one runs: only the backup
 # jobs and movers the platform runs carry them, made by Flux, the job and CronJob controllers, CloudNativePG or
-# VolSync. Others may still change such an object's metadata, as the garbage collector does.
+# VolSync, and an app's proxy to the hosts its template lists (components/egress), whose Deployment Flux alone makes,
+# its ReplicaSets the deployment controller and their pods the ReplicaSet controller. A label comes only with the
+# object that carries it: none of them may give one to an object another made, whose containers their apply would
+# keep. Others may still change such an object's metadata, as the garbage collector does.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -51,16 +54,22 @@ spec:
     - name: makers
       expression: >-
         request.resource.resource == 'pods' ? ['system:serviceaccount:kube-system:job-controller',
-        'system:serviceaccount:cloudnative-pg:cloudnative-pg'] :
+        'system:serviceaccount:kube-system:replicaset-controller', 'system:serviceaccount:cloudnative-pg:cloudnative-pg'] :
         request.resource.resource == 'jobs' ? ['system:serviceaccount:kube-system:cronjob-controller',
         'system:serviceaccount:cloudnative-pg:cloudnative-pg', 'system:serviceaccount:volsync:volsync',
         'system:serviceaccount:flux-system:kustomize-controller'] :
-        request.resource.resource == 'cronjobs' ? ['system:serviceaccount:flux-system:kustomize-controller'] : []
+        request.resource.resource == 'replicasets' ? ['system:serviceaccount:kube-system:deployment-controller'] :
+        request.resource.resource in ['cronjobs', 'deployments'] ?
+        ['system:serviceaccount:flux-system:kustomize-controller'] : []
   validations:
     - expression: >-
         !variables.carried || variables.unchanged || request.userInfo.username in variables.makers ||
         'system:masters' in request.userInfo.groups
-      message: only the platform's backup jobs and movers reach the internet or the object store from a tenant
+      message: only the platform's backup jobs, movers and egress proxies reach the internet or the object store from a tenant
+    - expression: >-
+        request.operation != 'UPDATE' || 'system:masters' in request.userInfo.groups ||
+        ['suveraen/egress', 'suveraen/object-store'].all(k, !(k in variables.labels) || k in variables.before)
+      message: a label that opens a way out of a tenant's namespace comes only with the object that carries it
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

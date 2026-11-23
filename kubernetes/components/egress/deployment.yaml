@@ -1,0 +1,124 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: egress
+spec:
+  replicas: 1
+  # The old pod goes before the new one starts, so the quota holds room for one.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: egress
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: egress
+        suveraen/egress: internet
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: envoy
+          image: docker.io/envoyproxy/envoy:distroless-v1.40.2@sha256:09ca6f2140a61ad8df11779a4a30d52b48433d444466328494f9188c9c35eded
+          # One worker: by default one for each of the server's threads, as nothing limits a pod's CPU. A CONNECT is
+          # matched by its target, name and port, and the cluster resolves the name as it is given, never into the
+          # cluster's own names by the pod's search domains.
+          args:
+            - --concurrency
+            - "1"
+            - --disable-hot-restart
+            - --log-level
+            - warn
+            - --config-yaml
+            - |
+              static_resources:
+                listeners:
+                  - name: egress
+                    address:
+                      socket_address:
+                        address: 0.0.0.0
+                        port_value: 3128
+                    filter_chains:
+                      - filters:
+                          - name: envoy.filters.network.http_connection_manager
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                              stat_prefix: egress
+                              upgrade_configs:
+                                - upgrade_type: CONNECT
+                              route_config:
+                                virtual_hosts:
+                                  - name: allowed
+                                    domains: ${EGRESS_HOSTS}
+                                    routes:
+                                      - match:
+                                          connect_matcher: {}
+                                        route:
+                                          cluster: out
+                                          upgrade_configs:
+                                            - upgrade_type: CONNECT
+                                              connect_config: {}
+                                  - name: refused
+                                    domains: ["*"]
+                                    routes:
+                                      - match:
+                                          connect_matcher: {}
+                                        direct_response:
+                                          status: 403
+                                      - match:
+                                          prefix: /
+                                        direct_response:
+                                          status: 403
+                              http_filters:
+                                - name: envoy.filters.http.router
+                                  typed_config:
+                                    "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+                clusters:
+                  - name: out
+                    lb_policy: CLUSTER_PROVIDED
+                    cluster_type:
+                      name: envoy.clusters.dynamic_forward_proxy
+                      typed_config:
+                        "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+                        dns_cache_config:
+                          name: out
+                          dns_lookup_family: V4_PREFERRED
+                          typed_dns_resolver_config:
+                            name: envoy.network.dns_resolver.cares
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.cares.v3.CaresDnsResolverConfig
+                              dns_resolver_options:
+                                no_default_search_domain: true
+              overload_manager:
+                resource_monitors:
+                  - name: envoy.resource_monitors.global_downstream_max_connections
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.resource_monitors.downstream_connections.v3.DownstreamConnectionsConfig
+                      max_active_downstream_connections: 64
+          ports:
+            - name: proxy
+              containerPort: 3128
+          readinessProbe:
+            tcpSocket:
+              port: proxy
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 32Mi
+              ephemeral-storage: 8Mi
+            limits:
+              memory: 64Mi
+              ephemeral-storage: 32Mi
