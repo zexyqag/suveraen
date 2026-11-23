@@ -5,7 +5,8 @@
 # its key, which a restart replaces, and refuses everything else, and a CA validates a certificate's challenge
 # through its CNAME there; the watcher's check runs on a timer, passes, and catches a lagging nameserver, a DS the
 # parent shouldn't publish, signatures running out and a copy it can't read; and ns2 takes over signing from the key
-# backup with the same keys, and gets them back from it after losing them, while the guard keeps knot down.
+# backup with the same keys, refusing one cut short, and gets them back from it after losing them, while the guard
+# keeps knot down.
 { pkgs, module }:
 let
   keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
@@ -115,7 +116,7 @@ let
       ];
       networking.hostId = "8425e349";
       system.stateVersion = "26.05";
-      # age decrypts the key backup on ns2; for real, that happens on the key holder's machine.
+      # age decrypts the key backup here; for real, that happens on the key holder's machine.
       environment.systemPackages = [
         pkgs.jq
         pkgs.age
@@ -524,9 +525,16 @@ pkgs.testers.runNixOSTest {
       with subtest("ns2 takes over signing from the key backup, with the same keys"):
           signer.succeed("systemctl start knot-backup")
           backup = signer.succeed("ls -1t /var/lib/knot-backup/keys-*.tar.age | head -n 1").strip()
-          data = signer.succeed(f"base64 -w0 {backup}")
-          ns2.succeed(f"echo {data} | base64 -d > /root/keys.tar.age")
+          signer.succeed(f"age -d -i ${keys.snakeOilEd25519PrivateKey} {backup} | tar -t > /dev/null")
+          # The console drops output the driver doesn't read in time, so the backup goes through the shared directory.
+          signer.succeed(f"cp {backup} /tmp/shared/keys.tar.age")
+          ns2.succeed("install -m 600 /tmp/shared/keys.tar.age /root/keys.tar.age")
           ns2.succeed("install -m 600 ${keys.snakeOilEd25519PrivateKey} /root/id")
+          # A backup cut short before its label is refused before knot is touched.
+          ns2.succeed("mkdir /root/cut && age -d -i /root/id /root/keys.tar.age | tar -x -C /root/cut")
+          out = ns2.fail("tar -C /root/cut -c keys | suveraen-dns-restore 2>&1")
+          assert "cut short" in out, out
+          ns2.succeed("systemctl is-active knot && rm -rf /root/cut")
           restored = ns2.succeed("age -d -i /root/id /root/keys.tar.age | suveraen-dns-restore")
           for zone in top + [acme]:
               assert ds[zone].split(" DS ")[1] in restored, (zone, restored)

@@ -197,6 +197,7 @@ let
       knot
       pkgs.gnutar
       pkgs.coreutils
+      pkgs.gnugrep
       config.systemd.package
     ];
     text = ''
@@ -208,6 +209,11 @@ let
       # A backup's KASP database is laid out as knot keeps its own (zone-backup +kaspdb).
       if [ ! -s "$dir/keys/data.mdb" ] || [ -z "$(ls -A "$dir/keys/keys")" ]; then
         echo "That isn't a key backup: it holds no KASP database or keys." >&2
+        exit 1
+      fi
+      # tar takes an archive cut between two files for a whole one; a backup's label is its last file.
+      if ! grep -qs '^finished_time:' "$dir/knot_backup.label"; then
+        echo "That key backup is cut short: it ends before its label." >&2
         exit 1
       fi
       systemctl stop knot
@@ -737,6 +743,7 @@ in
             UMask = "0077";
           };
           script = ''
+            set -o pipefail
             work=/var/lib/knot/backup
             rm -rf "$work"
             knotc --socket ${socket} -b zone-backup +backupdir "$work" +kaspdb +nozonefile +notimers +nocatalog +noquic
@@ -744,7 +751,10 @@ in
             grep -q '^finished_time:' "$work/knot_backup.label"
             [ -n "$(ls -A "$work/keys/keys")" ]
             out=/var/lib/knot-backup/keys-$(date -u +%Y%m%dT%H%M%SZ).tar.age
-            tar -C "$work" -c . | age ${
+            # A run that fails leaves no partial file for the backup check to count.
+            trap 'rm -f -- "$out.tmp"' EXIT
+            # The label goes last, so a restore can tell a whole backup from one cut short.
+            tar -C "$work" -c keys knot_backup.label | age ${
               lib.concatMapStringsSep " " (r: "-r ${lib.escapeShellArg r}") cfg.backup.recipients
             } -o "$out.tmp"
             mv "$out.tmp" "$out"
