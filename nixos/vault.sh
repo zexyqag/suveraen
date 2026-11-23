@@ -154,14 +154,14 @@ side_start() {
 }
 
 # Its stdin closed, the second Vaultwarden ends, then its shell, then kubectl; and nothing of it may be left in the pod
-# but the release's, its ID 1.
+# but the release's, its ID 1. The image's pgrep, busybox's, matches the name a process was started by, /vaultwarden.
 side_stop() {
   local found
   [ -n "$side" ] || return 0
   exec {side}>&-
   side=
   timeout 60 tail --pid="$sidepid" -f /dev/null || kill "$sidepid" 2>/dev/null || true
-  found=$(in_pod pgrep -x vaultwarden </dev/null) || found=
+  found=$(in_pod pgrep -x /vaultwarden </dev/null) || found=
   [ "$found" = 1 ] || fail "a second Vaultwarden is still in $ns: ${found//$'\n'/ }"
 }
 
@@ -182,7 +182,7 @@ admin() {
 # ID is kept for the deletion record: a run after a restore finds the account by it, once Kanidm has let its person go
 # again.
 close() {
-  local verb=$1 t=$2 found id person phones sends
+  local verb=$1 t=$2 found id person phones up sends
   ns="$t-vaultwarden"
   found=$(account "$t" "$3")
   left "$t" "$found"
@@ -190,21 +190,22 @@ close() {
   person=$(jq -r '.person // "no person of its Kanidm"' <<<"$found")
   phones=$(sql "$t" -v "id=$id" <<<"select push_uuid from devices
     where user_uuid = :'id' and push_token is not null and push_uuid is not null order by push_uuid;") || exit 1
-  if [ -n "$phones" ] && [ "$(kubectl --request-timeout=30s -n "$ns" get deployment egress \
-    -o jsonpath='{.status.availableReplicas}')" != 1 ]; then
-    fail "the proxy in $ns, through which the relay forgets account $id's phones, isn't up."
+  if [ -n "$phones" ]; then
+    up=$(kubectl --request-timeout=30s -n "$ns" get deployment egress -o jsonpath='{.status.availableReplicas}') || up=
+    [ "${up:-0}" -ge 1 ] || fail "the proxy in $ns, through which the relay forgets account $id's phones, isn't up."
   fi
   side_start
   admin "$id" deauth
   if [ "$verb" = offboard ]; then
     admin "$id" disable
+    # Once no session of the account is left to open them again, and before anything else that could fail.
+    sql "$t" --write -v "id=$id" <<<"update sends set disabled = true where user_uuid = :'id';" >/dev/null
   else
     admin "$id" delete
   fi
   side_stop
   found=$(accounts "$t" | jq -c --arg id "$id" 'map(select(.id == $id))')
   if [ "$verb" = offboard ]; then
-    sql "$t" --write -v "id=$id" <<<"update sends set disabled = true where user_uuid = :'id';" >/dev/null
     sends=$(sql "$t" -v "id=$id" <<<"select count(*) from sends where user_uuid = :'id' and not disabled;") || exit 1
     jq -e --argjson sends "$sends" 'length == 1 and (.[0].enabled | not) and .[0].devices == 0 and $sends == 0' \
       <<<"$found" >/dev/null || fail "account $id is open still: $found, with $sends of its Sends"

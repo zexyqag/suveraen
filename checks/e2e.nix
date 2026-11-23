@@ -3899,8 +3899,9 @@ runTest {
               assert not [r for r in vw_got if any(n in json.dumps(r) for n in vw_named)], vw_got
               for vw_job in ["vera", "vera-phone"]:
                   assert vw(vw_job, "call", "GET", "/api/accounts/revision-date")["status"] == 401, vw_job
+              # Vaultwarden logs why it refused a refresh and tells the client only that it did.
               vw_status, vw_out = acme.execute(f"{vw_device('vera', 'refresh')} 2>&1")
-              assert vw_status != 0 and "Invalid refresh token" in vw_out, vw_out
+              assert vw_status != 0 and "400 {'error': 'invalid_grant'}" in vw_out, vw_out
               vw_status, vw_out = acme.execute(
                   f"{vw_device('vera-later', 'login', vw_api_key['id'], vw_api_key['secret'], vw_master)} 2>&1"
               )
@@ -3919,7 +3920,7 @@ runTest {
               ) + "\"").strip()
               assert vw_left == "0", vw_left
               assert server.succeed(f"{vw_pod} find /data/attachments -type f") == ""
-              assert server.succeed(f"{vw_pod} pgrep -x vaultwarden").split() == ["1"]
+              assert server.succeed(f"{vw_pod} pgrep -x /vaultwarden").split() == ["1"]
               assert server.succeed(vw_pod_state) == vw_before
 
           with subtest("Nothing is left of the volumes copies and restores worked on, and tenants' volumes are backed up"):
