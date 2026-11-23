@@ -2,7 +2,7 @@
 # A tenant's password manager: Vaultwarden, which Bitwarden's own apps sign in to, behind the gateway on the tenant's
 # app domain. Members make their accounts through the tenant's own Kanidm alone. Each vault is encrypted on their
 # devices and kept in the tenant's PostgreSQL; its attachments and Sends, and the key Vaultwarden signs sessions with,
-# are on the volume.
+# are on the volume. Phones get its notifications through Bitwarden's relay, which its proxy alone reaches.
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
@@ -17,6 +17,7 @@ spec:
     - ../../../components/sso-client
     - ../../../components/sso-secret
     - ../../../components/public-roots
+    - ../../../components/egress
   dependsOn:
     - name: policies
     - name: app-charts
@@ -31,15 +32,15 @@ spec:
       # passkeys, the sign-in's way back and every app's saved server go by it.
       HOST: vault
       QUOTA_CPU: ${VAULTWARDEN_QUOTA_CPU:=200m}
-      # The app, up to three movers and a check, 256Mi each, and one more pod at the defaults.
-      QUOTA_MEMORY: ${VAULTWARDEN_QUOTA_MEMORY:=1408Mi}
-      # The same pods, with 256Mi of scratch space each.
-      QUOTA_EPHEMERAL_STORAGE: ${VAULTWARDEN_QUOTA_EPHEMERAL_STORAGE:=1536Mi}
+      # The app, up to three movers and a check, 256Mi each, the proxy's 64Mi and one more pod at the defaults.
+      QUOTA_MEMORY: ${VAULTWARDEN_QUOTA_MEMORY:=1472Mi}
+      # The same pods, with 256Mi of scratch space each but the proxy's 32Mi.
+      QUOTA_EPHEMERAL_STORAGE: ${VAULTWARDEN_QUOTA_EPHEMERAL_STORAGE:=1568Mi}
       # The volume and the three movers' copies of it, each mover with a 256Mi cache.
       QUOTA_STORAGE: ${VAULTWARDEN_QUOTA_STORAGE:=17Gi}
       QUOTA_VOLUMES: "8"
-      QUOTA_PODS: "7"
-      QUOTA_SERVICES: "1"
+      QUOTA_PODS: "8"
+      QUOTA_SERVICES: "2"
       QUOTA_SECRETS: "12"
       QUOTA_CONFIGMAPS: "4"
       QUOTA_JOBS: "7"
@@ -54,6 +55,11 @@ spec:
       # A new value restores the latest copy again, from offsite-1 or offsite-2.
       DATA_RESTORE: ${VAULTWARDEN_DATA_RESTORE:=once}
       DATA_RESTORE_FROM: ${VAULTWARDEN_DATA_RESTORE_FROM:=offsite-1}
+      # Bitwarden's relay in the EU, which passes the vault's notifications on to phones, and where the vault gets its
+      # token for it as the tenant's own installation there: VAULTWARDEN_PUSH_INSTALLATION_ID and _KEY in its Secret.
+      PUSH_RELAY_HOST: ${VAULTWARDEN_PUSH_RELAY_HOST:=api.bitwarden.eu}
+      PUSH_IDENTITY_HOST: ${VAULTWARDEN_PUSH_IDENTITY_HOST:=identity.bitwarden.eu}
+      EGRESS_HOSTS: '["${VAULTWARDEN_PUSH_RELAY_HOST:=api.bitwarden.eu}:443","${VAULTWARDEN_PUSH_IDENTITY_HOST:=identity.bitwarden.eu}:443"]'
 ---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization

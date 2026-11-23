@@ -75,7 +75,10 @@
 # no icon and logs none, nor a sign-in or a member's mail. Through the gateway it sees a pseudonym, holds a device's
 # notifications open past the gateway's timeouts, and cuts an upload too slow for them, which the device takes back as
 # the apps do, leaving nothing; it goes unready while its database is restored, never restarted, and its vault and
-# sessions come back with its PostgreSQL and with its volume.
+# sessions come back with its PostgreSQL and with its volume. A member's phone registers for notifications at a stand-in
+# for Bitwarden's relay, which the vault reaches through its proxy alone, as its tenant's installation there, and tells
+# it of a change by IDs alone, naming no one; its pod reaches the relay no other way, and its proxy takes nothing else
+# out: no other host, address or port, nor a plain request.
 # Kanidm's volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all
 # replaces; the server's checks alert once when an app holds a wrong one, or has no pod behind its edges, and when that
 # clears.
@@ -134,6 +137,10 @@ let
   s3Address = n: "192.168.1.10${toString n}";
   # Where the servers copy their own state at each provider.
   platformBucket = "test-platform";
+  # Bitwarden's push relay and its identity server as the test cluster's vault knows them: any name under the zone,
+  # which a stand-in on the internet node answers at an address of its own.
+  pushRelayZone = "relay.test";
+  pushRelayAddress = "192.168.1.110";
 
   # The clients' way to the server's IPv6 node address, which is on the test network's link but outside its prefix.
   toServer =
@@ -298,6 +305,11 @@ let
     libraries = [ pkgs.python3Packages.cryptography ];
     flakeIgnore = [ "E501" ];
   } (builtins.readFile ./bitwarden.py);
+  # The stand-in for Bitwarden's push relay (push-relay.py).
+  pushRelay = pkgs.writers.writePython3 "push-relay" {
+    libraries = [ pkgs.python3Packages.cryptography ];
+    flakeIgnore = [ "E501" ];
+  } (builtins.readFile ./push-relay.py);
 
   # The driver's builder gets the script in an environment variable, which holds no more than 128 KiB, so each driver,
   # the interactive one and the one the test's own run uses too, gets its attributes from a file instead.
@@ -422,16 +434,17 @@ runTest {
         signin
         bitwarden
       ];
-      # Two CAs, two nameservers, two object stores and two NetBird clients.
+      # Two CAs, two nameservers, two object stores, two NetBird clients and the push relay's stand-in.
       virtualisation.memorySize = 1536;
       # As the system and as its chassis, where a device looks first.
       virtualisation.qemu.options = [
         "-smbios type=1,serial=${serial}"
         "-smbios type=3,serial=${serial}"
       ];
+      # On its own address alone, as the push relay's stand-in takes port 443 on another.
       systemd.services.pebble.serviceConfig.ExecStart = lib.mkForce (
         lib.getExe (
-          pebble "public" ''{"listenAddress": "0.0.0.0:443", "managementListenAddress": "0.0.0.0:15000"}''
+          pebble "public" ''{"listenAddress": "${address}:443", "managementListenAddress": "0.0.0.0:15000"}''
         )
       );
       # The standby CA takes only accounts bound to an external account, as ZeroSSL does: the test cluster's.
@@ -449,6 +462,15 @@ runTest {
                 "externalAccountBindingRequired": true,
                 "externalAccountMACKeys": {.stringData.ACME_STANDBY_EAB_KID: .stringData.ACME_STANDBY_EAB_HMAC}}''
           );
+        };
+      };
+
+      systemd.services.push-relay = {
+        description = "A stand-in for Bitwarden's push relay";
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig = {
+          StateDirectory = "push-relay";
+          ExecStart = "${pushRelay} ${certs.ca.cert} ${certs.ca.key} ${pushRelayZone} ${pushRelayAddress} /var/lib/push-relay/requests";
         };
       };
 
@@ -512,6 +534,12 @@ runTest {
         ];
         allowedUDPPorts = [ 53 ];
       };
+      networking.interfaces.eth1.ipv4.addresses = lib.mkAfter [
+        {
+          address = pushRelayAddress;
+          prefixLength = 24;
+        }
+      ];
       # A second client of the gateway, and from its address in a /64 of its own, a third.
       networking.interfaces.eth1.ipv6 = {
         routes = toServer nodes;
@@ -567,9 +595,14 @@ runTest {
             ''"forge.test. A ${nodes.forge.networking.primaryIPAddress}"''
             ''"acme.test. A ${nodes.acme.networking.primaryIPAddress}"''
           ]
-          ++ map (n: ''"s3-${toString n}.test. A ${s3Address n}"'') providers;
-          # test. is one of Unbound's empty local zones, and isn't signed.
-          local-zone = [ ''"test." transparent'' ];
+          ++ map (n: ''"s3-${toString n}.test. A ${s3Address n}"'') providers
+          ++ [ ''"${pushRelayZone}. A ${pushRelayAddress}"'' ];
+          # test. is one of Unbound's empty local zones, and isn't signed; every name under the relay's zone is its
+          # stand-in's.
+          local-zone = [
+            ''"test." transparent''
+            ''"${pushRelayZone}." redirect''
+          ];
           domain-insecure = [ "test." ];
           # What pods look up, so the test sees that a mesh's management asks for no name of its makers'.
           log-queries = true;
@@ -815,7 +848,7 @@ runTest {
               " && install -o cgit -m 600 ${keys.snakeOilEd25519PrivateKey} /srv/signer"
           )
           # The test CAs make their roots as they start, which apps in the cluster that reach its hosts trust
-          # (PUBLIC_CA_BUNDLE).
+          # (PUBLIC_CA_BUNDLE), as the vault does nixpkgs' test CA, which its relay's stand-in has its certificate from.
           roots = ""
           for unit, port in [("pebble", 15000), ("pebble-standby", 15001)]:
               acme.wait_for_unit(f"{unit}.service")
@@ -823,7 +856,8 @@ runTest {
               roots += acme.succeed(
                   f"curl -fsS --cacert ${caCert} --resolve acme.test:{port}:127.0.0.1 https://acme.test:{port}/roots/0"
               ).strip() + "\n"
-          bundle = base64.b64encode(roots.encode()).decode()
+          with open("${caCert}") as ca:
+              bundle = base64.b64encode((roots + ca.read()).encode()).decode()
           forge.succeed(
               f"${asCgit} sed -i 's|^  PUBLIC_CA_BUNDLE: Cg==$|  PUBLIC_CA_BUNDLE: {bundle}|' ${checkout}/settings.yaml"
               f" && grep -qxF '  PUBLIC_CA_BUNDLE: {bundle}' ${checkout}/settings.yaml"
@@ -2976,7 +3010,7 @@ runTest {
           # A tenant's password vault as its members use it, from acme: devices of theirs, each a file of what it holds,
           # which bitwarden speaks Bitwarden's own protocol for, and Kanidm's pages, which signin walks. Every sign-in
           # counts toward the vault's own limit of ten at once, then one a minute, for the one address it sees acme at:
-          # the gateway's pseudonym of it. These sign in six times.
+          # the gateway's pseudonym of it. These sign in seven times.
           vw_ns = f"{first}-vaultwarden"
           [vw_host] = hosts_of(first, vw_ns)
           vw_pinned = f"--cacert /tmp/ca.crt --resolve {vw_host}:${server}"
@@ -3004,6 +3038,11 @@ runTest {
 
           def vw_memory():
               print("vaultwarden's memory at its peak and now:", server.succeed(f"{vw_pod} grep -E '^Vm(HWM|RSS)' /proc/1/status").split())
+
+          # What the stand-in for Bitwarden's relay has got, each request as it came, with its answer.
+          def vw_relayed():
+              acme.succeed("cp /var/lib/push-relay/requests /tmp/shared/relayed")
+              return [json.loads(line) for line in (acme.shared_dir / "relayed").read_text().splitlines()]
 
           # A person's first sign-in on a device, through Kanidm's pages: whether the device got in, and what it said.
           def vw_sign_in(device, person):
@@ -3076,6 +3115,68 @@ runTest {
               vw_status, _ = server.execute(f"{vw_pod} grep -rqF {vw_words['note']} /data")
               assert vw_status == 1, "the volume holds an attachment's plaintext"
               vw_memory()
+
+          with subtest("A member's phone registers for notifications at Bitwarden's relay, which the vault reaches through its proxy alone, as the tenant's own installation, and tells it of changes by IDs alone; through the proxy nothing else gets out"):
+              [vw_container] = get(f"kubectl -n {vw_ns} get pod vaultwarden-0")["spec"]["containers"]
+              vw_settings = {e["name"]: e.get("value") for e in vw_container["env"]}
+              # Kanidm, through which the members above signed in, it reaches past the proxy.
+              vw_proxy = f"http://egress.{vw_ns}.svc:3128"
+              assert (vw_settings["HTTPS_PROXY"], vw_settings["NO_PROXY"]) == (vw_proxy, idm[first]), vw_settings
+              vw_relay, vw_identity = [urlsplit(vw_settings[f"PUSH_{k}_URI"]).hostname for k in ["RELAY", "IDENTITY"]]
+              vw_installation = {
+                  k: read(f"${cluster}/tenants/{first}/secrets.yaml", f"VAULTWARDEN_PUSH_INSTALLATION_{k}")
+                  for k in ["ID", "KEY"]
+              }
+              vw_push = f"e2e-{uuid.uuid4().hex}"
+              vw_phone_in = vw("vera-phone", "login", vw_api_key["id"], vw_api_key["secret"], vw_master, "--phone")
+              assert vw_phone_in["user"] == vw_user, vw_phone_in
+              vw_phone = vw("vera-phone", "push", vw_push)["device"]
+              # Nothing reached the relay before. The vault gets a token as the installation at the identity server,
+              # then registers the phone with the relay: its push token, under IDs.
+              [vw_token, vw_register] = vw_relayed()
+              assert (vw_token["host"], vw_token["path"]) == (vw_identity, "/connect/token"), vw_token
+              assert parse_qs(vw_token["body"]) == {
+                  "grant_type": ["client_credentials"], "scope": ["api.push"],
+                  "client_id": [f"installation.{vw_installation['ID']}"], "client_secret": [vw_installation["KEY"]],
+              }, vw_token
+              assert (vw_register["host"], vw_register["path"]) == (vw_relay, "/push/register"), vw_register
+              vw_bearer = f"Bearer {vw_token['answer']['access_token']}"
+              assert vw_register["headers"]["authorization"] == vw_bearer, vw_register
+              vw_registered = json.loads(vw_register["body"])
+              vw_push_id = vw_registered.pop("deviceId")
+              assert vw_registered == {
+                  "pushToken": vw_push, "userId": vw_user, "type": 0, "identifier": vw_phone,
+                  "installationId": vw_installation["ID"],
+              }, vw_registered
+              # A change of the person's reaches their phones through the relay as IDs and a time.
+              vw_folder = vw("vera-phone", "call", "POST", "/api/folders", json.dumps({"name": "2.e2e|e2e|e2e"}))
+              assert vw_folder["status"] == 200, vw_folder
+              acme.wait_until_succeeds("grep -qF /push/send /var/lib/push-relay/requests", timeout=60)
+              vw_got = vw_relayed()
+              [vw_sent] = [json.loads(r["body"]) for r in vw_got if r["path"] == "/push/send"]
+              assert {k: v for k, v in vw_sent.items() if k != "payload"} == {
+                  "userId": vw_user, "organizationId": None, "deviceId": vw_push_id, "identifier": vw_phone, "type": 7,
+                  "clientType": None, "installationId": None,
+              } and sorted(vw_sent["payload"]) == ["id", "revisionDate", "userId"], vw_sent
+              assert [vw_sent["payload"][k] for k in ["id", "userId"]] == [vw_folder["answer"]["id"], vw_user], vw_sent
+              # No request names the person or holds their mail.
+              vw_named = [vw_people["vera"]["mail"], "vera", "Vera"]
+              assert not [r for r in vw_got if any(n in json.dumps(r) for n in vw_named)], vw_got
+              # The vault's pod reaches the relay by no other way.
+              blocked(f"{vw_pod} curl --noproxy '*' -sS -m 5 -o /dev/null https://{vw_relay}/")
+              # Through the proxy, nothing else: no other host on the internet, nor the relay's address, nor its host at
+              # another port, nor a plain request.
+              vw_tried = shlex.quote(
+                  f"for target in https://acme.test/ https://${pushRelayAddress}/ https://{vw_relay}:8443/; do"
+                  ' curl -sS -o /dev/null -w "%{http_connect} " "$target"; echo $?; done;'
+                  ' curl -sS -o /dev/null -x "$HTTPS_PROXY" -w "%{http_code} " http://acme.test/; echo $?'
+              )
+              vw_answered = server.succeed(f"{vw_pod} sh -c {vw_tried}").split()
+              assert vw_answered[0::2] == ["403"] * 4 and "0" not in vw_answered[1:6:2], vw_answered
+              print("the vault's proxy's memory at its peak and now:", server.succeed(
+                  f"grep -E '^Vm(HWM|RSS)' /proc/$(k3s crictl inspect -o go-template --template '{{{{.info.pid}}}}'"
+                  f" $(k3s crictl ps -q --name '^envoy$' --label io.kubernetes.pod.namespace={vw_ns}))/status"
+              ).split())
 
           with subtest("Through the gateway the vault sees a pseudonym of a client's, never its address or one it names, and an upload lands on its volume as it comes"):
               # In the background, each with what it said and how it ended: the person's device holding its notifications

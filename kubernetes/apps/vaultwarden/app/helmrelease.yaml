@@ -82,6 +82,26 @@ spec:
               LOG_LEVEL: warn,vaultwarden::api::icons=error
               # Kanidm's certificate chains to the public issuer's roots, which may be beyond those the image holds.
               SSL_CERT_DIR: /etc/ssl/certs:/etc/extra-roots
+              # Phones get notifications through Bitwarden's relay, which the vault calls as the tenant's installation
+              # there, through its proxy (components/egress); Kanidm, in the cluster, it calls past the proxy.
+              PUSH_ENABLED: "true"
+              PUSH_RELAY_URI: https://${PUSH_RELAY_HOST}
+              PUSH_IDENTITY_URI: https://${PUSH_IDENTITY_HOST}
+              PUSH_INSTALLATION_ID:
+                valueFrom:
+                  secretKeyRef:
+                    name: vaultwarden
+                    key: push-installation-id
+              PUSH_INSTALLATION_KEY:
+                valueFrom:
+                  secretKeyRef:
+                    name: vaultwarden
+                    key: push-installation-key
+              HTTPS_PROXY: http://egress.${TENANT}-${APP}.svc:3128
+              NO_PROXY: idm.${TENANT_DOMAIN}
+              # The proxy's address is the cluster's, which Vaultwarden would refuse to call: what it reaches is the
+              # proxy's and the network policies' to say.
+              HTTP_REQUEST_BLOCK_NON_GLOBAL_IPS: "false"
             probes:
               startup:
                 enabled: true

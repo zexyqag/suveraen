@@ -59,6 +59,7 @@ data:
   # The UDP port the servers answer STUN on (suveraen.cluster.stun.port), which a tenant's mesh names to its devices.
   STUN_PORT: "3478"
   # Roots the public issuer's certificates chain to that images don't hold, as base64 PEM (components/public-roots):
-  # the e2e's test CAs make theirs as they start, so it fills them in before it signs. None on a real cluster
-  # (checks/render.sh), which is one empty line, as Flux makes an empty value null.
+  # the e2e's test CAs make theirs as they start, so it fills them in before it signs, with the one its stand-ins on
+  # the internet have theirs from, such as the vault's relay. None on a real cluster (checks/render.sh), which is one
+  # empty line, as Flux makes an empty value null.
   PUBLIC_CA_BUNDLE: Cg==

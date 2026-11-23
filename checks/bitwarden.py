@@ -9,7 +9,11 @@ usage: bitwarden [--resolve HOST:ADDRESS]... --cacert FILE SERVER STATE COMMAND.
   set-password MASTER [--hint HINT]
                           makes the account's keys and protects them with the master password
   api-key MASTER          prints the account's API key
-  login ID SECRET MASTER  signs a new device in by an API key, and unlocks the vault with the master password
+  login ID SECRET MASTER [--phone]
+                          signs a new device in by an API key, an Android phone with --phone, and unlocks the vault
+                          with the master password
+  push TOKEN              gives the server the token a phone's push service knows the phone by, as the phone apps do
+                          once signed in, and prints the device's ID
   put NAME USERNAME PASSWORD FILE
                           stores a login item, and FILE as its attachment
   get                     prints each item of the vault, with its attachments, decrypted
@@ -59,6 +63,8 @@ commands.add_parser("api-key").add_argument("master")
 login = commands.add_parser("login")
 for name in ["id", "secret", "master"]:
     login.add_argument(name)
+login.add_argument("--phone", action="store_true")
+commands.add_parser("push").add_argument("token")
 put = commands.add_parser("put")
 for name in ["name", "username", "password", "file"]:
     put.add_argument(name)
@@ -91,9 +97,9 @@ context = ssl.create_default_context(cafile=args.cacert)
 context.verify_flags &= ~ssl.VERIFY_X509_STRICT
 web = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context))
 server = args.server.rstrip("/")
-# What Bitwarden's apps send: the web vault for a sign-in through the server's single sign-on, and the command line
-# client for one by an API key; and their release, as the web vault's that the server serves.
-WEB, CLI = {"client_id": "web", "deviceType": "9"}, {"deviceType": "25"}
+# What Bitwarden's apps send: the web vault for a sign-in through the server's single sign-on, and for one by an API key
+# the command line client, or an Android phone's app; and their release, as the web vault's that the server serves.
+WEB, CLI, PHONE = {"client_id": "web", "deviceType": "9"}, {"deviceType": "25"}, {"deviceType": "0"}
 ITERATIONS = 600000
 with web.open(f"{server}/version.json", timeout=60) as r:
     release = {"Bitwarden-Client-Version": json.load(r)["version"]}
@@ -282,7 +288,7 @@ elif args.command == "login":
     state.clear()
     answer = ok("POST", "/identity/connect/token", auth=False, form={
         "grant_type": "client_credentials", "client_id": args.id, "client_secret": args.secret, "scope": "api",
-        **CLI, **device(),
+        **(PHONE if args.phone else CLI), **device(),
     })
     signed_in(answer)
     unlock = answer["UserDecryptionOptions"]["MasterPasswordUnlock"]
@@ -292,6 +298,9 @@ elif args.command == "login":
     state["key"] = b64(key)
     save()
     print(json.dumps({"user": state["user"], "mail": unlock["Salt"]}))
+elif args.command == "push":
+    ok("PUT", f"/api/devices/identifier/{state['device']}/token", body={"pushToken": args.token})
+    print(json.dumps({"device": state["device"]}))
 elif args.command == "put":
     key = user_key()
     with open(args.file, "rb") as f:

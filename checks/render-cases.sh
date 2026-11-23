@@ -101,9 +101,9 @@ hellofile() { # a file of hello's migrations, by name, from JSON on stdin
   yq -i ".data.\"$1\" = load_str(\"hello.json\")" apps/hello/sso/configmap.yaml
   rm hello.json
 }
-egress() { # hello's proxy (components/egress), to the hosts given, as a JSON list in its template, if any
+egress() { # hello's proxy (components/egress), to the hosts given, as a JSON list in its template
   sed -i 's|    - ../../../components/sso-secret|&\n    - ../../../components/egress|' apps/hello/ks.yaml
-  [ $# = 0 ] || EGRESS_HOSTS=$1 yq -i '(select(documentIndex == 0) | .spec.postBuild.substitute.EGRESS_HOSTS)
+  EGRESS_HOSTS=$1 yq -i '(select(documentIndex == 0) | .spec.postBuild.substitute.EGRESS_HOSTS)
     = strenv(EGRESS_HOSTS)' apps/hello/ks.yaml
 }
 export -f append np encsecret encmap prod ids other knob hellofile egress
@@ -1109,7 +1109,8 @@ refuses egress-twice "$hosts \"relay.example.net:443\"" \
   "egress '[\"relay.example.net:443\", \"relay.example.net:443\"]'"
 refuses egress-none "$hosts []" "egress '[]'"
 refuses egress-from-settings "$hosts none" \
-  "egress; EGRESS_HOSTS='$relay' yq -i '.data.EGRESS_HOSTS = strenv(EGRESS_HOSTS)' clusters/test/settings.yaml"
+  "yq -i 'del(select(documentIndex == 0) | .spec.postBuild.substitute.EGRESS_HOSTS)' apps/vaultwarden/ks.yaml
+  EGRESS_HOSTS='$relay' yq -i '.data.EGRESS_HOSTS = strenv(EGRESS_HOSTS)' clusters/test/settings.yaml"
 refuses egress-quota "one more pod at the defaults: limits.memory 256Mi of 200Mi" \
   "egress '$relay'; knob HELLO_QUOTA_MEMORY 200Mi"
 refuses knob-two-defaults "a knob has one default in all of its app's templates: HELLO_QUOTA_STORAGE" \
@@ -1197,6 +1198,9 @@ refuses passthrough-app-for-hello "kubernetes/apps/hello/ks.yaml: a host is \${T
    | (select(documentIndex == 1) | .spec.dependsOn) |= map(select(.name != \"issuer\"))' apps/hello/ks.yaml"
 refuses app-host-elsewhere "kubernetes/apps/vaultwarden/ks.yaml: an app's HOST is the HOST of one of its edges: vault" \
   "yq -i '(select(documentIndex == 1) | .spec.postBuild.substitute.HOST) = \"pass\"' apps/vaultwarden/ks.yaml"
+# A tenant's vault reaches Bitwarden's relay as the tenant's own installation there, which nothing stands in for.
+refuses vault-installation-missing "test/alpha-vaultwarden doesn't render" \
+  "sed -i '/VAULTWARDEN_PUSH_INSTALLATION_KEY/d' $T/alpha/secrets.yaml"
 refuses real-cluster-public-ca "prod: the public issuer's certificates chain to roots the images hold" \
   "$real; yq -i '.data.PUBLIC_CA_BUNDLE = \"eA==\"' clusters/prod/settings.yaml"
 refuses real-cluster-public-ca-empty \
