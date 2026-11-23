@@ -78,12 +78,12 @@
 # sessions come back with its PostgreSQL and with its volume. A member's phone registers for notifications at a stand-in
 # for Bitwarden's relay, which the vault reaches through its proxy alone, as its tenant's installation there, and tells
 # it of a change by IDs alone, naming no one; its pod reaches the relay no other way, and its proxy takes nothing else
-# out: no other host, address or port, nor a plain request. suveraen-vault offboard, by a second Vaultwarden on the
-# vault pod's loopback for the run alone, of which nothing is left after, ends every way into the account of a person
-# Kanidm let go: their phone leaves the relay, their sessions, devices and API key are refused and their Sends closed;
-# erase, by the account's own ID, then leaves no row or file of it, and the vault never restarts. A person Kanidm made
-# again under a new ID gets their account back by relink, as the vault takes none by its mail, and no run closes it
-# while Kanidm lets them in.
+# out: no other host, address or port, nor a plain request; it speaks no HTTP/2, and refuses a CONNECT whose headers
+# pass 8 KiB. suveraen-vault offboard, by a second Vaultwarden on the vault pod's loopback for the run alone, of which
+# nothing is left after, ends every way into the account of a person Kanidm let go: their phone leaves the relay, their
+# sessions, devices and API key are refused and their Sends closed; erase, by the account's own ID, then leaves no row
+# or file of it, and the vault never restarts. A person Kanidm made again under a new ID gets their account back by
+# relink, as the vault takes none by its mail, and no run closes it while Kanidm lets them in.
 # Kanidm's volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all
 # replaces; the server's checks alert once when an app holds a wrong one, or has no pod behind its edges, and when that
 # clears.
@@ -3179,10 +3179,26 @@ runTest {
               )
               vw_answered = server.succeed(f"{vw_pod} sh -c {vw_tried}").split()
               assert vw_answered[0::2] == ["403"] * 4 and "0" not in vw_answered[1:6:2], vw_answered
-              print("the vault's proxy's memory at its peak and now:", server.succeed(
-                  f"grep -E '^Vm(HWM|RSS)' /proc/$(k3s crictl inspect -o go-template --template '{{{{.info.pid}}}}'"
-                  f" $(k3s crictl ps -q --name '^envoy$' --label io.kubernetes.pod.namespace={vw_ns}))/status"
-              ).split())
+              # A connection to the proxy carries one tunnel at most: it speaks no HTTP/2, to a client that can, and
+              # refuses a CONNECT to the relay whose headers pass 8 KiB.
+              vw_capped = shlex.quote(
+                  "curl -V | grep -qw HTTP2 && echo can;"
+                  " curl --noproxy '*' --http2-prior-knowledge -s -o /dev/null -w '%{http_version} ' \"$HTTPS_PROXY\";"
+                  " curl -sS -o /dev/null --proxy-header \"x-e2e: $(head -c 9216 /dev/zero | tr '\\0' a)\""
+                  f" -w '%{{http_connect}}' https://{vw_relay}/; true"
+              )
+              vw_capped_answers = server.succeed(f"{vw_pod} sh -c {vw_capped}").split()
+              assert vw_capped_answers[0] == "can" and vw_capped_answers[1] != "2", vw_capped_answers
+              assert vw_capped_answers[2:] == ["431"], vw_capped_answers
+              # Under its limit the kernel may drop and reread the proxy's file-backed pages, its binary's, no others.
+              print(
+                  "the vault's proxy's memory at its peak and now, and the anonymous and file-backed parts of now:",
+                  server.succeed(
+                      "grep -E '^(VmHWM|VmRSS|RssAnon|RssFile):' /proc/$(k3s crictl inspect -o go-template"
+                      f" --template '{{{{.info.pid}}}}' $(k3s crictl ps -q --name '^envoy$'"
+                      f" --label io.kubernetes.pod.namespace={vw_ns}))/status"
+                  ).split(),
+              )
 
           with subtest("Through the gateway the vault sees a pseudonym of a client's, never its address or one it names, and an upload lands on its volume as it comes"):
               # In the background, each with what it said and how it ended: the person's device holding its notifications
