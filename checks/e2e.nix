@@ -99,6 +99,7 @@ let
   asCgit = "runuser -u cgit -- env HOME=/srv/git";
 
   transferKey = import ./transfer-key.nix pkgs;
+  pebblePackage = import ./pebble.nix pkgs;
   # The server's alerts go to an ntfy beside it, which only the publisher posts to and only the phone reads, as at the
   # watcher. ntfy tokens are "tk_" plus 29 characters.
   publisherToken = "tk_suveraentestpublisher00000000";
@@ -381,7 +382,7 @@ runTest {
         pkgs.writeShellApplication {
           name = "pebble-${name}";
           runtimeInputs = [
-            pkgs.pebble
+            pebblePackage
             pkgs.yq-go
           ];
           text = ''
@@ -853,9 +854,9 @@ runTest {
               raise ValueError(f"{cmd}: {e}, in {len(out)} bytes: {e.doc[max(e.pos - 200, 0):e.pos + 200]!r}") from e
 
       # What a command prints, errors included, whether or not it fails.
-      def shown(cmd):
-          server.execute(f"set +e; ( {cmd} ) > /tmp/shared/output 2>&1")
-          return (server.shared_dir / "output").read_bytes().decode(errors="replace")
+      def shown(cmd, machine=server):
+          machine.execute(f"set +e; ( {cmd} ) > /tmp/shared/output 2>&1")
+          return (machine.shared_dir / "output").read_bytes().decode(errors="replace")
 
       # Ceph through the operator, as there's no toolbox.
       ceph_cli = (
@@ -944,7 +945,17 @@ runTest {
               phone,
           ]:
               print(f"$ {cmd}\n{shown(cmd)}")
-          print(acme.execute("journalctl -u pebble -u knot -u 's3-*' --no-pager | tail -n 80")[1])
+          print(shown("journalctl -u pebble -u pebble-standby -u knot -u 's3-*' --no-pager | tail -n 80", acme))
+          # Each CA's goroutine dump, which alone shows the locks a wedged one waits on: Go writes it as it quits.
+          print(
+              shown(
+                  "since=$(date '+%F %T'); systemctl kill -s QUIT pebble pebble-standby;"
+                  " timeout 30 sh -c 'while systemctl is-active -q pebble pebble-standby; do sleep 1; done';"
+                  " for unit in pebble pebble-standby; do"
+                  " echo \"$ journalctl -u $unit\"; journalctl -u $unit --since \"$since\" -o cat --no-pager; done",
+                  acme,
+              )
+          )
           diagnose_ceph()
 
       # Rook, Ceph through the operator (there's no toolbox), the object store and who may reach it, the CSI drivers,

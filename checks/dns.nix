@@ -12,6 +12,7 @@ let
   keys = import (pkgs.path + "/nixos/tests/ssh-keys.nix") pkgs;
   adminKey = keys.snakeOilEd25519PublicKey;
   transferKey = import ./transfer-key.nix pkgs;
+  pebblePackage = import ./pebble.nix pkgs;
 
   # Test only: example.test's key, made before the signer first starts, and its DS, which the parent publishes.
   exampleKey = pkgs.writeText "example.test.pem" ''
@@ -242,7 +243,7 @@ pkgs.testers.runNixOSTest {
         };
         environment.systemPackages = [
           pkgs.unbound
-          pkgs.pebble
+          pebblePackage
           pkgs.lego
           pkgs.curl
         ];

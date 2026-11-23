@@ -1,0 +1,63 @@
+Lock an authz only after reading its order and account
+
+The Authz handler held the authz write lock while it read the order and
+looked up the account, which takes the store's read lock, and
+updateChallenge read the order under the authz read lock. The store takes
+authz locks under its own lock (FindValidAuthorization, on every new
+order) and under the order's (GetOrderByID), so once a writer queues on
+the store or the order, an authz poll, a new order or a read of the
+authz's order, and that writer wait on each other and the CA stops
+answering. Read the order and the account first, then lock the authz only
+to change or render it.
+---
+ wfe/wfe.go | 13 +++++++++----
+ 1 file changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/wfe/wfe.go b/wfe/wfe.go
+index 164b959..ab4008d 100644
+--- a/wfe/wfe.go
++++ b/wfe/wfe.go
+@@ -2253,8 +2253,9 @@ func (wfe *WebFrontEndImpl) Authz(
+ 		return
+ 	}
+ 
+-	authz.Lock()
+-	defer authz.Unlock()
++	// Lock the authz only after reading the order and the account: the store
++	// takes authz locks under its own lock and the order's, so those taken under
++	// an authz lock deadlock once a writer queues. authz.Order never changes.
+ 	authz.Order.RLock()
+ 	orderAcctID := authz.Order.AccountID
+ 	authz.Order.RUnlock()
+@@ -2291,6 +2292,8 @@ func (wfe *WebFrontEndImpl) Authz(
+ 					deactivateRequest.Status)), response)
+ 			return
+ 		}
++		authz.Lock()
++		defer authz.Unlock()
+ 		authz.Status = acme.StatusDeactivated
+ 	} else {
+ 		// Otherwise this was a POST-as-GET request and we need to verify it
+@@ -2309,6 +2312,8 @@ func (wfe *WebFrontEndImpl) Authz(
+ 			return
+ 		}
+ 
++		authz.RLock()
++		defer authz.RUnlock()
+ 		if authz.Status == acme.StatusPending {
+ 			// Check for the existence of a challenge which state is processing, and add the
+ 			// Retry-After header if there is one.
+@@ -2520,11 +2525,11 @@ func (wfe *WebFrontEndImpl) updateChallenge(
+ 		return
+ 	}
+ 
+-	authz.RLock()
++	// No authz lock: authz.Order never changes, and the order's lock is taken
++	// before an authz's elsewhere.
+ 	authz.Order.RLock()
+ 	orderAcctID := authz.Order.AccountID
+ 	authz.Order.RUnlock()
+-	authz.RUnlock()
+ 
+ 	if orderAcctID != existingAcct.ID {
+ 		wfe.sendError(acme.UnauthorizedProblem(
