@@ -24,6 +24,8 @@ let
   updaters = lib.optionals withCluster config.suveraen.cluster.podCIDRs ++ cfg.acme.clients;
 
   acmeKey = "/var/lib/knot/acme-update.conf";
+  backups = "/var/lib/knot-backup";
+  calendar = import ./calendar.nix;
 
   publishedNames = lib.sort lib.lessThan (
     map (s: "${s.name}.") (lib.attrValues (lib.filterAttrs (_: s: s.name != null) cfg.servers))
@@ -225,6 +227,19 @@ let
       done
       chown -R knot:knot /var/lib/knot/keys
       systemctl start knot
+    '';
+  };
+
+  # A key backup's file, checked without its key: a header age reads, and a payload of a length age writes for a tar,
+  # which GNU tar pads to whole records of 10240 bytes. Most cuts fail it; only decrypting proves a backup whole.
+  backupCheck = pkgs.writeShellApplication {
+    name = "suveraen-dns-backup-check";
+    runtimeInputs = [
+      pkgs.age
+      pkgs.jq
+    ];
+    text = ''
+      age-inspect --json "$1" | jq -e '.sizes.min_payload > 0 and .sizes.min_payload % 10240 == 0' >/dev/null
     '';
   };
 
@@ -513,7 +528,18 @@ in
       recipients = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [ ];
-        description = "age recipients the signer encrypts its daily key backup to, under /var/lib/knot-backup.";
+        description = ''
+          age recipients the signer encrypts its key backups to, under ${backups}. A copy off-site is encrypted once
+          more, to suveraen.offsite.recipients, so restoring one takes an identity of each.
+        '';
+      };
+      everyHours = lib.mkOption {
+        type = lib.types.ints.between 1 24;
+        default = 24;
+        description = ''
+          How often the signer backs its keys up, in hours. It divides 24: the schedule starts over at midnight, so the
+          backups stay evenly spaced.
+        '';
       };
       keep = lib.mkOption {
         type = lib.types.ints.positive;
@@ -546,6 +572,10 @@ in
           {
             assertion = !signing || cfg.backup.recipients != [ ];
             message = "The signer needs suveraen.dns.backup.recipients: without a key backup it can't be replaced.";
+          }
+          {
+            assertion = lib.mod 24 cfg.backup.everyHours == 0;
+            message = "suveraen.dns.backup.everyHours must divide 24.";
           }
           {
             assertion = lib.all (z: z.certificates == [ ]) (lib.attrValues cfg.zones) || acme;
@@ -725,7 +755,7 @@ in
 
         systemd.services.knot-backup = {
           description = "Back up the DNSSEC keys, encrypted";
-          startAt = "daily";
+          startAt = calendar cfg.backup.everyHours "00";
           after = [ "knot.service" ];
           path = [
             knot
@@ -750,7 +780,7 @@ in
             # knotc answers OK before knowing the outcome; a finished backup has its label and the keys.
             grep -q '^finished_time:' "$work/knot_backup.label"
             [ -n "$(ls -A "$work/keys/keys")" ]
-            out=/var/lib/knot-backup/keys-$(date -u +%Y%m%dT%H%M%SZ).tar.age
+            out=${backups}/keys-$(date -u +%Y%m%dT%H%M%SZ).tar.age
             # A run that fails leaves no partial file for the backup check to count.
             trap 'rm -f -- "$out.tmp"' EXIT
             # The label goes last, so a restore can tell a whole backup from one cut short.
@@ -759,7 +789,7 @@ in
             } -o "$out.tmp"
             mv "$out.tmp" "$out"
             rm -rf "$work"
-            ls -1t /var/lib/knot-backup/keys-*.tar.age | tail -n +${toString (cfg.backup.keep + 1)} | xargs -r rm --
+            ls -1t ${backups}/keys-*.tar.age | tail -n +${toString (cfg.backup.keep + 1)} | xargs -r rm --
           '';
         };
         systemd.timers.knot-backup.timerConfig = {
@@ -772,9 +802,16 @@ in
         # The servers' checks run on cluster hosts alone, so another signer's backups go unjudged.
         suveraen.checks.files = lib.mkIf config.suveraen.cluster.enable {
           knot-backup = {
-            path = "/var/lib/knot-backup";
-            maxAge = "26h";
+            path = backups;
+            maxAge = "${toString (cfg.backup.everyHours + 2)}h";
           };
+        };
+        # A backup on the signer alone goes with its disk.
+        suveraen.offsite.sources.knot = {
+          directory = backups;
+          pattern = "keys-*.tar.age";
+          verify = lib.getExe backupCheck;
+          inherit (cfg.backup) keep everyHours;
         };
       })
 

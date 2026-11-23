@@ -30,7 +30,10 @@ let
     age -R $out -o /dev/null </dev/null
   '';
 
-  everyHours = lib.foldl' lib.min 24 (lib.mapAttrsToList (_: s: s.everyHours) cfg.sources);
+  calendar = import ./calendar.nix;
+  # Every source's period is a multiple of the copies'.
+  gcd = a: b: if b == 0 then a else gcd b (lib.mod a b);
+  everyHours = lib.foldl' gcd 24 (lib.mapAttrsToList (_: s: s.everyHours) cfg.sources);
 
   collect = pkgs.writeShellApplication {
     name = "offsite-collect";
@@ -224,7 +227,7 @@ in
             };
             everyHours = lib.mkOption {
               type = lib.types.ints.positive;
-              description = "How often the source makes a new file, in hours.";
+              description = "How often the source makes a new file, in hours from midnight.";
             };
           };
         }
@@ -315,7 +318,7 @@ in
     systemd.timers.offsite = {
       wantedBy = [ "timers.target" ];
       timerConfig = {
-        OnCalendar = "*-*-* 00/${toString everyHours}:30:00";
+        OnCalendar = calendar everyHours "30";
         OnBootSec = "15min";
         Persistent = true;
       };

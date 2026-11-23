@@ -4,7 +4,8 @@
 # changes reach every nameserver by NOTIFY and IXFR; the ACME zone takes TXT records at _acme-challenge names with
 # its key, which a restart replaces, and refuses everything else, and a CA validates a certificate's challenge
 # through its CNAME there; the watcher's check runs on a timer, passes, and catches a lagging nameserver, a DS the
-# parent shouldn't publish, signatures running out and a copy it can't read; and ns2 takes over signing from the key
+# parent shouldn't publish, signatures running out and a copy it can't read; the key backup passes the check its
+# off-site copies make without its key, which three copies of it cut short fail; and ns2 takes over signing from the
 # backup with the same keys, refusing one cut short, and gets them back from it after losing them, while the guard
 # keeps knot down.
 { pkgs, module }:
@@ -527,6 +528,12 @@ pkgs.testers.runNixOSTest {
           signer.succeed("systemctl start knot-backup")
           backup = signer.succeed("ls -1t /var/lib/knot-backup/keys-*.tar.age | head -n 1").strip()
           signer.succeed(f"age -d -i ${keys.snakeOilEd25519PrivateKey} {backup} | tar -t > /dev/null")
+          # The off-site copies take it without its key, and refuse it cut short in its header or in its payload, also
+          # by a whole tar block.
+          looks_whole = "${nodes.signer.suveraen.offsite.sources.knot.verify}"
+          signer.succeed(f"{looks_whole} {backup}")
+          for size in ["100", "-100", "-512"]:
+              signer.fail(f"head -c {size} {backup} > /root/cut.tar.age && {looks_whole} /root/cut.tar.age")
           # The console drops output the driver doesn't read in time, so the backup goes through the shared directory.
           signer.succeed(f"cp {backup} /tmp/shared/keys.tar.age")
           ns2.succeed("install -m 600 /tmp/shared/keys.tar.age /root/keys.tar.age")

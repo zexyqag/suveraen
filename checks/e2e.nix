@@ -87,14 +87,14 @@
 # Kanidm's volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all
 # replaces; the server's checks alert once when an app holds a wrong one, or has no pod behind its edges, and when that
 # clears.
-# The server's alerts reach a phone. Its etcd snapshots go to both providers encrypted, with a key that reaches no
-# tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where its controller
-# records it, its own off-site copies included, none of them late, Flux's objects and every certificate in order, every
-# edge answering it through the gateway, and each mesh within the operator's rules, in a session that takes no write;
-# one more pool still fits, and when it passes its quota's warning they alert once, and once more when that clears, as
-# for an exit, a token and a person who left in a mesh, with the change of who can reach what, and for an account a
-# vault keeps open for a person who left. Its etcd comes back in place from a provider's copy, decrypted off the server,
-# as it was when copied, and Ceph stays healthy.
+# The server's alerts reach a phone. Its etcd snapshots and DNS key backups go to both providers encrypted, with a key
+# that reaches no tenant's bucket, as no tenant's key reaches them. Its checks find every backup's last good copy where
+# its controller records it, its own off-site copies included, none of them late, Flux's objects and every certificate
+# in order, every edge answering it through the gateway, and each mesh within the operator's rules, in a session that
+# takes no write; one more pool still fits, and when it passes its quota's warning they alert once, and once more when
+# that clears, as for an exit, a token and a person who left in a mesh, with the change of who can reach what, and for
+# an account a vault keeps open for a person who left. Its etcd comes back in place from a provider's copy, decrypted
+# off the server, as it was when copied, and Ceph stays healthy.
 {
   pkgs,
   module,
@@ -4061,14 +4061,24 @@ runTest {
 
           platform = "${platformBucket}"
 
-          def etcd_copies(n):
-              return f"/var/lib/s3-{n}/data/{platform}/hosts/${nodes.server.networking.hostName}/etcd"
+          def server_copies(n, source):
+              return f"/var/lib/s3-{n}/data/{platform}/hosts/${nodes.server.networking.hostName}/{source}"
 
-          with subtest("The server's cluster state goes to both providers, encrypted, under a key that reaches nothing else"):
+          with subtest("The server's cluster state and DNS keys go to both providers, encrypted, under a key that reaches nothing else"):
               snapshot_name = etcd_snapshot("e2e")
+              # And a key backup, as if made a while ago too.
+              server.succeed("systemctl start knot-backup")
+              knot_backup = server.succeed("ls -t /var/lib/knot-backup | head -n 1").strip()
+              server.succeed(f"touch -d '-2 minutes' /var/lib/knot-backup/{knot_backup}")
+              server.succeed(f"cp /var/lib/knot-backup/{knot_backup} /tmp/shared/")
               server.succeed("systemctl start offsite")
               for n in providers:
-                  acme.succeed(f"test \"$(head -c 21 {etcd_copies(n)}/{snapshot_name}.age)\" = age-encryption.org/v1")
+                  acme.succeed(f"test \"$(head -c 21 {server_copies(n, 'etcd')}/{snapshot_name}.age)\" = age-encryption.org/v1")
+                  # The key backup, encrypted to its own recipients, encrypted once more.
+                  acme.succeed(
+                      f"age -d -i ${keys.snakeOilEd25519PrivateKey} {server_copies(n, 'knot')}/{knot_backup}.age"
+                      f" | cmp - /tmp/shared/{knot_backup}"
+                  )
                   server_keys = (f"${nodes.server.networking.hostName}-{n}", f"${nodes.server.networking.hostName}-{n}-test-secret")
                   for tenant in tenants:
                       refused_at(n, server_keys, f"s3api list-objects-v2 --bucket {bucket_at(n, tenant)}")
@@ -4113,7 +4123,7 @@ runTest {
               archiving = {f"{c['metadata']['namespace']}/{c['metadata']['name']} WAL archiving"
                            for c in items("clusters.postgresql.cnpg.io")}
               assert len(archiving) == len(tenants), archiving
-              offsite = {f"etcd-offsite-{n}" for n in providers}
+              offsite = {f"{source}-offsite-{n}" for source in ["etcd", "knot"] for n in providers}
               # And each tenant's Kanidm, which the checks find in order, with the client of each app that signs in there.
               sso_clients = {
                   f"{c['metadata']['namespace']}/{c['metadata']['name'].removeprefix('sso-')}-oidc"
@@ -4185,11 +4195,12 @@ runTest {
                   else:
                       m = re.match(r"last (\S+) \(", detail)
                       assert m and moment(m.group(1)) in {moment(t) for t in times if t}, (key, detail, times)
-              # The off-site copies count from the snapshot each provider holds last.
-              for n in providers:
-                  stamp = int(server.succeed(f"stat -c %Y /var/lib/offsite/state/etcd.{n}"))
-                  m = re.match(r"last (\S+) \(", findings[f"etcd-offsite-{n}"][1])
-                  assert m and moment(m.group(1)).timestamp() == stamp, (n, findings[f"etcd-offsite-{n}"], stamp)
+              # The off-site copies count from the file each provider holds last.
+              for key in offsite:
+                  source, n = key.split("-offsite-")
+                  stamp = int(server.succeed(f"stat -c %Y /var/lib/offsite/state/{source}.{n}"))
+                  m = re.match(r"last (\S+) \(", findings[key][1])
+                  assert m and moment(m.group(1)).timestamp() == stamp, (key, findings[key], stamp)
               assert findings["Ceph status"][1].startswith("HEALTH_OK, "), findings["Ceph status"]
               assert checks_said() == [], checks_said()
               # No label the server's metrics hold, from first to last, names a host, a client's address or a Kanidm ID
