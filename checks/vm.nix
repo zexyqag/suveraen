@@ -9,25 +9,25 @@
 # gateway namespace, and so do certificates and ACME
 # orders unless an app terminates TLS for its one host itself, Issuers sign a namespace's own names only where
 # the platform allows a private CA, a tenant's PostgreSQL takes no restore while it runs, and the platform's
-# pods, and Ceph's, run at priorities no tenant's may ask for. Only the platform's backup jobs and movers reach out of a
-# tenant's namespace, and its apps' charts can change neither what they run nor the keys their copies go with,
-# nor make or delete a volume copied off-site. Hosts and pods resolve names through the node's own resolver, and
-# clocks use NTS. The watcher's ntfy only takes known publishers and keeps its account API, stats and attachments
-# closed; the server's alerts reach a phone account; Gatus raises an alert when the server's heartbeat stops, when its
-# checks do and while its boot-time SSH port is open, and says when each ends; and the server falls back to a second
-# channel when the watcher is gone, and says there when the watcher's ntfy stops answering; a daily publish the way its
-# alerts go tells the watcher when that way is broken. The server and its Flux only take commits signed by a release
-# signer, the server never goes back to an older one, and it alerts when its configuration, or the nixpkgs its release
-# locks, gets old. The server keeps its metrics on loopback behind a password, and its daemons reach nothing else; they
-# read the clock from chrony, and the kubelet with an account that may read its metrics alone, of whose pods they keep
-# only sums per namespace. The server's checks read how old the backups the cluster records are, Ceph's health, Flux's
-# objects, the certificates and the Gateways with an account that reads nothing else, ask the node's addresses for
-# STUN, read what the rules on its metrics find, such as a failed unit, a dataset filling, a tenant's container that
-# keeps restarting or one the kernel kills for memory, and alert once per change, also when the cluster or the rules
-# can't be read. Its etcd snapshots reach both providers encrypted to recovery keys, under a prefix its key can neither
-# leave nor empty; with one provider down they still reach the other, and the phone hears of it. Wiped, the server comes
-# back from a provider's copy through its restore command, with its token file alone; another token leaves a running
-# server's own database in place.
+# pods, and Ceph's, run at priorities no tenant's may ask for. Only the platform's backup jobs and movers, and an app's
+# proxy to the hosts its template lists, reach out of a tenant's namespace, and its apps' charts can change neither what
+# they run nor the keys their copies go with, nor make or delete a volume copied off-site. Hosts and pods resolve names
+# through the node's own resolver, and clocks use NTS. The watcher's ntfy only takes known publishers and keeps its
+# account API, stats and attachments closed; the server's alerts reach a phone account; Gatus raises an alert when the
+# server's heartbeat stops, when its checks do and while its boot-time SSH port is open, and says when each ends; and
+# the server falls back to a second channel when the watcher is gone, and says there when the watcher's ntfy stops
+# answering; a daily publish the way its alerts go tells the watcher when that way is broken. The server and its Flux
+# only take commits signed by a release signer, the server never goes back to an older one, and it alerts when its
+# configuration, or the nixpkgs its release locks, gets old. The server keeps its metrics on loopback behind a password,
+# and its daemons reach nothing else; they read the clock from chrony, and the kubelet with an account that may read its
+# metrics alone, of whose pods they keep only sums per namespace. The server's checks read how old the backups the
+# cluster records are, Ceph's health, Flux's objects, the certificates and the Gateways with an account that reads
+# nothing else, ask the node's addresses for STUN, read what the rules on its metrics find, such as a failed unit, a
+# dataset filling, a tenant's container that keeps restarting or one the kernel kills for memory, and alert once per
+# change, also when the cluster or the rules can't be read. Its etcd snapshots reach both providers encrypted to
+# recovery keys, under a prefix its key can neither leave nor empty; with one provider down they still reach the other,
+# and the phone hears of it. Wiped, the server comes back from a provider's copy through its restore command, with its
+# token file alone; another token leaves a running server's own database in place.
 # Flux's controllers run the digests the release pins for their images' tags, which they can't pull here, out of reach
 # of their registry, and the rules on the server's metrics find those pulls failing.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
@@ -1394,12 +1394,14 @@ pkgs.testers.runNixOSTest {
           another = busybox.split("@")[0] + "@sha256:" + "0" * 64
           refused(f"kubectl -n alpha-hello set image pod/probe probe={another} {deployer}", "egress-labels")
           refused(f"kubectl -n alpha-hello label pod probe suveraen/egress- {deployer}", "egress-labels")
+          # Nor relabel it, which would take a pod from what owns it, and leave it running for good.
+          refused(f"kubectl -n alpha-hello label pod probe probe=x --dry-run=server {deployer}", "egress-labels")
           server.succeed(f"kubectl -n alpha-hello annotate pod probe probe=x {deployer}")
           server.succeed("kubectl -n alpha-hello delete pod probe --wait=false")
           # An app's proxy (components/egress): Flux alone makes its Deployment, the deployment controller its
-          # ReplicaSets and the ReplicaSet controller their pods, and the app's charts change nothing of its spec. The
-          # controllers make its pod as the cluster names them. Its objects have a name of their own, as the mover's pod
-          # may still be on its way out.
+          # ReplicaSets and the ReplicaSet controller their pods, and the app's charts change nothing of what it runs,
+          # nor tell Flux to leave it as it is. The controllers make its pod as the cluster names them. Its objects have
+          # a name of their own, as the mover's pod may still be on its way out.
           proxied = {"suveraen/egress": "internet", "app": "proxy"}
           proxy = template("Deployment", proxied, "proxy")
           proxy_set = template("ReplicaSet", proxied, "proxy")
@@ -1416,6 +1418,15 @@ pkgs.testers.runNixOSTest {
           patch = "kubectl -n alpha-hello patch deployment proxy --dry-run=server"
           refused(f"{patch} --type=json -p {shlex.quote(args)} {deployer}", "egress-labels")
           refused(f"{patch} -p '{{\"spec\":{{\"replicas\":2}}}}' {deployer}", "egress-labels")
+          refused(
+              f"kubectl -n alpha-hello annotate deployment proxy kustomize.toolkit.fluxcd.io/reconcile=disabled"
+              f" --dry-run=server {deployer}",
+              "egress-labels",
+          )
+          refused(
+              f"kubectl -n alpha-hello label pod -l app=proxy app=kept --overwrite --dry-run=server {deployer}",
+              "egress-labels",
+          )
           server.succeed(f"kubectl -n alpha-hello annotate deployment proxy probe=x --dry-run=server {deployer}")
           server.succeed("kubectl -n alpha-hello delete deployment proxy")
           # Nor does Flux give the label to a Deployment the charts made, whose containers its apply would keep.

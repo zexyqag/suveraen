@@ -5,8 +5,9 @@
 # jobs and movers the platform runs carry them, made by Flux, the job and CronJob controllers, CloudNativePG or
 # VolSync, and an app's proxy to the hosts its template lists (components/egress), whose Deployment Flux alone makes,
 # its ReplicaSets the deployment controller and their pods the ReplicaSet controller. A label comes only with the
-# object that carries it: none of them may give one to an object another made, whose containers their apply would
-# keep. Others may still change such an object's metadata, as the garbage collector does.
+# object that carries it: no one but the cluster's admins may give one to an object already made, such as one another
+# made, whose containers a maker's apply would keep. Others may still change such an object's metadata, as the garbage
+# collector does, but not its labels, which would take a pod from what owns it, nor what tells Flux to leave it be.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -49,8 +50,11 @@ spec:
     - name: unchanged
       expression: >-
         request.operation == 'UPDATE' && object.spec == oldObject.spec &&
-        ['suveraen/egress', 'suveraen/object-store'].all(k, (k in variables.labels) == (k in variables.before) &&
-        (!(k in variables.labels) || variables.labels[k] == variables.before[k]))
+        object.metadata.?labels.orValue({}) == oldObject.metadata.?labels.orValue({}) &&
+        ['kustomize.toolkit.fluxcd.io/reconcile', 'kustomize.toolkit.fluxcd.io/ssa'].all(k,
+        (k in object.metadata.?annotations.orValue({})) == (k in oldObject.metadata.?annotations.orValue({})) &&
+        (!(k in object.metadata.?annotations.orValue({})) ||
+        object.metadata.annotations[k] == oldObject.metadata.annotations[k]))
     - name: makers
       expression: >-
         request.resource.resource == 'pods' ? ['system:serviceaccount:kube-system:job-controller',
