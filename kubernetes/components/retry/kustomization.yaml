@@ -1,0 +1,23 @@
+---
+# Every chart: an install or upgrade that fails is tried again every two minutes until it succeeds, never rolled back
+# or uninstalled. helm-controller tries a failed install again as an upgrade, so the two must agree.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      group: helm.toolkit.fluxcd.io
+      kind: HelmRelease
+    patch: |-
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      metadata:
+        name: _
+      spec:
+        install:
+          strategy:
+            name: RetryOnFailure
+            retryInterval: 2m
+        upgrade:
+          strategy:
+            name: RetryOnFailure
+            retryInterval: 2m

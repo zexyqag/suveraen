@@ -12,13 +12,6 @@ spec:
   chartRef:
     kind: HelmChart
     name: volsync
-  install:
-    strategy:
-      name: RetryOnFailure
-      retryInterval: 2m
-  upgrade:
-    remediation:
-      retries: 3
   values:
     # The chart's CRDs are templates: never turned off, or every copy's schedule would go with them.
     manageCRDs: true

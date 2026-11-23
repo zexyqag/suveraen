@@ -1327,12 +1327,6 @@ for dir in kubernetes/clusters/*/; do
           or .spec.serviceAccountName != "flux-deployer" or .spec.install.crds != "Skip" or .spec.upgrade.crds != "Skip"
           or (.spec | has("targetNamespace") or has("storageNamespace"))) | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: app HelmReleases must run as flux-deployer in the app's namespace: $bad"
-        # An app may migrate the database it reaches (components/db-client) as it starts.
-        database=$(yq ea '[select(.kind == "NetworkPolicy" and .metadata.name == "to-postgres")] | length' "$file")
-        bad=$(yq ea '[select(.kind == "HelmRelease" and .spec.upgrade.remediation.strategy != "uninstall")
-          | .metadata.name] | .[]' "$file")
-        [ "$database" = 0 ] || [ -z "$bad" ] || fail "$cluster/$name: an app with a database is uninstalled when an" \
-          "upgrade fails, never rolled back onto what the new release migrated: $bad"
         built=$(cut -d' ' -f1 "$w/charts")
         bad=$(yq ea '[select(.kind == "HelmRelease") | .metadata.name + " "
           + (.spec.chartRef // {} | keys | sort | join(",") | sub("^$", "-")) + " " + (.spec.chartRef.kind // "-") + " "
@@ -1605,14 +1599,13 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           [ -z "$bad" ] || fail "$cluster/$name: a tenant's mesh runs the images checks/netbird.nix pins, in two" \
             "controllers whose pods go before new ones start, as users of their own, logging little, calling nowhere" \
             "and reaching the tenant's PostgreSQL and Kanidm from management alone," \
-            "with no NetBird settings in its environment but its own, and an upgrade that fails is installed again," \
-            "never rolled back; management keeps no default policy, IdP or devices' setup of its own, signs in only" \
-            "with its own Kanidm, by scope openid and on the devices' own ports, asking afresh each time, takes every" \
-            "secret from Secret netbird and names its own host alone; nginx stays in the foreground, routes five" \
-            "paths alone, refuses three, renders the dashboard's pages, clears what clients say of their addresses" \
-            "and logs no access; the scrub runs its tenant's PostgreSQL image, signs in as management does with no" \
-            "secret in its command line, and blanks what the servers' check knows a device reports beyond the mesh's" \
-            "needs: $bad"
+            "with no NetBird settings in its environment but its own; management keeps no default policy, IdP or" \
+            "devices' setup of its own, signs in only with its own Kanidm, by scope openid and on the devices' own" \
+            "ports, asking afresh each time, takes every secret from Secret netbird and names its own host alone;" \
+            "nginx stays in the foreground, routes five paths alone, refuses three, renders the dashboard's pages," \
+            "clears what clients say of their addresses and logs no access; the scrub runs its tenant's PostgreSQL" \
+            "image, signs in as management does with no secret in its command line, and blanks what the servers'" \
+            "check knows a device reports beyond the mesh's needs: $bad"
         fi
         ;;
       ./kubernetes/apps/*/sso)
@@ -2232,6 +2225,15 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     done | sort -u | paste -sd' ')
   [ -z "$bad" ] || fail "$cluster: a HelmRelease sets nothing under an image its chart's record pins, nor anything" \
     "but a map above one: $bad"
+  # helm-controller tries a failed install again as an upgrade, after which a rollback finds nothing to go back to and
+  # an uninstall leaves a release it won't install again: either stops until a person acts. Never rolled back, an app
+  # also never runs an old release on a database the new one has migrated.
+  bad=$(yq ea '[select(.kind == "HelmRelease" and (.spec.install.strategy.name != "RetryOnFailure"
+    or .spec.upgrade.strategy.name != "RetryOnFailure" or .spec.install.remediation != null
+    or .spec.upgrade.remediation != null)) | .metadata.namespace + "/" + .metadata.name] | .[]' "$rendered"/*.yaml \
+    | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: a HelmRelease tries a failed install or upgrade again until it succeeds, never" \
+    "rolling it back or uninstalling it (components/retry): $bad"
   for issuer in public standby; do
     [ "$(yq ea "[select(.kind == \"ClusterIssuer\" and .metadata.name == \"$issuer\")] | length" "$rendered"/*.yaml)" \
       = 1 ] || fail "$cluster: the cluster has one ClusterIssuer public, which every host's certificate names, and" \

@@ -14,13 +14,8 @@ spec:
     name: traefik
   install:
     crds: CreateReplace
-    strategy:
-      name: RetryOnFailure
-      retryInterval: 2m
   upgrade:
     crds: CreateReplace
-    remediation:
-      retries: 3
   values:
     global:
       # Otherwise Traefik asks update.traefik.io for new versions, and Traefik Labs keeps the addresses.

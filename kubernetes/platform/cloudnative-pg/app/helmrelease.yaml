@@ -14,13 +14,8 @@ spec:
     name: cloudnative-pg
   install:
     crds: CreateReplace
-    strategy:
-      name: RetryOnFailure
-      retryInterval: 2m
   upgrade:
     crds: CreateReplace
-    remediation:
-      retries: 3
   values:
     priorityClassName: platform
     config:
@@ -52,13 +47,8 @@ spec:
     - name: cloudnative-pg
   install:
     crds: CreateReplace
-    strategy:
-      name: RetryOnFailure
-      retryInterval: 2m
   upgrade:
     crds: CreateReplace
-    remediation:
-      retries: 3
   values:
     priorityClassName: platform
     resources:

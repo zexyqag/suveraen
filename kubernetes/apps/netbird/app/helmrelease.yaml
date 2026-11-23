@@ -14,10 +14,6 @@ spec:
     kind: HelmChart
     name: app-template-5
     namespace: flux-system
-  upgrade:
-    remediation:
-      # A rollback would run the previous management on a database the new one has migrated.
-      strategy: uninstall
   values:
     controllers:
       netbird:

@@ -14,13 +14,8 @@ spec:
     name: snapshot-controller
   install:
     crds: CreateReplace
-    strategy:
-      name: RetryOnFailure
-      retryInterval: 2m
   upgrade:
     crds: CreateReplace
-    remediation:
-      retries: 3
   values:
     # Removing the chart would otherwise take every VolumeSnapshot with its CRDs.
     keepCRDs: true

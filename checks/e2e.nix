@@ -1067,8 +1067,9 @@ runTest {
 
           with subtest("Every Kustomization and HelmRelease becomes Ready"):
               # The root Kustomization is Ready only once it has created the others, so --all covers them all. A failed
-              # OSD prepare job ends the wait at once, and so, looked for every half minute, does a pod a controller or
-              # an operator couldn't make for Pod Security or pinned-images: the rest of it would only run out.
+              # OSD prepare job ends the wait at once, and so, looked for every half minute, do a pod a controller or an
+              # operator couldn't make for Pod Security or pinned-images and a HelmRelease that stalled, which only a
+              # person resumes (components/retry): the rest of it would only run out.
               admission_refusals = ["violates PodSecurity", "ValidatingAdmissionPolicy 'pinned-images'"]
               refusals_seen = [0.0]
 
@@ -1084,6 +1085,13 @@ runTest {
                           "kubectl get events -A --field-selector reason=FailedCreate -o jsonpath='{.items[*].message}'"
                       )
                       assert code != 0 or not any(by in events for by in admission_refusals), events
+                      code, releases = server.execute(
+                          "kubectl get helmreleases -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}"
+                          "{range .status.conditions[?(@.type==\"Stalled\")]} Stalled={.status} {.reason}: {.message}{end}"
+                          "{\"\\n\"}{end}'"
+                      )
+                      stalled = [line for line in releases.splitlines() if " Stalled=True " in line]
+                      assert code != 0 or not stalled, stalled
                   return server.execute(
                       "kubectl -n flux-system wait kustomization --all --for=condition=Ready --timeout=0"
                   )[0] == 0

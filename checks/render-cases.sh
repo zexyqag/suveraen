@@ -739,6 +739,16 @@ refuses kustomization-other-source "test/gateway-api: Kustomizations apply the r
 refuses chart-template "never from a template of its own: flux-system/volsync" \
   "yq -i 'del(.spec.chartRef) | .spec.chart.spec = {\"chart\": \"./kubernetes/platform/volsync/vendor/volsync\",
    \"sourceRef\": {\"kind\": \"GitRepository\", \"name\": \"suveraen\"}}' platform/volsync/app/helmrelease.yaml"
+retried="test: a HelmRelease tries a failed install or upgrade again until it succeeds, never rolling it back or"
+retried+=" uninstalling it (components/retry):"
+refuses app-remediates "$retried alpha-vaultwarden/vaultwarden" \
+  "yq -i '.spec.upgrade.remediation.strategy = \"uninstall\"' apps/vaultwarden/app/helmrelease.yaml"
+refuses platform-remediates "$retried flux-system/reloader" \
+  "yq -i '.spec.install.remediation.retries = 3' platform/reloader/app/helmrelease.yaml"
+refuses platform-no-retry "$retried flux-system/cert-manager" \
+  "yq -i 'del(.components)' components/platform/kustomization.yaml"
+refuses upgrade-no-retry "$retried alpha-hello/hello" \
+  "sed -i '/^        upgrade:/,\$d' components/retry/kustomization.yaml"
 apprelease="an app's HelmReleases take their chart from a HelmChart the platform builds in flux-system: hello"
 refuses app-chart-other-app "$apprelease" \
   "yq -i '.spec.chartRef.namespace = \"\${TENANT}-kanidm\"' apps/hello/app/helmrelease.yaml"
@@ -1146,8 +1156,6 @@ refuses passthrough-app-for-hello "kubernetes/apps/hello/ks.yaml: a host is \${T
    | (select(documentIndex == 1) | .spec.dependsOn) |= map(select(.name != \"issuer\"))' apps/hello/ks.yaml"
 refuses app-host-elsewhere "kubernetes/apps/vaultwarden/ks.yaml: an app's HOST is the HOST of one of its edges: vault" \
   "yq -i '(select(documentIndex == 1) | .spec.postBuild.substitute.HOST) = \"pass\"' apps/vaultwarden/ks.yaml"
-refuses rollback-onto-database "alpha-vaultwarden: an app with a database is uninstalled when an upgrade fails" \
-  "yq -i 'del(.spec.upgrade)' apps/vaultwarden/app/helmrelease.yaml"
 refuses real-cluster-public-ca "prod: the public issuer's certificates chain to roots the images hold" \
   "$real; yq -i '.data.PUBLIC_CA_BUNDLE = \"eA==\"' clusters/prod/settings.yaml"
 refuses real-cluster-public-ca-empty \

@@ -6,3 +6,5 @@ kind: Component
 resources:
   - ./namespace.yaml
   - ./networkpolicies.yaml
+components:
+  - ../retry

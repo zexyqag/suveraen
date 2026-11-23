@@ -14,13 +14,8 @@ spec:
     name: reloader
   install:
     crds: CreateReplace
-    strategy:
-      name: RetryOnFailure
-      retryInterval: 2m
   upgrade:
     crds: CreateReplace
-    remediation:
-      retries: 3
   values:
     reloader:
       # Restarts only apps; platform pieces are rolled by their own charts.

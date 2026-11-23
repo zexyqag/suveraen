@@ -9,6 +9,8 @@ resources:
   - ./limitrange.yaml
   - ./resourcequota.yaml
   - ./deployer.yaml
+components:
+  - ../retry
 patches:
   - target:
       group: helm.toolkit.fluxcd.io
@@ -23,10 +25,5 @@ patches:
         install:
           # CRDs are cluster-wide; only the platform installs them.
           crds: Skip
-          strategy:
-            name: RetryOnFailure
-            retryInterval: 2m
         upgrade:
           crds: Skip
-          remediation:
-            retries: 3
