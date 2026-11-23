@@ -649,6 +649,7 @@ runTest {
             "example.test".certificates = [
               "hello"
               "netbird"
+              "vault"
             ];
             "one.test".certificates = [
               "@"
