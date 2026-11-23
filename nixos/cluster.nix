@@ -20,6 +20,10 @@ let
   # A tenant's Kustomization can start on a new revision before the root one, cluster, gives it the release's
   # settings. Those then cut short that run's health checks, which would otherwise hold them back for up to its
   # timeout.
+  # A Kustomization holds one of kustomize-controller's workers for as long as it waits on its objects' health, up to
+  # its timeout, and a HelmRelease one of helm-controller's while Helm waits; with Flux's four of each, a few slow
+  # ones, Ceph or a tenant waiting on its apps, held all the rest back for minutes. There is room for many at once
+  # now, and a piece starts within seconds of what it depends on, not up to half a minute later.
   # The controllers, cluster admins all, run the digest the release pins for each image's tag, never what the tag
   # points at by then; `nix run .#flux-images` keeps the table and checks each new digest's signature.
   fluxImages = ./flux-images.json;
@@ -37,9 +41,9 @@ let
         with_entries(select(.key | test("^rbac.authorization.k8s.io/aggregate-to-") | not))
       | (select(.kind == "Deployment" and .metadata.name == "kustomize-controller").spec.template.spec.containers[0].args) +=
         ["--no-cross-namespace-refs=true", "--no-remote-bases=true", "--default-service-account=default",
-         "--feature-gates=CancelHealthCheckOnNewRevision=true"]
+         "--feature-gates=CancelHealthCheckOnNewRevision=true", "--concurrent=20", "--requeue-dependency=5s"]
       | (select(.kind == "Deployment" and .metadata.name == "helm-controller").spec.template.spec.containers[0].args) +=
-        ["--default-service-account=default"]
+        ["--default-service-account=default", "--concurrent=8", "--requeue-dependency=5s"]
       | (select(.kind == "Deployment" and .metadata.name == "notification-controller").spec.template.spec.containers[0].args) +=
         ["--no-cross-namespace-refs=true"]
       | (select(.kind == "Deployment").spec.template.spec.priorityClassName) = "platform"
