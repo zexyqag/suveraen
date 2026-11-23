@@ -1,0 +1,25 @@
+{
+  "state": {"since": {"vault check": 1792669800}},
+  "told": {
+    "vault": {
+      "tenants": [
+        {
+          "tenant": "alpha",
+          "accounts": [
+            {"id": "0a1b2c3d-0000-4000-8000-000000000001", "enabled": true, "devices": 2, "person": "5e6f7a8b-0000-4000-8000-000000000001"},
+            {"id": "0a1b2c3d-0000-4000-8000-000000000002", "enabled": true, "devices": 1, "person": "5e6f7a8b-0000-4000-8000-000000000002"}
+          ],
+          "people": {
+            "5e6f7a8b-0000-4000-8000-000000000001": "unknown",
+            "5e6f7a8b-0000-4000-8000-000000000002": "expired"
+          }
+        },
+        {
+          "tenant": "bravo",
+          "accounts": [{"id": "0a1b2c3d-0000-4000-8000-000000000003", "enabled": true, "devices": 1, "person": "5e6f7a8b-0000-4000-8000-000000000003"}],
+          "people": null
+        }
+      ]
+    }
+  }
+}

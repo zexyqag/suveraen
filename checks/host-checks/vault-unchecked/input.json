@@ -1,0 +1,11 @@
+{
+  "state": {"since": {"vault check": 1792666800}},
+  "told": {
+    "vault": {
+      "tenants": [
+        {"tenant": "alpha", "unchecked": "suveraen-vault: alpha-postgres has no one primary: none"},
+        {"tenant": "bravo", "accounts": [{"id": "0a1b2c3d-0000-4000-8000-000000000003", "enabled": true, "devices": 1, "person": "5e6f7a8b-0000-4000-8000-000000000003"}], "people": {"5e6f7a8b-0000-4000-8000-000000000003": "enabled"}}
+      ]
+    }
+  }
+}

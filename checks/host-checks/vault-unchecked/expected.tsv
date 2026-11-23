@@ -1,0 +1,14 @@
+cluster	evaluated
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+cluster	alpha-vaultwarden leaver	unknown	4	vault leaver still in	unchecked: suveraen-vault: alpha-postgres has no one primary: none	vault leavers out	vault
+cluster	bravo-vaultwarden leaver	ok	4	vault leaver still in	every open account's person still in at Kanidm	vault leavers out	vault
+cluster	vault check	late	4	vault unchecked	every tenant's vault unchecked since 2026-10-22T11:00:00Z (1h 0m ago), limit 30m: nothing told of alpha-vaultwarden leaver	vault checked again	vault
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
+complete	certificates	certificate 
+complete	edges	edge 
+complete	flux	Flux 
+kanidm	judged	{}
+complete	metrics	metric 
+since	state	{"vault check":1792666800}
+checks	done

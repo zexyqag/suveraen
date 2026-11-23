@@ -78,7 +78,12 @@
 # sessions come back with its PostgreSQL and with its volume. A member's phone registers for notifications at a stand-in
 # for Bitwarden's relay, which the vault reaches through its proxy alone, as its tenant's installation there, and tells
 # it of a change by IDs alone, naming no one; its pod reaches the relay no other way, and its proxy takes nothing else
-# out: no other host, address or port, nor a plain request.
+# out: no other host, address or port, nor a plain request. suveraen-vault offboard, by a second Vaultwarden on the
+# vault pod's loopback for the run alone, of which nothing is left after, ends every way into the account of a person
+# Kanidm let go: their phone leaves the relay, their sessions, devices and API key are refused and their Sends closed;
+# erase, by the account's own ID, then leaves no row or file of it, and the vault never restarts. A person Kanidm made
+# again under a new ID gets their account back by relink, as the vault takes none by its mail, and no run closes it
+# while Kanidm lets them in.
 # Kanidm's volume comes back with its people and keys, and with secrets its apps no longer hold, which rotate --all
 # replaces; the server's checks alert once when an app holds a wrong one, or has no pod behind its edges, and when that
 # clears.
@@ -87,8 +92,9 @@
 # records it, its own off-site copies included, none of them late, Flux's objects and every certificate in order, every
 # edge answering it through the gateway, and each mesh within the operator's rules, in a session that takes no write;
 # one more pool still fits, and when it passes its quota's warning they alert once, and once more when that clears, as
-# for an exit, a token and a person who left in a mesh, with the change of who can reach what. Its etcd comes back in
-# place from a provider's copy, decrypted off the server, as it was when copied, and Ceph stays healthy.
+# for an exit, a token and a person who left in a mesh, with the change of who can reach what, and for an account a
+# vault keeps open for a person who left. Its etcd comes back in place from a provider's copy, decrypted off the server,
+# as it was when copied, and Ceph stays healthy.
 {
   pkgs,
   module,
@@ -3010,7 +3016,7 @@ runTest {
           # A tenant's password vault as its members use it, from acme: devices of theirs, each a file of what it holds,
           # which bitwarden speaks Bitwarden's own protocol for, and Kanidm's pages, which signin walks. Every sign-in
           # counts toward the vault's own limit of ten at once, then one a minute, for the one address it sees acme at:
-          # the gateway's pseudonym of it. These sign in seven times.
+          # the gateway's pseudonym of it. These sign in seven times, and four more once the restores are over.
           vw_ns = f"{first}-vaultwarden"
           [vw_host] = hosts_of(first, vw_ns)
           vw_pinned = f"--cacert /tmp/ca.crt --resolve {vw_host}:${server}"
@@ -3863,6 +3869,59 @@ runTest {
               vw_orphans = set(vw_rows) - {f.removeprefix("/data/attachments/") for f in vw_files}
               print("the vault's attachments without their file:", sorted(vw_orphans))
 
+          with subtest("suveraen-vault offboard ends every way into the vault of a person Kanidm let go, by a second Vaultwarden on the vault pod's loopback for the run alone: their phone leaves the relay, their sessions, devices and API key are refused and their Sends closed; erase, by the account's own ID as a run after a restore goes, leaves nothing of the account nor of the second Vaultwarden, and the vault never restarted"):
+              vw_before = server.succeed(vw_pod_state)
+              vw_vera = vw_people["vera"]["uuid"]
+              # Kanidm deleted vera, who is still signed in on every device of hers.
+              for vw_job in ["vera", "vera-phone"]:
+                  assert vw(vw_job, "call", "GET", "/api/accounts/revision-date")["status"] == 200, vw_job
+              # A Send of hers, which anyone with its link opens while it is enabled.
+              vw_send = vw("vera", "call", "POST", "/api/sends", json.dumps({
+                  "type": 0, "key": "2.e2e|e2e|e2e", "name": "2.e2e|e2e|e2e", "text": {"text": "2.e2e|e2e|e2e", "hidden": False},
+                  "deletionDate": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 7 * 86400)), "disabled": False,
+              }))
+              assert vw_send["status"] == 200, vw_send
+              vw_devices = server.succeed(f"{vw_db} \"select count(*) from devices where user_uuid = '{vw_user}'\"").strip()
+              assert int(vw_devices) >= 3, vw_devices
+              vw_listed = server.succeed(f"suveraen-vault users {first}").splitlines()
+              assert vw_listed[1:] == [f"{vw_user}\t{vw_vera}\tenabled\t{vw_devices}\tgone"], vw_listed
+              vw_heard = len(vw_relayed())
+              vw_out = server.succeed(f"suveraen-vault offboard {first} {vw_vera}")
+              assert vw_out == f"{first}: account {vw_user}, of {vw_vera}, offboarded; keep its ID for the deletion record\n", vw_out
+              # The second Vaultwarden unregistered her phone at the relay, as the tenant's installation, and may have told
+              # it of her sign-out, by IDs alone.
+              vw_got = vw_relayed()[vw_heard:]
+              [vw_unregistered] = [r for r in vw_got if r["path"] == "/push/delete"]
+              assert (vw_unregistered["host"], json.loads(vw_unregistered["body"])) == (vw_relay, {"id": vw_push_id}), vw_got
+              assert vw_unregistered["headers"]["authorization"] == vw_bearer, vw_unregistered
+              assert {r["path"] for r in vw_got} <= {"/connect/token", "/push/delete", "/push/send"}, vw_got
+              vw_named = [vw_people["vera"]["mail"], "vera", "Vera"]
+              assert not [r for r in vw_got if any(n in json.dumps(r) for n in vw_named)], vw_got
+              for vw_job in ["vera", "vera-phone"]:
+                  assert vw(vw_job, "call", "GET", "/api/accounts/revision-date")["status"] == 401, vw_job
+              vw_status, vw_out = acme.execute(f"{vw_device('vera', 'refresh')} 2>&1")
+              assert vw_status != 0 and "Invalid refresh token" in vw_out, vw_out
+              vw_status, vw_out = acme.execute(
+                  f"{vw_device('vera-later', 'login', vw_api_key['id'], vw_api_key['secret'], vw_master)} 2>&1"
+              )
+              assert vw_status != 0 and "This user has been disabled (API key login)" in vw_out, vw_out
+              vw_listed = server.succeed(f"suveraen-vault users {first}").splitlines()
+              assert vw_listed[1:] == [f"{vw_user}\t{vw_vera}\tdisabled\t0\tgone"], vw_listed
+              vw_sends = server.succeed(
+                  f"{vw_db} \"select count(*), count(*) filter (where disabled) from sends where user_uuid = '{vw_user}'\""
+              ).strip()
+              assert vw_sends == "1|1", vw_sends
+              vw_out = server.succeed(f"suveraen-vault erase {first} {vw_user}")
+              assert vw_out == f"{first}: account {vw_user}, of {vw_vera}, erased; keep its ID for the deletion record\n", vw_out
+              # She was its only person: none of its tables holds a row, nor its volume a file of hers.
+              vw_left = server.succeed(f"{vw_db} \"select " + " + ".join(
+                  f"(select count(*) from {table})" for table in ["users", "sso_users", "devices", "ciphers", "attachments", "folders", "sends"]
+              ) + "\"").strip()
+              assert vw_left == "0", vw_left
+              assert server.succeed(f"{vw_pod} find /data/attachments -type f") == ""
+              assert server.succeed(f"{vw_pod} pgrep -x vaultwarden").split() == ["1"]
+              assert server.succeed(vw_pod_state) == vw_before
+
           with subtest("Nothing is left of the volumes copies and restores worked on, and tenants' volumes are backed up"):
               server.wait_until_succeeds(
                   "test -z \"$(kubectl get pv -o jsonpath='{.items[?(@.status.phase!=\"Bound\")].metadata.name}')\"",
@@ -3957,7 +4016,7 @@ runTest {
               named = "${nodes.server.networking.hostName}: "
               ours = (
                   "backups ", "Ceph ", "certificate", "cluster status ", "edge", "Flux ", "Kanidm ", "metric", "STUN ", "mesh ",
-                  "still: ", *${builtins.toJSON (map (r: r.title) (lib.attrValues metrics.rules))},
+                  "vault ", "still: ", *${builtins.toJSON (map (r: r.title) (lib.attrValues metrics.rules))},
               )
               heard = []
               for a in alerts():
@@ -4068,6 +4127,12 @@ runTest {
                   "exit", "public", "all", "share", "foreign", "home", "admins", "tokens", "powers", "settings", "floor",
                   "leaver", "scrub", "changed", "check",
               ]} | {"mesh STUN port"}
+              # Each tenant's vault, which keeps no one Kanidm let go.
+              vault_parts = {
+                  f"{n['metadata']['labels']['suveraen/tenant']}-vaultwarden leaver" for n in items("namespaces")
+                  if n["metadata"].get("labels", {}).get("suveraen/app") == "vaultwarden"
+              } | {"vault check"}
+              assert len(vault_parts) > 1, vault_parts
               # Each of Flux's objects and each certificate, which renews in time; the server here never upgrades, so
               # Flux's release has nothing to be held to.
               flux = {
@@ -4090,7 +4155,8 @@ runTest {
               strained.extend(sorted(f"{key}: {findings[key][1]}" for key in late if strains(key)))
               assert all(strains(key) for key in late), {key: findings[key] for key in metric}
               assert findings.keys() - metric == (
-                  before.keys() | archiving | offsite | identities | stun_findings | mesh_parts | flux | certificates | edges
+                  before.keys() | archiving | offsite | identities | stun_findings | mesh_parts | vault_parts | flux
+                  | certificates | edges
                   | {f"{key} suspended" for key in waiting}
                   | {"Ceph status", "cluster status", "etcd-snapshots", "knot-backup"}
               ), findings
@@ -4154,12 +4220,48 @@ runTest {
               ).strip()
               assert who == "netbird|netbird|f", who
 
-          with subtest("A planted exit, a token and a person who left reach the phone once, with the change of access, and so does their fix; once the owner blocks the person, their device is out of the mesh"):
+          with subtest("A person Kanidm made again, under a new ID, gets their vault back once suveraen-vault relinks it, as the vault takes no account by its mail; Kanidm then expires them, which ends none of their devices' sessions"):
+              vw_signed, vw_out = vw_sign_in("vince", "vince")
+              assert vw_signed and json.loads(vw_out)["keys"] is False, vw_out
+              vw_vince = json.loads(vw_out)["user"]
+              assert vw("vince", "set-password", vw_master) == {"mail": vw_people["vince"]["mail"]}
+              as_idm_admin(first)
+              server.succeed(" && ".join(cli(first, c) for c in [
+                  "person delete vince", "person create vince Vince",
+                  f"person update vince --mail {vw_people['vince']['mail']}", "group add-members members vince",
+              ]))
+              vw_again = kanidm(first, "person get vince")["attrs"]["uuid"][0]
+              disable_idm_admin(first)
+              assert vw_again != vw_people["vince"]["uuid"], vw_again
+              vw_people["vince"]["password"] = recovered(first, "vince")
+              vw_signed, vw_out = vw_sign_in("vince-again", "vince")
+              assert not vw_signed and "Existing SSO user with same email" in vw_out, vw_out
+              vw_out = server.succeed(f"suveraen-vault relink {first} {vw_people['vince']['uuid']} {vw_again}")
+              assert vw_out == f"{first}: account {vw_vince} now links to {vw_again}\n", vw_out
+              vw_signed, vw_out = vw_sign_in("vince-again", "vince")
+              assert vw_signed and json.loads(vw_out) == {"user": vw_vince, "keys": True}, vw_out
+              # Kanidm still lets him in, so nothing closes his account, by either of its IDs.
+              for vw_id in [vw_again, vw_vince]:
+                  vw_status, vw_out = server.execute(f"suveraen-vault offboard {first} {vw_id} 2>&1")
+                  assert vw_status != 0 and f"{vw_again} is enabled at {first}'s Kanidm" in vw_out, vw_out
+              assert vw("vince-again", "refresh") == {"user": vw_vince}
+              as_idm_admin(first)
+              server.succeed(cli(first, "person validity expire-at vince now"))
+              disable_idm_admin(first)
+              assert signing_in(first, "vince") == {"denied": "account expired"}
+              vw_signed, vw_out = vw_sign_in("vince-later", "vince")
+              assert not vw_signed, vw_out
+              for vw_job in ["vince", "vince-again"]:
+                  assert vw(vw_job, "refresh") == {"user": vw_vince}, vw_job
+
+          with subtest("A planted exit, a token and a person who left reach the phone once, with the change of access, and so does their fix; once the owner blocks the person, their device is out of the mesh; and the same of a person who left whose vault is still open, until suveraen-vault offboard closes it"):
               mesh_said = [
                   "mesh exit open", "mesh leaver still in", "mesh tokens outside the rules", "mesh access changed",
                   "mesh exits closed", "mesh leavers out", "mesh tokens within the rules again",
               ]
               said = len(checks_said(*mesh_said))
+              vault_said = ["vault leaver still in", "vault leavers out"]
+              vw_said = len(checks_said(*vault_said))
               host = "${nodes.server.networking.hostName}"
               nb_op, nb_bob = nb_people["op"], nb_people["bob"]
               # The owner can make what the rules forbid: a way to everywhere through the box, and a token.
@@ -4183,7 +4285,13 @@ runTest {
                   (f"{host}: mesh exit open; mesh leaver still in; mesh tokens outside the rules; mesh access changed", 4),
               ], checks_said(*mesh_said)[said:]
               assert left in alerts()[-1]["message"], alerts()[-1]
+              vw_open = f"account {vw_vince}, of {vw_again}, expired at Kanidm, is still enabled, with 2 devices"
+              assert findings[f"{vw_ns} leaver"][0] == "late" and vw_open in findings[f"{vw_ns} leaver"][1], findings
+              assert checks_said(*vault_said)[vw_said:] == [(f"{host}: vault leaver still in", 4)], checks_said(*vault_said)
               heard = len(alerts())
+              server.succeed(f"suveraen-vault offboard {first} {vw_again}")
+              for vw_job in ["vince", "vince-again"]:
+                  assert vw(vw_job, "call", "GET", "/api/accounts/revision-date")["status"] == 401, vw_job
               nb("DELETE", f"/api/networks/{nb_network['id']}/resources/{nb_ids['anywhere']}")
               nb("DELETE", f"/api/users/{nb_op['uuid']}/tokens/{nb_ids['token']}")
               nb("PUT", f"/api/users/{nb_bob['uuid']}", {"role": "user", "auto_groups": [nb_bob["own"]], "is_blocked": True})
@@ -4202,6 +4310,8 @@ runTest {
                   heard, [f"{nb_ns} {part}" for part in ["exit", "tokens", "leaver"]],
                   "mesh exits closed; mesh leavers out; mesh tokens within the rules again; mesh access changed", *mesh_said,
               )
+              assert findings[f"{vw_ns} leaver"] == ("ok", "every open account's person still in at Kanidm"), findings
+              checks_cleared(heard, [f"{vw_ns} leaver"], "vault leavers out", *vault_said)
 
           with subtest("A pool past its quota's warning reaches the phone, one more pool still fits, and the alert clears"):
               apply({

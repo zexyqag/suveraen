@@ -18,6 +18,7 @@
     ./metrics.nix
     ./idm.nix
     ./mesh.nix
+    ./vault.nix
     ./offsite.nix
   ];
 }

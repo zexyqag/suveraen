@@ -1,0 +1,4 @@
+{
+  "state": {"since": {"vault check": 1792666800}},
+  "told": {"vault": {"failed": "no answer within 120 seconds", "tenants": null}}
+}

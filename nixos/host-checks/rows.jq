@@ -7,6 +7,9 @@ def time: sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601;
 # A time that may be missing.
 def stamp: if . == null then null else sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601 end;
 
+# A count with what it counts: 1 row, 2 rows.
+def many($one; $more): if . == 1 then "1 \($one)" else "\(.) \($more)" end;
+
 # Seconds as a limit is written: 3d, 26h, 90m.
 def span: if . % 86400 == 0 then "\(. / 86400)d" elif . % 3600 == 0 then "\(. / 3600)h" else "\(. / 60)m" end;
 

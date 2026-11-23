@@ -9,8 +9,6 @@ def release: [. // "" | capture("^v?(?<v>[0-9]+(\\.[0-9]+)*)").v | split(".") | 
 
 def tagged($kind): [capture("^\($kind)-(?<tag>[0-9a-f]{6})$").tag] | first;
 
-def many($one; $more): if . == 1 then "1 \($one)" else "\(.) \($more)" end;
-
 # The parts of a tenant's mesh the operator's rules hold it to, each a finding of its own, with the title it alerts
 # under and the one once it is ok again.
 def meshtitles:

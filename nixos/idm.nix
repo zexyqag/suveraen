@@ -39,6 +39,7 @@ let
       logscan=${./idm-migrations.jq}
       idscan=${./idm-ids.jq}
     ''
+    + builtins.readFile ./tenant-apps.sh
     + builtins.readFile ./idm.sh;
   };
 in

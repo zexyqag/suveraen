@@ -25,6 +25,7 @@ let
       scrubbed=${lib.escapeShellArg (builtins.toJSON cfg.peerColumns.scrubbed)}
       kept=${lib.escapeShellArg (builtins.toJSON cfg.peerColumns.kept)}
     ''
+    + builtins.readFile ./tenant-apps.sh
     + builtins.readFile ./mesh.sh;
   };
   cfg = config.suveraen.mesh;

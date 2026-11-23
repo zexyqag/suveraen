@@ -1,0 +1,13 @@
+cluster	evaluated
+cluster	Kanidm check	ok	4	Kanidm unchecked	every tenant's Kanidm checked	Kanidm checked again	kanidm
+cluster	alpha-vaultwarden leaver	late	4	vault leaver still in	account 0a1b2c3d-0000-4000-8000-000000000002, of 5e6f7a8b-0000-4000-8000-000000000002, expired at Kanidm, is still enabled, with 1 device: run suveraen-vault offboard alpha 0a1b2c3d-0000-4000-8000-000000000002; account 0a1b2c3d-0000-4000-8000-000000000004, linked to no person of the tenant's Kanidm, is still enabled: its link is under another issuer, or it has none; account 0a1b2c3d-0000-4000-8000-000000000005, of 5e6f7a8b-0000-4000-8000-000000000005, gone at Kanidm, is disabled but still with 1 device: run suveraen-vault offboard alpha 0a1b2c3d-0000-4000-8000-000000000005	vault leavers out	vault
+cluster	bravo-vaultwarden leaver	ok	4	vault leaver still in	every open account's person still in at Kanidm	vault leavers out	vault
+cluster	vault check	ok	4	vault unchecked	every tenant's vault checked	vault checked again	vault
+host	cluster status	ok	4	cluster status unreadable	read	cluster status readable again	api
+host	metric rules	ok	4	metric rules unchecked	every rule evaluated	metric rules checked again	metrics
+complete	certificates	certificate 
+complete	edges	edge 
+complete	flux	Flux 
+kanidm	judged	{}
+complete	metrics	metric 
+checks	done

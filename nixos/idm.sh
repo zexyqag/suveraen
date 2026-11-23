@@ -17,7 +17,6 @@ EOF
   exit 2
 }
 
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 # The caller's own client settings could point it elsewhere, or at certificates it shouldn't trust, and a proxy would
 # look the identity hosts up itself.
 unset "${!KANIDM_@}" http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY no_proxy NO_PROXY
@@ -73,13 +72,6 @@ pin() {
 # kanidmd in a tenant's Kanidm pod, which finds the server's admin socket through its settings.
 in_pod() {
   kubectl --request-timeout=60s -n "$1-kanidm" exec kanidm-0 -c app -- /sbin/kanidmd "${@:2}" </dev/null
-}
-
-# Every tenant that runs Kanidm, from its namespace.
-tenants() {
-  kubectl --request-timeout=30s get namespaces -l suveraen/app=kanidm -o json | jq -r '.items[]
-    | (.metadata.labels["suveraen/tenant"] // "") as $t
-    | select(($t | test("^[a-z][a-z0-9]{4}$")) and .metadata.name == "\($t)-kanidm") | $t'
 }
 
 # A tenant's Kanidm at its public name, from its settings, where render holds it to the host alone.
@@ -425,7 +417,7 @@ unchecked() {
 check() {
   local list t origin maps attached ids app client id kind redirect flags applied error state applied_all accounts
   local started migrations clients
-  list=$(tenants) || exit 1
+  list=$(tenants kanidm) || exit 1
   for t in $list; do
     if ! origin=$(origin "$t"); then
       unchecked "$t" "ConfigMap kanidm in $t-kanidm names no single origin"
@@ -484,7 +476,7 @@ check() {
 delegated=(idm_people_on_boarding idm_service_desk)
 
 valid_tenant() {
-  [[ $1 =~ ^[a-z][a-z0-9]{4}$ ]] || usage
+  [[ $1 =~ $tenant_id ]] || usage
 }
 
 [ $# != 0 ] || usage
@@ -523,7 +515,7 @@ case $command in
       list=$1
     else
       lock
-      list=$(tenants)
+      list=$(tenants kanidm)
     fi
     for t in $list; do
       tenant "$t" sync || true
