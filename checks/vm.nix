@@ -349,6 +349,7 @@ pkgs.testers.runNixOSTest {
         [
           "open ${node} 6443"
           "open ${node} 10250"
+          "open ${node} 22"
           # etcd answers on the node's address, but only to the API server.
           "closed ${node} 2379"
         ]
@@ -822,7 +823,7 @@ pkgs.testers.runNixOSTest {
           )
           server.succeed("kubectl -n probe logs dns-probe-host | grep -F 192.0.2.53")
 
-      with subtest("Pods reach only the API server, the kubelet and the resolver on the host"):
+      with subtest("On the host, pods reach the API server, the kubelet, the resolver and what is open to every source, SSH among it"):
           host_ports = ${builtins.toJSON hostPorts}
           probes = " ".join(",".join(line.split()[1:]) for line in host_ports)
           server.succeed(
