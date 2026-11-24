@@ -135,6 +135,41 @@ for name, ctl in (values.get("controllers") or {}).items():
         bad += [f"{n}:{k}" for k in ("envFrom", "command", "args") if x.get(k)]
 print(" ".join(bad))
 '
+# Prints what would have the vault call out beyond its relay and Kanidm, or send clients elsewhere, from the rendered app
+# (a JSON list on stdin): a setting it lacks or one it has in its containers' environment, where Vaultwarden reads each,
+# or in the file <SETTING>_FILE names there, and an environment from elsewhere: Kubernetes', or a file Vaultwarden reads
+# its own from (ENV_FILE), or a saved config that it prefers to its environment, anywhere but on the read-only root.
+vaultconfig='
+import json, re, sys
+docs = [d for d in json.load(sys.stdin) if isinstance(d, dict)]
+release = [d for d in docs if d.get("kind") == "HelmRelease"]
+values = release[0]["spec"]["values"] if len(release) == 1 else {}
+# Icons it would fetch itself, or have clients fetch elsewhere, by the domains of their saved addresses; Duo, with the
+# keys a member gives it; HaveIBeenPwned, asked about the mail of an account; the servers of Yubico, asked about each
+# one-time password; and mail.
+want = {"DISABLE_ICON_DOWNLOAD": "true", "_ENABLE_DUO": "false", "CONFIG_FILE": "/etc/vaultwarden.json"}
+calls = re.compile(r"(HIBP_API_KEY|ICON_SERVICE|YUBICO_.*|SMTP_.*|USE_SENDMAIL|SENDMAIL_COMMAND|ENV_FILE)(_FILE)?")
+bad = []
+held = False
+for name, ctl in (values.get("controllers") or {}).items():
+    containers = {f"{name}/{n}": x for g in ("initContainers", "containers") for n, x in (ctl.get(g) or {}).items()}
+    containers[f"{name}/defaultContainerOptions"] = ctl.get("defaultContainerOptions") or {}
+    for n, x in containers.items():
+        e = x.get("env") or {}
+        if isinstance(e, list):
+            e = {v.get("name"): {k: w for k, w in v.items() if k != "name"} for v in e}
+        e = {k: v["value"] if isinstance(v, dict) and list(v) == ["value"] else v for k, v in e.items()}
+        if n == "vaultwarden/app":
+            held = True
+            bad += [f"{n}:env:{k}" for k, v in want.items() if e.get(k) != v]
+        bad += [f"{n}:env:{k}" for k in sorted(map(str, e))
+                if calls.fullmatch(k) or (k.endswith("_FILE") and k[:-5] in want)]
+        if x.get("envFrom"):
+            bad.append(f"{n}:envFrom")
+if not held:
+    bad.append("vaultwarden/app")
+print(" ".join(bad))
+'
 # Prints what the pods of an app's charts, all app-template's, and of its own Deployments (components/egress) need at
 # their most beyond its namespace's quota, from the rendered app (a JSON list on stdin): each controller's and
 # Deployment's pods, with the one more a rolling update starts, at their requests and limits, the LimitRange's
@@ -1671,6 +1706,13 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           python3 -I -c "$migrationsource" "$cluster" "$t" kanidm-migrations kanidm \
             <(yq ea -o=json -I=0 '[select(.kind == "ConfigMap" and .metadata.name == "kanidm-migrations")] | .[0]' \
               "$file") <(echo '[]') <(echo '[]') >>"$work/migrations.jsonl"
+        fi
+        if [ "$app" = vaultwarden ]; then
+          bad=$(yq ea -o=json -I=0 '[.]' "$file" | python3 -I -c "$vaultconfig")
+          [ -z "$bad" ] || fail "$cluster/$name: the vault fetches no icon nor sends clients elsewhere for one, asks" \
+            "Duo, HaveIBeenPwned and Yubico nothing and sends no mail: vaultwarden/app sets DISABLE_ICON_DOWNLOAD" \
+            "\"true\", _ENABLE_DUO \"false\" and CONFIG_FILE /etc/vaultwarden.json, no container sets the others," \
+            "and none takes its environment from elsewhere: $bad"
         fi
         if [ "$app" = netbird ]; then
           # One host: Kanidm's own rules hold it to one, and the mesh's sign-in waits for Kanidm.

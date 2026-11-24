@@ -1228,6 +1228,16 @@ refuses app-host-elsewhere "kubernetes/apps/vaultwarden/ks.yaml: an app's HOST i
 # A tenant's vault reaches Bitwarden's relay as the tenant's own installation there, which nothing stands in for.
 refuses vault-installation-missing "test/alpha-vaultwarden doesn't render" \
   "sed -i '/VAULTWARDEN_PUSH_INSTALLATION_KEY/d' $T/alpha/secrets.yaml"
+# The vault calls out to its relay and Kanidm alone, and sends clients nowhere else.
+vault="no container sets the others, and none takes its environment from elsewhere: vaultwarden/app"
+W=apps/vaultwarden/app/helmrelease.yaml
+VW=.spec.values.controllers.vaultwarden.containers.app
+refuses vault-icon-download "$vault:env:DISABLE_ICON_DOWNLOAD" "yq -i '$VW.env.DISABLE_ICON_DOWNLOAD = \"false\"' $W"
+refuses vault-hibp "$vault:env:HIBP_API_KEY" "yq -i '$VW.env.HIBP_API_KEY = \"x\"' $W"
+refuses vault-hibp-file "$vault:env:HIBP_API_KEY_FILE" "yq -i '$VW.env.HIBP_API_KEY_FILE = \"/data/hibp\"' $W"
+refuses vault-env-from "$vault:envFrom" "yq -i '$VW.envFrom = [{\"secretRef\": {\"name\": \"vaultwarden\"}}]' $W"
+refuses vault-env-file "$vault:env:ENV_FILE" "yq -i '$VW.env.ENV_FILE = \"/data/.env\"' $W"
+refuses vault-config-file "$vault:env:CONFIG_FILE" "yq -i 'del($VW.env.CONFIG_FILE)' $W"
 refuses real-cluster-public-ca "prod: the public issuer's certificates chain to roots the images hold" \
   "$real; yq -i '.data.PUBLIC_CA_BUNDLE = \"eA==\"' clusters/prod/settings.yaml"
 refuses real-cluster-public-ca-empty \
