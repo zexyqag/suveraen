@@ -10,9 +10,9 @@
 # node plugin at the node's priority, above every pod with a volume. Each tenant runs in exactly the
 # namespaces its manifest asks for, and hello answers on each of its hosts with that tenant's own settings and restarts
 # when they change; a tenant's pods reach neither other tenants' services nor the gateway's, nor on their own node the
-# API server, the resolver or SSH, and nothing outside reaches theirs; tenants can't take each other's namespaces or
-# hosts or keep Gateways outside the gateway namespace, and stay within their quota; a host's key goes with its
-# certificate; removing a tenant takes its Kustomizations, hosts, keys
+# API server, the resolver or SSH, and nothing outside reaches theirs or Flux's; tenants can't take each other's
+# namespaces or hosts or keep Gateways outside the gateway namespace, and stay within their quota; a host's key goes
+# with its certificate; removing a tenant takes its Kustomizations, hosts, keys
 # and pods but leaves its namespaces, which then go by its label; and an unsigned commit is never applied. Ceph runs
 # healthy with three monitors and an encrypted OSD per disk, its DB on a volume of its own mirrored over both system
 # disks, three copies on every pool and as many placement groups as its OSDs and pools call for, with room for one more
@@ -1865,7 +1865,7 @@ runTest {
               # A tenant may serve its own domain itself.
               assert any(domains[t] in hosts for t, hosts in hello.items()), domains
 
-          with subtest("A tenant's pods reach its own services but no other tenant's or the gateway's, and nothing else reaches them"):
+          with subtest("A tenant's pods reach its own services but no other tenant's or the gateway's, and nothing else reaches them or Flux's"):
               def url(namespace, service, port):
                   return f"http://{service}.{namespace}.svc:{port}/"
 
@@ -1945,6 +1945,7 @@ runTest {
               for tenant in tenants:
                   for backend in backends(tenant):
                       blocked(f"{outside} {url(*backend)}")
+              blocked(f"{outside} http://source-controller.flux-system.svc/")
 
           with subtest("Tenants can't take each other's namespaces or hosts, keep Gateways outside the gateway, or outgrow their quota"):
               def denied_by(cmd, reason):

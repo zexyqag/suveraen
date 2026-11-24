@@ -946,6 +946,13 @@ refuses helmrelease-kube-system "$kubesystem" \
 refuses object-kube-system "$kubesystem" \
   "append platform/reloader/app/helmrelease.yaml '---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x
   namespace: kube-system\n'"
+fluxsystem="test: flux-system's network policies are the servers' alone, so the release makes none there"
+refuses networkpolicy-flux-system "$fluxsystem and installs no chart there: NetworkPolicy/flux-system/x" \
+  "append platform/reloader/app/helmrelease.yaml '---\napiVersion: networking.k8s.io/v1\nkind: NetworkPolicy
+metadata:\n  name: x\n  namespace: flux-system\nspec:\n  podSelector: {}\n  policyTypes: [Egress]\n  egress:
+    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n'"
+refuses helmrelease-flux-system "$fluxsystem and installs no chart there: HelmRelease/flux-system/reloader" \
+  "yq -i 'del(.spec.targetNamespace)' platform/reloader/app/helmrelease.yaml"
 
 # Tenants' databases.
 C=apps/postgres/cluster/cluster.yaml

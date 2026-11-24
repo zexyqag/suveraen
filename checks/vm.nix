@@ -30,6 +30,8 @@
 # token file alone; another token leaves a running server's own database in place.
 # Flux's controllers run the digests the release pins for their images' tags, which they can't pull here, out of reach
 # of their registry, and the rules on the server's metrics find those pulls failing.
+# Flux's namespace holds the server's network policies alone, under which its pods reach the cluster's DNS and, of
+# the host, the API server alone.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -834,6 +836,50 @@ pkgs.testers.runNixOSTest {
           )
           ports = server.succeed("kubectl -n probe logs host-ports").splitlines()
           assert not [line for line in host_ports if line not in ports], ports
+
+      with subtest("Flux's namespace holds the server's network policies alone, under which its pods reach the cluster's DNS and, of the host, the API server alone"):
+          names = "kubectl -n flux-system get networkpolicy -o jsonpath='{.items[*].metadata.name}'"
+          api = "api-server-${nodes.server.networking.hostName}"
+          want = sorted([api, "default-deny", "dns", "repository", "same-namespace"])
+          # k3s applies its manifests one by one.
+          server.wait_until_succeeds(f"kubectl -n flux-system get networkpolicy {' '.join(want)}", timeout=120)
+          policies = sorted(server.succeed(names).split())
+          assert policies == want, policies
+          # The repository's URL is https:// and names no port.
+          ports = server.succeed(
+              "kubectl -n flux-system get networkpolicy repository -o jsonpath='{.spec.egress[*].ports[*].port}'"
+          ).split()
+          assert ports == ["443"], ports
+          # A pod in Flux's namespace, which ends when told to. Of what a pod in the probe namespace, which no policy
+          # holds, reaches on the host above, it reaches the API server alone.
+          sleeping = pod("flux-system")
+          sleeping["spec"]["containers"][0]["command"] = ["sh", "-c", "trap exit TERM; sleep 3600 & wait"]
+          server.succeed(f"echo {shlex.quote(json.dumps(sleeping))} | kubectl create -f -")
+          server.succeed("kubectl -n flux-system wait pod probe --for=condition=Ready --timeout=120s")
+
+          def try_port(target):
+              return server.execute(
+                  f"kubectl -n flux-system exec probe -- sh -c 'timeout 10 nc -w 3 {target} </dev/null' 2>&1"
+              )
+
+          # k3s's policy controller puts in a new pod's own rules a moment after the pod starts: each refusal is
+          # waited for, and what the pod still reaches is tried once its rules hold it.
+          def kept_out(target):
+              def check(last):
+                  status, out = try_port(target)
+                  ok = status != 0 and "Connection refused" in out
+                  assert ok or not last, (target, status, out)
+                  return ok
+
+              return check
+
+          server_ip = "${nodes.server.networking.primaryIPAddress}"
+          for target in [f"{server_ip} 10250", "${nodes.server.suveraen.cluster.nodeServices.resolver} 53"]:
+              retry(kept_out(target), timeout_seconds=120)
+          status, out = try_port(f"{server_ip} 6443")
+          assert status == 0, (status, out)
+          server.succeed("kubectl -n flux-system exec probe -- nslookup probe.test. | grep -F 192.0.2.53")
+          server.succeed("kubectl -n flux-system delete pod probe")
 
       with subtest("A load balancer with local traffic policy hands pods the client's own address"):
           # As the gateway's Service is (platform/gateway): ServiceLB only publishes the node's addresses, and

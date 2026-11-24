@@ -2113,6 +2113,13 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     | grep -vxF ConfigMap/kube-system/coredns-custom | paste -sd' ' || true)
   [ -z "$bad" ] || fail "$cluster: kube-system is k3s's own, where the release puts nothing but the cluster DNS's" \
     "names, and installs no chart: $bad"
+  # The servers give flux-system its network policies, which one of the release's would add to, as would one in a
+  # chart, which render can't see. A chart installed elsewhere may still name flux-system for what it renders.
+  bad=$(yq ea '[select((.kind == "NetworkPolicy" and .metadata.namespace == "flux-system") or (.kind == "HelmRelease"
+    and (.spec.targetNamespace // .metadata.namespace) == "flux-system"))
+    | .kind + "/" + .metadata.namespace + "/" + .metadata.name] | .[]' "$rendered"/*.yaml | paste -sd' ')
+  [ -z "$bad" ] || fail "$cluster: flux-system's network policies are the servers' alone, so the release makes none" \
+    "there and installs no chart there: $bad"
   # Apps reach their tenant's Kanidm at its public name, which the cluster's DNS answers with Kanidm's Service. k3s
   # reads the *.override keys of coredns-custom into CoreDNS.
   yq ea '[select(.kind == "ConfigMap" and .metadata.namespace == "kube-system" and .metadata.name == "coredns-custom")]

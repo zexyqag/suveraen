@@ -8,6 +8,7 @@
 let
   cfg = config.suveraen.cluster;
   source = config.suveraen.source;
+  inherit (config.networking) hostName;
   snapshots = cfg.etcdSnapshots;
   snapshotDir = "/var/lib/rancher/k3s/server/db/snapshots";
 
@@ -26,6 +27,8 @@ let
   # now, and a piece starts within seconds of what it depends on, not up to half a minute later.
   # The controllers, cluster admins all, run the digest the release pins for each image's tag, never what the tag
   # points at by then; `nix run .#flux-images` keeps the table and checks each new digest's signature.
+  # Its network policies let its pods reach anything and any pod their metrics and webhooks; the server's take their
+  # place in the same manifest, so that k3s puts in the one as it prunes the other.
   fluxImages = ./flux-images.json;
   fluxImage = ''select(.kind == "Deployment") | .. | select(tag == "!!map" and has("image")) | .image'';
   fluxComponents = pkgs.runCommand "flux-components.yaml" { } ''
@@ -48,7 +51,9 @@ let
         ["--no-cross-namespace-refs=true"]
       | (select(.kind == "Deployment").spec.template.spec.priorityClassName) = "platform"
       | (${fluxImage}) |= . + "@" + load("${fluxImages}")[.]
+      | select(.kind != "NetworkPolicy")
     ' install.yaml > $out
+    cat ${fluxPolicies} >> $out
   '';
 
   # Every pod must meet the "restricted" Pod Security Standard unless the platform labels its namespace otherwise;
@@ -112,7 +117,110 @@ let
   }";
 
   inherit (cfg.nodeServices) resolver;
+  apiPort = 6443;
   kubeletPort = 10250;
+  v4 = lib.filter (cidr: !lib.hasInfix ":" cidr);
+  v6 = lib.filter (lib.hasInfix ":");
+
+  # The repository's URL as its scheme and authority, and the port source-controller fetches it at.
+  repository = builtins.match "([A-Za-z][A-Za-z0-9+.-]*)://([^/?#]*).*" (toString source.repository);
+  schemePorts = {
+    http = 80;
+    https = 443;
+  };
+  repositoryPort =
+    let
+      explicit = builtins.match ".*:([0-9]+)" (lib.last (lib.splitString "@" (lib.elemAt repository 1)));
+    in
+    if explicit != null then lib.toInt (lib.head explicit) else schemePorts.${lib.toLower (lib.head repository)};
+
+  fluxPolicy = name: spec: {
+    apiVersion = "networking.k8s.io/v1";
+    kind = "NetworkPolicy";
+    metadata = {
+      inherit name;
+      namespace = "flux-system";
+    };
+    inherit spec;
+  };
+
+  # Flux's pods reach one another, the cluster's DNS and the API server, and source-controller also the repository's
+  # port anywhere but the cluster's pods and Services and link-local addresses; nothing but one another and the node
+  # reaches them, as nothing reads their metrics and no Receiver takes webhooks. The nodes' own addresses stay in: the
+  # release's cluster settings hold the nodes (NODE_CIDR), a server knows only its own, and these are the same on every
+  # server.
+  fluxPolicies = pkgs.writeText "flux-policies.yaml" (
+    lib.concatMapStrings (policy: "---\n${builtins.toJSON policy}\n") [
+      (fluxPolicy "default-deny" {
+        podSelector = { };
+        policyTypes = [
+          "Ingress"
+          "Egress"
+        ];
+      })
+      (fluxPolicy "same-namespace" {
+        podSelector = { };
+        policyTypes = [
+          "Ingress"
+          "Egress"
+        ];
+        ingress = [ { from = [ { podSelector = { }; } ]; } ];
+        egress = [ { to = [ { podSelector = { }; } ]; } ];
+      })
+      (fluxPolicy "dns" {
+        podSelector = { };
+        policyTypes = [ "Egress" ];
+        egress = [
+          {
+            to = [
+              {
+                namespaceSelector.matchLabels."kubernetes.io/metadata.name" = "kube-system";
+                podSelector.matchLabels.k8s-app = "kube-dns";
+              }
+            ];
+            ports = [
+              {
+                protocol = "UDP";
+                port = 53;
+              }
+              {
+                protocol = "TCP";
+                port = 53;
+              }
+            ];
+          }
+        ];
+      })
+      (fluxPolicy "repository" {
+        podSelector.matchLabels.app = "source-controller";
+        policyTypes = [ "Egress" ];
+        egress = [
+          {
+            to = [
+              {
+                ipBlock = {
+                  cidr = "0.0.0.0/0";
+                  except = v4 (podCIDRs ++ serviceCIDRs) ++ [ "169.254.0.0/16" ];
+                };
+              }
+              {
+                ipBlock = {
+                  cidr = "::/0";
+                  except = v6 (podCIDRs ++ serviceCIDRs) ++ [ "fe80::/10" ];
+                };
+              }
+            ];
+            ports = [
+              {
+                protocol = "TCP";
+                port = repositoryPort;
+              }
+            ];
+          }
+        ];
+      })
+    ]
+  );
 
   # k3s may say it has started before its runtime answers.
   crictl = pkgs.writeShellApplication {
@@ -316,7 +424,7 @@ in
     };
 
     nodeIP = lib.mkOption {
-      type = lib.types.listOf lib.types.str;
+      type = lib.types.nonEmptyListOf lib.types.str;
       example = [
         "203.0.113.10"
         "2001:db8::1"
@@ -498,6 +606,14 @@ in
         assertion = !metrics.enable || tenancy != null;
         message = "kubernetes/platform/policies/app/tenant-namespaces.yaml no longer tells a tenant's namespaces as cluster.nix reads it for the metrics.";
       }
+      {
+        assertion = source.repository == null || repository != null && schemePorts ? ${lib.toLower (lib.head repository)};
+        message = "suveraen.source.repository must be an http:// or https:// URL, whose port alone Flux's pods may reach outside the cluster.";
+      }
+      {
+        assertion = builtins.match "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?" hostName != null;
+        message = "networking.hostName must be a lowercase DNS label, as it names this server's own network policy for Flux's pods.";
+      }
     ];
 
     services.k3s = {
@@ -636,6 +752,26 @@ in
               secretRef.name = "sops-age";
             };
           };
+        };
+        # Policies add up, so each server opens its own addresses, under a name of its own: a pod's policies hold its
+        # way to the API server on its own node too. k3s applies its manifests in the order of their names, so this
+        # one comes after flux-components, which makes the namespace.
+        "flux-node-${hostName}".content = fluxPolicy "api-server-${hostName}" {
+          podSelector = { };
+          policyTypes = [ "Egress" ];
+          egress = [
+            {
+              to = map (address: {
+                ipBlock.cidr = "${address}/${if lib.hasInfix ":" address then "128" else "32"}";
+              }) cfg.nodeIP;
+              ports = [
+                {
+                  protocol = "TCP";
+                  port = apiPort;
+                }
+              ];
+            }
+          ];
         };
       };
     };
@@ -1013,14 +1149,12 @@ in
     # (dns.nix); nothing else there.
     networking.firewall.extraInputRules =
       let
-        v4 = lib.filter (cidr: !lib.hasInfix ":" cidr) podCIDRs;
-        v6 = lib.filter (lib.hasInfix ":") podCIDRs;
         set = cidrs: "{ ${lib.concatStringsSep ", " cidrs} }";
       in
       ''
-        ip saddr ${set v4} tcp dport { 6443, ${toString kubeletPort} } accept
-        ip6 saddr ${set v6} tcp dport { 6443, ${toString kubeletPort} } accept
-        ip saddr ${set v4} ip daddr ${resolver} meta l4proto { tcp, udp } th dport 53 accept
+        ip saddr ${set (v4 podCIDRs)} tcp dport { ${toString apiPort}, ${toString kubeletPort} } accept
+        ip6 saddr ${set (v6 podCIDRs)} tcp dport { ${toString apiPort}, ${toString kubeletPort} } accept
+        ip saddr ${set (v4 podCIDRs)} ip daddr ${resolver} meta l4proto { tcp, udp } th dport 53 accept
       '';
     networking.firewall.allowedTCPPorts = webPorts;
     networking.firewall.allowedUDPPorts = lib.optional (stun.port != null) stun.port;
