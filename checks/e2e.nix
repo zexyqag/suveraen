@@ -1751,12 +1751,17 @@ runTest {
               def url(namespace, service, port):
                   return f"http://{service}.{namespace}.svc:{port}/"
 
-              def blocked(cmd):
+              def blocked(cmd, timeout=0):
                   # Refused, or dropped before curl connected: not a name that doesn't resolve, a probe that didn't run,
                   # nor a server that took too long to answer. The count ends its line, as kubectl exec writes its own
                   # straight after it.
-                  status, out = server.execute(f"{cmd} -w ' connects=%{{num_connects}}\\n' 2>&1")
-                  assert status == 7 or (status == 28 and "connects=0" in out.split()), (cmd, status, out)
+                  def refused(last):
+                      status, out = server.execute(f"{cmd} -w ' connects=%{{num_connects}}\\n' 2>&1")
+                      ok = status == 7 or (status == 28 and "connects=0" in out.split())
+                      assert ok or not last, (cmd, status, out)
+                      return ok
+
+                  retry(refused, timeout_seconds=timeout)
 
               home, service, port = backends(first)[0]
               # The app's image has curl, so the probes outside the tenants use it too.
@@ -1940,7 +1945,9 @@ runTest {
                   server.succeed("kubectl -n gateway delete pod probe")
                   # From a pod labelled as management's, its own Kanidm at the public name and its own PostgreSQL, once
                   # the policies know the pod; from one labelled as the edge's, which faces the internet, neither, once
-                  # it gets through to the edge's Service; and from either, nothing else.
+                  # it gets through to the edge's Service; and from either, nothing else. k3s's policy controller adds a
+                  # new pod to the policies that let it in before it puts in the pod's own, so for a moment the pod
+                  # reaches what only its own refuse: those probes wait for the refusal.
                   for controller in ["management", "netbird"]:
                       apply(restricted(
                           mesh_ns, "inside", "sleep 3600", {"app.kubernetes.io/controller": controller}, resources=light
@@ -1958,13 +1965,13 @@ runTest {
                           assert "connects=1" in out.split(), (status, out)
                       else:
                           server.wait_until_succeeds(f"{inside_mesh} -f -k {mesh_edge}", timeout=120)
-                          blocked(f"{inside_mesh} {mesh_kanidm}")
-                          blocked(f"{inside_mesh} {mesh_postgres}")
+                          blocked(f"{inside_mesh} {mesh_kanidm}", timeout=120)
+                          blocked(f"{inside_mesh} {mesh_postgres}", timeout=120)
                       for t in tenants:
                           if t != mesh_t:
                               blocked(f"{inside_mesh} -k https://{idm[t]}/status")
-                      blocked(f"{inside_mesh} https://acme.test/")
-                      blocked(f"{inside_mesh} http://forge.test/")
+                      blocked(f"{inside_mesh} https://acme.test/", timeout=120)
+                      blocked(f"{inside_mesh} http://forge.test/", timeout=120)
                       server.succeed(f"kubectl -n {mesh_ns} delete pod inside")
 
           with subtest("Lines a client has Kanidm log, as it logs what a client sends as it is, never count as a run of its migrations"):
