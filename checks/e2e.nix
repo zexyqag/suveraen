@@ -370,6 +370,11 @@ runTest {
   name = "suveraen-e2e";
   inherit globalTimeout;
 
+  # nixpkgs gives test machines acpi_pm as their clock, each read of which leaves the machine for QEMU; the runners
+  # nest these machines in their own, where that costs far more, and Kubernetes reads the clock all the time. The last
+  # clocksource= given wins.
+  defaults.boot.kernelParams = lib.mkAfter [ "clocksource=kvm-clock" ];
+
   nodes.forge =
     { nodes, ... }:
     {
