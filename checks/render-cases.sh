@@ -1005,10 +1005,16 @@ refuses namespace-without-app "labelled suveraen/tier=app, suveraen/tenant=alpha
 
 # Off-site copies.
 internet="the network policy internet opens web ports to all but the cluster's own pods, Services and nodes"
-refuses internet-other-port "$internet" "sed -i 's/port: 443/port: 22/' components/app/internet.yaml"
-refuses internet-link-local "$internet" "sed -i '/169.254.0.0/d' components/app/internet.yaml"
-refuses internet-own-pods "$internet" "sed -i '/POD_CIDR_V6/d' components/app/internet.yaml"
-refuses internet-for-all "$internet" "yq -i '.spec.podSelector = {}' components/app/internet.yaml"
+refuses internet-other-port "$internet" "sed -i 's/port: 443/port: 22/' components/internet/internet.yaml"
+refuses internet-link-local "$internet" "sed -i '/169.254.0.0/d' components/internet/internet.yaml"
+refuses internet-own-pods "$internet" "sed -i '/POD_CIDR_V6/d' components/internet/internet.yaml"
+refuses internet-for-all "$internet" "yq -i '.spec.podSelector = {}' components/internet/internet.yaml"
+renders internet-platform "sed -i 's|^    - ../../../components/platform\$|&\n    - ../../../components/internet|' \
+  platform/cert-manager/ks.yaml"
+refuses internet-platform-other "test/reloader: $internet" \
+  "append platform/reloader/app/helmrelease.yaml '---\napiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:
+  name: internet\n  namespace: reloader\nspec:\n  podSelector: {}\n  policyTypes: [Egress]\n  egress:\n    - to:
+        - ipBlock:\n            cidr: 0.0.0.0/0\n'"
 api="the network policy api-server opens the API server on the nodes to CloudNativePG's pods"
 refuses api-server-other-port "$api" "sed -i 's/port: 6443/port: 10250/' apps/postgres/app/networkpolicies.yaml"
 refuses api-server-all-pods "$api" \

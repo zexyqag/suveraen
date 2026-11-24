@@ -1098,6 +1098,8 @@ pinned() { # release, values path
   jq -r --arg path "$2" 'first(.images[]? | select(any(.values[]; . == $path)) | .image + ":" + .tag + "@" + .digest)
     // "none"' "$tree.json" 2>/dev/null || echo none
 }
+# A value the Kustomization being checked substitutes, or none.
+v() { yq ".$1 // \"\"" "$w/$name.vars.yaml"; }
 # The Kustomizations a render creates, each after the one that rendered it, to render in turn. Flux applies nothing but
 # the release, which the servers give it as GitRepository suveraen.
 spawned() { # parent, its render
@@ -1871,6 +1873,20 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
         ;;
       *) fail "$cluster/$name: Kustomizations apply kubernetes/platform, a tenant, an app or a host, not $path" ;;
     esac
+    # The way to the internet is components/internet's policy, in every Kustomization that takes it, for what the
+    # cluster's own ranges leave out.
+    internet=$(yq ea -o=json -I=0 '[select(.kind == "NetworkPolicy" and .metadata.name == "internet")
+      | .spec | sort_keys(..)] | .[]' "$file")
+    if [ -n "$internet" ]; then
+      want='{"egress":[{"ports":[{"port":80,"protocol":"TCP"},{"port":443,"protocol":"TCP"}],"to":[{"ipBlock":'
+      want+='{"cidr":"0.0.0.0/0","except":["'$(v POD_CIDR_V4)'","'$(v SERVICE_CIDR_V4)'","'$(v NODE_CIDR_V4)'",'
+      want+='"169.254.0.0/16"]}},{"ipBlock":{"cidr":"::/0","except":["'$(v POD_CIDR_V6)'","'$(v SERVICE_CIDR_V6)'","'
+      want+=$(v NODE_CIDR_V6)'","fe80::/10"]}}]}],"podSelector":{"matchLabels":{"suveraen/egress":"internet"}},'
+      want+='"policyTypes":["Egress"]}'
+      bad=$(grep -vxF "$want" <<<"$internet" || true)
+      [ -z "$bad" ] || fail "$cluster/$name: the network policy internet opens web ports to all but the cluster's own" \
+        "pods, Services and nodes, for pods labelled suveraen/egress=internet: $bad"
+    fi
     case $path in
       ./kubernetes/apps/* | ./kubernetes/edge/*)
         # Backups say how old they may get, which the servers hold them to.
@@ -1885,18 +1901,6 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           | select([((.spec.ingress // [])[] | (.from // [])), ((.spec.egress // [])[] | (.to // []))]
             | any_c(length == 0 or any_c((keys | length) == 0))) | .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: a network policy rule without peers reaches everything: $bad"
-        # The way to the internet is components/app's policy internet alone, for what the cluster's own ranges leave out.
-        vars=$w/$name.vars.yaml
-        v() { yq ".$1 // \"\"" "$vars"; }
-        want='{"egress":[{"ports":[{"port":80,"protocol":"TCP"},{"port":443,"protocol":"TCP"}],"to":[{"ipBlock":'
-        want+='{"cidr":"0.0.0.0/0","except":["'$(v POD_CIDR_V4)'","'$(v SERVICE_CIDR_V4)'","'$(v NODE_CIDR_V4)'",'
-        want+='"169.254.0.0/16"]}},{"ipBlock":{"cidr":"::/0","except":["'$(v POD_CIDR_V6)'","'$(v SERVICE_CIDR_V6)'","'
-        want+=$(v NODE_CIDR_V6)'","fe80::/10"]}}]}],"podSelector":{"matchLabels":{"suveraen/egress":"internet"}},'
-        want+='"policyTypes":["Egress"]}'
-        bad=$(yq ea -o=json -I=0 '[select(.kind == "NetworkPolicy" and .metadata.name == "internet")
-          | .spec | sort_keys(..)] | .[]' "$file" | grep -vxF "$want" || true)
-        [ -z "$bad" ] || fail "$cluster/$name: the network policy internet opens web ports to all but the cluster's own" \
-          "pods, Services and nodes, for pods labelled suveraen/egress=internet: $bad"
         # The way to the API server on the nodes, for CloudNativePG's pods alone.
         want='{"egress":[{"ports":[{"port":6443,"protocol":"TCP"}],"to":[{"ipBlock":{"cidr":"'$(v NODE_CIDR_V4)'"}},'
         want+='{"ipBlock":{"cidr":"'$(v NODE_CIDR_V6)'"}}]}],"podSelector":{"matchExpressions":[{"key":"cnpg.io/cluster",'

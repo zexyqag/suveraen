@@ -1,5 +1,5 @@
 ---
-# Two pod labels open a way out of a tenant's namespace: suveraen/egress to the internet (components/app) and
+# Two pod labels open a way out of a tenant's namespace: suveraen/egress to the internet (components/internet) and
 # suveraen/object-store to the cluster's object store (apps/postgres). An app's charts, which run as its namespace's
 # deployer, must not hand them to their own pods, nor change what a pod or job that carries one runs: only the backup
 # jobs and movers the platform runs carry them, made by Flux, the job and CronJob controllers, CloudNativePG or

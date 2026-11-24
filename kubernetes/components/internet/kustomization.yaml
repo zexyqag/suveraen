@@ -1,0 +1,9 @@
+---
+# The one way to the internet, from an app's namespace (components/app) or a platform piece's that takes it: web ports
+# anywhere but the cluster's own pods, Services and nodes and link-local addresses, for pods labelled
+# suveraen/egress=internet. In a tenant's namespace only the platform's backup jobs and movers and an app's egress
+# proxy (components/egress) may carry the label (platform/policies/egress-labels).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - ./internet.yaml

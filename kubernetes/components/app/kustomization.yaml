@@ -6,11 +6,11 @@ kind: Component
 resources:
   - ./namespace.yaml
   - ./networkpolicies.yaml
-  - ./internet.yaml
   - ./limitrange.yaml
   - ./resourcequota.yaml
   - ./deployer.yaml
 components:
+  - ../internet
   - ../retry
 patches:
   - target:

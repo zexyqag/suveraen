@@ -1,7 +1,7 @@
 ---
 # For an app that calls hosts on the internet: egress, a proxy in its namespace on port 3128, which tunnels HTTPS
 # (CONNECT) to the hosts the app's template lists in EGRESS_HOSTS, a JSON list of <name>:443, and refuses every other.
-# Beside the platform's backup jobs, it alone reaches the internet from the namespace (components/app). What it
+# Beside the platform's backup jobs, it alone reaches the internet from the namespace (components/internet). What it
 # runs, its hosts included, is in its Deployment's pod template, which only Flux changes while its pod reaches the
 # internet (platform/policies/app/egress-labels).
 apiVersion: kustomize.config.k8s.io/v1alpha1
