@@ -153,6 +153,24 @@ let
   # which a stand-in on the internet node answers at an address of its own.
   pushRelayZone = "relay.test";
   pushRelayAddress = "192.168.1.110";
+  # The standby CA as the test cluster knows it: on port 443, as a real CA is, at an address of its own on the internet
+  # node, under a certificate from nixpkgs' test CA for its name alone.
+  standbyHost = "acme-standby.test";
+  standbyAddress = "192.168.1.111";
+  standbyCert =
+    let
+      pair = pkgs.runCommand "e2e-acme-standby-cert" { nativeBuildInputs = [ pkgs.openssl ]; } ''
+        mkdir $out
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -noenc -keyout $out/key.pem -out $out/cert.pem \
+          -CA ${certs.ca.cert} -CAkey ${certs.ca.key} -days 7300 -subj /CN=${standbyHost} \
+          -addext subjectAltName=DNS:${standbyHost} -addext basicConstraints=critical,CA:FALSE \
+          -addext extendedKeyUsage=serverAuth
+      '';
+    in
+    {
+      cert = "${pair}/cert.pem";
+      key = "${pair}/key.pem";
+    };
 
   # The clients' way to the server's IPv6 node address, which is on the test network's link but outside its prefix.
   toServer =
@@ -402,9 +420,9 @@ runTest {
     { config, nodes, ... }:
     let
       address = config.networking.primaryIPAddress;
-      # A Pebble whose settings, a yq object, may read the test cluster's secrets.
+      # A Pebble with its own certificate and key, whose settings, a yq object, may read the test cluster's secrets.
       pebble =
-        name: settings:
+        name: tls: settings:
         pkgs.writeShellApplication {
           name = "pebble-${name}";
           runtimeInputs = [
@@ -413,8 +431,8 @@ runTest {
           ];
           text = ''
             yq -o json '{"pebble": ({
-              "certificate": "${certs.${certs.domain}.cert}",
-              "privateKey": "${certs.${certs.domain}.key}",
+              "certificate": "${tls.cert}",
+              "privateKey": "${tls.key}",
               "httpPort": 80,
               "tlsPort": 443} * ${settings})}' ${clusterIn nodes}/secrets.yaml >"$RUNTIME_DIRECTORY/config.json"
             exec pebble -config "$RUNTIME_DIRECTORY/config.json" -dnsserver 127.0.0.1:53
@@ -455,10 +473,11 @@ runTest {
         "-smbios type=1,serial=${serial}"
         "-smbios type=3,serial=${serial}"
       ];
-      # On its own address alone, as the push relay's stand-in takes port 443 on another.
+      # On its own address alone, as the standby CA and the push relay's stand-in take port 443 on others.
       systemd.services.pebble.serviceConfig.ExecStart = lib.mkForce (
         lib.getExe (
-          pebble "public" ''{"listenAddress": "${address}:443", "managementListenAddress": "0.0.0.0:15000"}''
+          pebble "public" certs.${certs.domain}
+            ''{"listenAddress": "${address}:443", "managementListenAddress": "0.0.0.0:15000"}''
         )
       );
       # The standby CA takes only accounts bound to an external account, as ZeroSSL does: the test cluster's.
@@ -471,8 +490,8 @@ runTest {
         serviceConfig = {
           RuntimeDirectory = "pebble-standby";
           ExecStart = lib.getExe (
-            pebble "standby" ''
-              {"listenAddress": "0.0.0.0:14000", "managementListenAddress": "0.0.0.0:15001",
+            pebble "standby" standbyCert ''
+              {"listenAddress": "${standbyAddress}:443", "managementListenAddress": "0.0.0.0:15001",
                 "externalAccountBindingRequired": true,
                 "externalAccountMACKeys": {.stringData.ACME_STANDBY_EAB_KID: .stringData.ACME_STANDBY_EAB_HMAC}}''
           );
@@ -542,18 +561,20 @@ runTest {
       };
 
       networking.firewall = {
-        allowedTCPPorts = [
-          53
-          14000
-        ];
+        allowedTCPPorts = [ 53 ];
         allowedUDPPorts = [ 53 ];
       };
-      networking.interfaces.eth1.ipv4.addresses = lib.mkAfter [
-        {
-          address = pushRelayAddress;
-          prefixLength = 24;
-        }
-      ];
+      networking.interfaces.eth1.ipv4.addresses = lib.mkAfter (
+        map
+          (address: {
+            inherit address;
+            prefixLength = 24;
+          })
+          [
+            pushRelayAddress
+            standbyAddress
+          ]
+      );
       # A second client of the gateway, and from its address in a /64 of its own, a third.
       networking.interfaces.eth1.ipv6 = {
         routes = toServer nodes;
@@ -643,6 +664,7 @@ runTest {
           local-data = [
             ''"forge.test. A ${nodes.forge.networking.primaryIPAddress}"''
             ''"acme.test. A ${nodes.acme.networking.primaryIPAddress}"''
+            ''"${standbyHost}. A ${standbyAddress}"''
           ]
           ++ map (n: ''"s3-${toString n}.test. A ${s3Address n}"'') providers
           ++ [ ''"${pushRelayZone}. A ${pushRelayAddress}"'' ];
@@ -912,11 +934,11 @@ runTest {
           # The test CAs make their roots as they start, which apps in the cluster that reach its hosts trust
           # (PUBLIC_CA_BUNDLE), as the vault does nixpkgs' test CA, which its relay's stand-in has its certificate from.
           roots = ""
-          for unit, port in [("pebble", 15000), ("pebble-standby", 15001)]:
+          for unit, host, port in [("pebble", "acme.test", 15000), ("pebble-standby", "${standbyHost}", 15001)]:
               acme.wait_for_unit(f"{unit}.service")
               acme.wait_for_open_port(port)
               roots += acme.succeed(
-                  f"curl -fsS --cacert ${caCert} --resolve acme.test:{port}:127.0.0.1 https://acme.test:{port}/roots/0"
+                  f"curl -fsS --cacert ${caCert} --resolve {host}:{port}:127.0.0.1 https://{host}:{port}/roots/0"
               ).strip() + "\n"
           with open("${caCert}") as ca:
               bundle = base64.b64encode((roots + ca.read()).encode()).decode()
