@@ -1066,6 +1066,16 @@ runTest {
               " -o jsonpath='{range .items[*]}{.metadata.namespace}{\" \"}{.metadata.name}{\"\\n\"}{end}'"
               " | while read -r ns pod; do kubectl -n $ns logs $pod -c app --prefix | grep -E 'migration|ERROR'"
               " | tail -n 40; kubectl -n $ns logs $pod -c app --prefix --tail=40; done",
+              # What each container that restarted wrote before it stopped, and since: the kubelet keeps one run back.
+              "kubectl get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{\" \"}{.metadata.name}"
+              "{range .status.containerStatuses[?(@.restartCount>0)]}{\" \"}{.name}{end}{\"\\n\"}{end}'"
+              " | while read -r ns pod containers; do for c in $containers; do"
+              " kubectl -n $ns logs $pod -c $c --previous --prefix --tail=40;"
+              " kubectl -n $ns logs $pod -c $c --prefix --tail=20; done; done",
+              # Each tenant's mesh: management, and the proxy in front of it, whose errors say why a call got no answer.
+              "for ns in $(kubectl get namespaces -l suveraen/app=netbird -o jsonpath='{.items[*].metadata.name}'); do"
+              " kubectl -n $ns logs deploy/netbird --all-containers --prefix --tail=40;"
+              " kubectl -n $ns logs deploy/netbird-management --all-containers --prefix --tail=60; done",
               "suveraen-idm check",
               "suveraen-mesh check",
               phone,
