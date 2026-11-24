@@ -1255,8 +1255,13 @@ runTest {
                       )
                       stalled = [line for line in releases.splitlines() if " Stalled=True " in line]
                       assert code != 0 or not stalled, stalled
+                  # kubectl wait's own rule, judged in one list, where wait would read each one again every second. jq
+                  # judges it there, so only its answer comes back.
                   return server.execute(
-                      "kubectl -n flux-system wait kustomization --all --for=condition=Ready --timeout=0"
+                      "kubectl -n flux-system get kustomizations -o json | ${pkgs.jq}/bin/jq -e '.items | length > 0 and"
+                      " all(.[]; (.status.conditions // [] | map(select(.type == \"Ready\")) | first) as $c"
+                      " | ($c.observedGeneration // .status.observedGeneration) as $seen"
+                      " | $c.status == \"True\" and ($seen == null or $seen >= .metadata.generation))' >/dev/null"
                   )[0] == 0
 
               retry(ready, timeout_seconds=5400)
