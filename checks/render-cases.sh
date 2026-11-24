@@ -857,6 +857,12 @@ refuses pg-threshold-default "Ceph's autoscaler acts on every change it recommen
   "yq -i 'del(.spec.cephConfig.mgr.\"mgr/pg_autoscaler/threshold\")' $P/cluster.yaml"
 refuses ceph-prunable "Ceph's objects are never pruned: CephCluster/rook-ceph" \
   "yq -i 'del(.metadata.annotations)' $P/cluster.yaml"
+apis="the object store serves S3 and Rook's admin API alone: objects"
+refuses objectstore-notifications "$apis" \
+  "yq -i '.spec.protocols.enableAPIs += [\"notifications\"]' $P/objectstore.yaml"
+refuses objectstore-every-api "$apis" "yq -i 'del(.spec.protocols)' $P/objectstore.yaml"
+refuses objectstore-gateway-flag "$apis" \
+  "yq -i '.spec.gateway.rgwCommandFlags[\"rgw enable-apis\"] = \"s3,admin,notifications\"' $P/objectstore.yaml"
 refuses second-ceph-cluster "one CephCluster, rook-ceph/rook-ceph" \
   "yq '.metadata.name = \"other\"' $P/cluster.yaml >$P/other.yaml && yq -i '.resources += [\"./other.yaml\"]' \
    $P/kustomization.yaml"

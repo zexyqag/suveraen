@@ -2240,6 +2240,13 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     | select(.metadata.annotations."kustomize.toolkit.fluxcd.io/prune" != "disabled") | .kind + "/" + .metadata.name]
     | .[]' "$rendered"/*.yaml)
   [ -z "$bad" ] || fail "$cluster: Ceph's objects are never pruned: $bad"
+  # RGW serves every API it has unless told which. Rook passes the gateway's own flags after its own, so one there
+  # would name them again, however Ceph's option is spelt.
+  bad=$(yq ea '[select(.kind == "CephObjectStore")
+    | select(((.spec.protocols.enableAPIs // []) | sort | join(",")) != "admin,s3"
+      or ((.spec.gateway.rgwCommandFlags // {}) | keys | any_c(downcase | sub("[ -]", "_") == "rgw_enable_apis")))
+    | .metadata.name] | .[]' "$rendered"/*.yaml)
+  [ -z "$bad" ] || fail "$cluster: the object store serves S3 and Rook's admin API alone: $bad"
   # Volumes go with their claims, buckets stay, and a chart's claim without a class stays Pending.
   bad=$(yq ea '[select(.kind == "StorageClass") | .metadata.name + " " + .provisioner + " "
     + (.reclaimPolicy // "Delete") + " "

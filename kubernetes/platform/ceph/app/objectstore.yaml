@@ -40,3 +40,8 @@ spec:
         memory: 256Mi
       limits:
         memory: 1Gi
+  # S3 for the buckets and the admin API Rook manages their users and quotas with, nothing else: notifications would
+  # let anyone with a tenant's keys have RGW send requests wherever its pods may connect, and nothing here uses Swift,
+  # STS, IAM or S3 websites.
+  protocols:
+    enableAPIs: [s3, admin]
