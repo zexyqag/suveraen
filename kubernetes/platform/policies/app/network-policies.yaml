@@ -1,0 +1,29 @@
+---
+# An egress rule that names no peer reaches every address there is, on its ports or all of them: the chart idiom
+# egress: [{}], in what a chart renders, which render can't see, or what an operator makes. The cluster takes no such
+# rule from anyone: ceph-csi-operator's own for each driver's controller plugin is refused too, which every pass it
+# makes over the driver reports, and those pods' way out is the namespace's. A rule whose peer reaches as far,
+# 0.0.0.0/0 with nothing excepted or every namespace, still passes; the API itself refuses an empty peer.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: network-policies
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [networking.k8s.io]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [networkpolicies]
+  validations:
+    - expression: "!has(object.spec.egress) || object.spec.egress.all(rule, has(rule.to) && size(rule.to) > 0)"
+      message: an egress rule names the peers it reaches
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: network-policies
+spec:
+  policyName: network-policies
+  validationActions: [Deny]

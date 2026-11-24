@@ -33,6 +33,9 @@
 # lost its config, and passes for an app that has copied nothing yet, whose first restore left an empty repository at
 # one provider and none at the other; nothing is left of the volumes copies and restores worked on, and every volume in
 # a tenant's namespace is backed up or VolSync's.
+# No network policy has an egress rule that names no peer, nor can one be made: the CSI operator's chart's own keeps
+# its ingress alone, and the one the operator makes for each controller plugin is refused, which is all its latest
+# pass fails on.
 # Flux takes charts from the release alone: its one GitRepository, and a HelmChart per vendored chart at the version
 # its record gives, which every HelmRelease runs.
 # containerd pulled every image through the server's mirror alone, which holds images of every registry it lists, all
@@ -1507,6 +1510,47 @@ runTest {
                   for address in n["status"]["addresses"]:
                       if address["type"] == "InternalIP":
                           within(address["address"], "NODE")
+
+          with subtest("No network policy has an egress rule that names no peer, nor can one be made: the CSI operator's chart's own keeps only its ingress, which it denies, and the operator's own for each controller plugin is refused"):
+              network_policies = items("networkpolicies")
+              open_egress = [
+                  f"{n['metadata']['namespace']}/{n['metadata']['name']}" for n in network_policies
+                  if any(not rule.get("to") for rule in n["spec"].get("egress", []))
+              ]
+              assert not open_egress, open_egress
+              [csi_policy] = [n["spec"] for n in network_policies if n["metadata"]["name"] == "ceph-csi-ceph-csi-controller-manager"]
+              assert csi_policy["policyTypes"] == ["Ingress"] and not {"ingress", "egress"} & csi_policy.keys(), csi_policy
+              # The operator makes one of its own for each driver's controller plugin, whose one egress rule names no
+              # peer either: the cluster refuses it, the plugin runs without it, and that refusal is all the operator's
+              # latest pass over a driver failed on: an earlier one may have raced another change while the cluster
+              # was starting.
+              ctrlplugins = [
+                  (d["metadata"]["namespace"], f"{d['metadata']['name']}-ctrlplugin") for d in items("drivers.csi.ceph.io")
+              ]
+              assert ctrlplugins and not {
+                  (n["metadata"]["namespace"], n["metadata"]["name"]) for n in network_policies
+              } & set(ctrlplugins), ctrlplugins
+              for namespace, plugin in ctrlplugins:
+                  server.succeed(f"kubectl -n {namespace} rollout status deployment {plugin} --timeout=60s")
+              driver_failures = [
+                  json.loads(line[line.index("{"):])["error"]
+                  for line in shown("kubectl -n rook-ceph logs deploy/ceph-csi-controller-manager").splitlines()
+                  if "\tCSI Driver reconciliation failed\t" in line
+              ]
+              assert driver_failures and all(
+                  "ValidatingAdmissionPolicy 'network-policies'" in part
+                  and any(f'"{plugin}"' in part for _, plugin in ctrlplugins)
+                  for part in driver_failures[-1].split("\n")
+              ), driver_failures[-3:]
+              # As the chart has it.
+              everything = {
+                  "apiVersion": "networking.k8s.io/v1",
+                  "kind": "NetworkPolicy",
+                  "metadata": {"name": "probe", "namespace": "rook-ceph"},
+                  "spec": {"podSelector": {}, "policyTypes": ["Ingress", "Egress"], "egress": [{}]},
+              }
+              refusal = server.fail(f"echo {shlex.quote(json.dumps(everything))} | kubectl create --dry-run=server -f - 2>&1")
+              assert "ValidatingAdmissionPolicy 'network-policies'" in refusal, refusal
 
           def ceph(args):
               return parsed(f"{ceph_cli} {args} -f json")

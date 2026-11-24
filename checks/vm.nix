@@ -31,7 +31,7 @@
 # Flux's controllers run the digests the release pins for their images' tags, which they can't pull here, out of reach
 # of their registry, and the rules on the server's metrics find those pulls failing.
 # Flux's namespace holds the server's network policies alone, under which its pods reach the cluster's DNS and, of
-# the host, the API server alone.
+# the host, the API server alone. No network policy takes an egress rule that names no peer, in any namespace.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -880,6 +880,31 @@ pkgs.testers.runNixOSTest {
           assert status == 0, (status, out)
           server.succeed("kubectl -n flux-system exec probe -- nslookup probe.test. | grep -F 192.0.2.53")
           server.succeed("kubectl -n flux-system delete pod probe")
+
+      with subtest("No network policy has an egress rule that names no peer, in any namespace"):
+          server.succeed("kubectl apply -f ${../kubernetes/platform/policies/app/network-policies.yaml}")
+
+          def network_policy(namespace="probe", **spec):
+              obj = {
+                  "apiVersion": "networking.k8s.io/v1",
+                  "kind": "NetworkPolicy",
+                  "metadata": {"name": "probe", "namespace": namespace},
+                  "spec": {"podSelector": {}, **spec},
+              }
+              return f"echo {shlex.quote(json.dumps(obj))} | kubectl create --dry-run=server -f -"
+
+          # Whatever its ports, beside a rule that names one, and in k3s's own namespace too.
+          for namespace, egress in [
+              ("probe", [{}]),
+              ("probe", [{"ports": [{"protocol": "TCP", "port": 443}]}]),
+              ("probe", [{"to": [{"podSelector": {}}]}, {}]),
+              ("kube-system", [{}]),
+          ]:
+              refused(network_policy(namespace, policyTypes=["Egress"], egress=egress), "network-policies")
+          server.succeed(network_policy(policyTypes=["Egress"], egress=[{"to": [{"podSelector": {}}]}]))
+          # A policy that only closes the way out, and one on the way in alone, whose rules may name no peer.
+          server.succeed(network_policy(policyTypes=["Ingress", "Egress"]))
+          server.succeed(network_policy(policyTypes=["Ingress"], ingress=[{}]))
 
       with subtest("A load balancer with local traffic policy hands pods the client's own address"):
           # As the gateway's Service is (platform/gateway): ServiceLB only publishes the node's addresses, and

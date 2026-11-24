@@ -352,7 +352,8 @@ refuses gateway-router-labels "$telemetry metrics.prometheus.addRoutersLabels" \
 renders gateway-no-router-labels "yq -i '.spec.values.metrics.prometheus.addRoutersLabels = false' $G"
 refuses gateway-log-otlp "$telemetry log.otlp" "yq -i '.spec.values.log.otlp.enabled = true' $G"
 refuses gateway-otlp-logs "$telemetry experimental.otlpLogs" "yq -i '.spec.values.experimental.otlpLogs = true' $G"
-ownvalues="a HelmRelease takes its values from itself alone, and only VolSync's changes what its chart renders:"
+ownvalues="a HelmRelease takes its values from itself alone, and only VolSync's and Rook's change what their charts"
+ownvalues+=" render, Rook's always, to leave the CSI operator's network policy its ingress alone:"
 refuses gateway-values-from "$ownvalues traefik" \
   "yq -i '.spec.valuesFrom = [{\"kind\": \"ConfigMap\", \"name\": \"traefik-extra\"}]' $G"
 refuses gateway-remote-plugin "the gateway runs no plugin from elsewhere" \
@@ -902,6 +903,13 @@ cephcsi=$(sed -n 's/^csi[.]cephcsi[.]tag=//p' "$src/platform/rook-ceph/vendor/ro
 refuses barrier-image-stale "$barrier, already on every node that maps volumes, $cephcsi: ${cephcsi%%:*}:v0.0.0@" \
   "sed -i '/^csi[.]cephcsi[.]tag=/s/:[^@]*@/:v0.0.0@/' platform/rook-ceph/vendor/rook-ceph.images.env"
 refuses barrier-missing "$barrier" "sed -i '/unmap-barrier.yaml/d' $P/kustomization.yaml"
+refuses rook-post-renderer-missing "$ownvalues rook-ceph" \
+  "yq -i 'del(.spec.postRenderers)' platform/rook-ceph/app/helmrelease.yaml"
+refuses rook-post-renderer-other "$ownvalues rook-ceph" \
+  "sed -i 's/kind: NetworkPolicy/kind: Deployment/' platform/rook-ceph/app/helmrelease.yaml"
+refuses rook-post-renderer-images "$ownvalues rook-ceph" \
+  "yq -i '.spec.postRenderers[0].kustomize.images = [{\"name\": \"busybox\", \"newTag\": \"latest\"}]' \
+  platform/rook-ceph/app/helmrelease.yaml"
 refuses rook-ceph-partial-labels "$privileged: rook-ceph" \
   "sed -i '/audit: privileged/d' components/privileged/kustomization.yaml"
 refuses rook-ceph-baseline "$privileged: rook-ceph" \

@@ -27,3 +27,19 @@ spec:
     ceph-csi-operator:
       controllerManager:
         priorityClassName: platform
+  # The CSI operator's chart gives its pods a network policy whose one egress rule names no peer, so reaches
+  # everything, which the cluster refuses (platform/policies/network-policies). It keeps only its ingress, which it
+  # denies, and its pods' egress is the namespace's, as for the rest of Rook's.
+  postRenderers:
+    - kustomize:
+        patches:
+          - target:
+              group: networking.k8s.io
+              kind: NetworkPolicy
+              name: ceph-csi-ceph-csi-controller-manager
+            patch: |-
+              - op: remove
+                path: /spec/egress
+              - op: replace
+                path: /spec/policyTypes
+                value: [Ingress]

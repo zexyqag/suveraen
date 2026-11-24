@@ -48,6 +48,12 @@ pgkinds=',ObjectBucketClaim.objectbucket.io,ObjectStore.barmancloud.cnpg.io,Job.
 export quotas hard appkinds
 privileged=pod-security.kubernetes.io/audit=privileged,pod-security.kubernetes.io/enforce=privileged
 privileged+=,pod-security.kubernetes.io/warn=privileged
+# All Rook may change of what its chart renders (platform/rook-ceph): the CSI operator's network policy, whose one
+# egress rule names no peer, keeps its ingress alone. A patch is held by its operations, not by how they are written.
+rookpatch='[{"kustomize":{"patches":[{"patch":[{"op":"remove","path":"/spec/egress"},{"op":"replace",'
+rookpatch+='"path":"/spec/policyTypes","value":["Ingress"]}],"target":{"group":"networking.k8s.io",'
+rookpatch+='"kind":"NetworkPolicy","name":"ceph-csi-ceph-csi-controller-manager"}}]}}]'
+export rookpatch
 # Apps that terminate their users' TLS themselves, behind a listener that passes it through (edge/passthrough, or
 # edge/passthrough-app for a host on the tenant's app domain), which skips the gateway's limits and pseudonyms, as it
 # reads no request: an identity server, which must see its users' passwords and passkeys where nothing else does, and
@@ -1946,11 +1952,18 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     [ -z "$bad" ] || fail "$cluster/$name: only an app that terminates TLS itself holds a public certificate of its" \
       "own (suveraen/passthrough): $bad"
     # What render holds a chart to, it reads in the values here: none may come from elsewhere, nor what the chart
-    # renders be patched, but for the platform's VolSync, whose controller gets the platform's priority so.
-    bad=$(yq ea '[select(.kind == "HelmRelease" and ((.spec | has("valuesFrom")) or ((.spec | has("postRenderers"))
-      and (.metadata.namespace + "/" + .metadata.name) != "flux-system/volsync"))) | .metadata.name] | .[]' "$file")
-    [ -z "$bad" ] || fail "$cluster/$name: a HelmRelease takes its values from itself alone, and only VolSync's" \
-      "changes what its chart renders: $bad"
+    # renders be patched, but for the platform's VolSync, whose controller gets the platform's priority so, and Rook's,
+    # without which the cluster would refuse what it renders.
+    bad=$(yq ea '[select(.kind == "HelmRelease") | (.metadata.namespace + "/" + .metadata.name) as $release
+      | select((.spec | has("valuesFrom"))
+        or ($release == "flux-system/rook-ceph" and (.spec.postRenderers
+          | (.[].kustomize.patches[]? | select(has("patch")) | .patch) |= from_yaml | sort_keys(..) | @json)
+          != strenv(rookpatch))
+        or ((.spec | has("postRenderers")) and $release != "flux-system/volsync" and $release != "flux-system/rook-ceph"))
+      | .metadata.name] | .[]' "$file")
+    [ -z "$bad" ] || fail "$cluster/$name: a HelmRelease takes its values from itself alone, and only VolSync's and" \
+      "Rook's change what their charts render, Rook's always, to leave the CSI operator's network policy its ingress" \
+      "alone: $bad"
     # Images in what is rendered here, containers' and volumes', the PostgreSQL images clusters take from catalogs,
     # Ceph's, and the tags and images charts are given.
     bad=$({
