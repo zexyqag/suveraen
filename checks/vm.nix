@@ -858,9 +858,10 @@ pkgs.testers.runNixOSTest {
           server.succeed(f"echo {shlex.quote(json.dumps(sleeping))} | kubectl create -f -")
           server.succeed("kubectl -n flux-system wait pod probe --for=condition=Ready --timeout=120s")
 
+          # busybox's nc tells a refused connection only at -vv.
           def try_port(target):
               return server.execute(
-                  f"kubectl -n flux-system exec probe -- sh -c 'timeout 10 nc -w 3 {target} </dev/null' 2>&1"
+                  f"kubectl -n flux-system exec probe -- sh -c 'timeout 10 nc -vv -w 3 {target} </dev/null' 2>&1"
               )
 
           # k3s's policy controller puts in a new pod's own rules a moment after the pod starts: each refusal is
