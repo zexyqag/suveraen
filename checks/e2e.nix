@@ -9,9 +9,10 @@
 # from the CA, and port 80 redirects there; the platform's pods run ahead of tenants', and Ceph's monitors, OSDs and CSI
 # node plugin at the node's priority, above every pod with a volume. Each tenant runs in exactly the
 # namespaces its manifest asks for, and hello answers on each of its hosts with that tenant's own settings and restarts
-# when they change; a tenant's pods reach neither other tenants' services nor the gateway's, and nothing outside reaches
-# theirs; tenants can't take each other's namespaces or hosts or keep Gateways outside the gateway namespace, and stay
-# within their quota; a host's key goes with its certificate; removing a tenant takes its Kustomizations, hosts, keys
+# when they change; a tenant's pods reach neither other tenants' services nor the gateway's, nor on their own node the
+# API server, the resolver or SSH, and nothing outside reaches theirs; tenants can't take each other's namespaces or
+# hosts or keep Gateways outside the gateway namespace, and stay within their quota; a host's key goes with its
+# certificate; removing a tenant takes its Kustomizations, hosts, keys
 # and pods but leaves its namespaces, which then go by its label; and an unsigned commit is never applied. Ceph runs
 # healthy with three monitors and an encrypted OSD per disk, its DB on a volume of its own mirrored over both system
 # disks, three copies on every pool and as many placement groups as its OSDs and pools call for, with room for one more
@@ -95,6 +96,11 @@
 # that clears, as for an exit, a token and a person who left in a mesh, with the change of who can reach what, and for
 # an account a vault keeps open for a person who left. Its etcd comes back in place from a provider's copy, decrypted
 # off the server, as it was when copied, and Ceph stays healthy.
+# No pod tries the internet by the server's uplink but the probe the test cuts off from it, nor asks the node's resolver
+# for a name beyond the test's own but those that probe asks for while it runs, CoreDNS's own and those of the cluster's
+# own it passes on: the reverse names of its addresses, Services' names past a pod's search domains and the name Ceph's
+# clients find its monitors by. The only pods on the host's network, which reach whatever the host does, as no network
+# policy holds them and the host's firewall lets it out unfiltered, are the CSI node plugin's.
 {
   pkgs,
   module,
@@ -335,11 +341,13 @@ let
         }
       ];
     };
+
+  # Below the CI job's limit, so the waits in the script run out first and print what went wrong.
+  globalTimeout = 10200;
 in
 runTest {
   name = "suveraen-e2e";
-  # Below the CI job's limit, so the waits in the script run out first and print what went wrong.
-  globalTimeout = 10200;
+  inherit globalTimeout;
 
   nodes.forge =
     { nodes, ... }:
@@ -565,6 +573,41 @@ runTest {
       nodes,
       ...
     }:
+    let
+      # Each flow a pod tries out of the uplink, before any policy or firewall refuses it, and each it sends there,
+      # before the masquerade takes its address: once, by its addresses, protocol and port, or for neither TCP nor UDP
+      # its protocol alone. A flow is kept as long as the run can last, so the time it has left says when it was first
+      # seen. The uplink carries IPv4 alone here: an attempt over IPv6 shows only by its name.
+      podUplink =
+        let
+          ports = "ip saddr . ip daddr . meta l4proto . th dport";
+          protocol = "ip saddr . ip daddr . meta l4proto";
+          record = key: "{ typeof ${key}; flags dynamic, timeout; timeout ${toString globalTimeout}s; size 4096; }";
+          v4 = lib.filter (cidr: !lib.hasInfix ":" cidr) config.suveraen.cluster.podCIDRs;
+          pods = "ip saddr { ${lib.concatStringsSep ", " v4} }";
+          uplink = config.suveraen.network.interface;
+        in
+        pkgs.writeText "pod-uplink.nft" ''
+          table ip pod-uplink {
+            set tried ${record ports}
+            set other ${record protocol}
+            set left ${record ports}
+            chain forward {
+              type filter hook forward priority filter - 10; policy accept;
+              oifname != "${uplink}" return
+              ct state != new return
+              ${pods} meta l4proto { tcp, udp } add @tried { ${ports} } return
+              ${pods} add @other { ${protocol} }
+            }
+            chain postrouting {
+              type filter hook postrouting priority srcnat - 1; policy accept;
+              oifname != "${uplink}" return
+              ct state != new return
+              ${pods} meta l4proto { tcp, udp } add @left { ${ports} }
+            }
+          }
+        '';
+    in
     {
       imports = [
         module
@@ -610,7 +653,7 @@ runTest {
             ''"${pushRelayZone}." redirect''
           ];
           domain-insecure = [ "test." ];
-          # What pods look up, so the test sees that a mesh's management asks for no name of its makers'.
+          # What pods look up, so the test sees they ask for no name beyond the test's own.
           log-queries = true;
         };
         # As a real cluster's are found through the registries, its zones are found at the published nameserver.
@@ -664,6 +707,19 @@ runTest {
             done
           done
         '';
+      };
+
+      # Apart from the firewall's tables, so that no reload of theirs empties it; a reboot does.
+      systemd.services.pod-uplink = {
+        description = "Record what pods try and send out of the uplink";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "nftables.service" ];
+        before = [ "k3s.service" ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStart = "${pkgs.nftables}/bin/nft -f ${podUplink}";
+        };
       };
 
       suveraen = {
@@ -1090,6 +1146,33 @@ runTest {
               print([line.strip() for line in meminfo if line.startswith("MemAvailable")])
           print("runner load", os.getloadavg(), "on", os.cpu_count(), "CPUs")
 
+      # What the server's record (pod-uplink) held before its reboot, which starts it afresh; what of it the test's own
+      # probe tried on purpose, and the names it looked up for that, each with the seconds it did so between; and the
+      # addresses CoreDNS has had, which asks the node's resolver for every pod.
+      uplink_seen: list[tuple[str, tuple, int]] = []
+      excused: set[tuple[str, tuple]] = set()
+      probed: dict[str | None, tuple[int, int]] = {}
+      coredns: set[str] = set()
+
+      # Each flow the record holds now, by its kind (tried, left, or other for neither TCP nor UDP) and its key, with
+      # when it was first seen: its time left counts down from the record's timeout from then.
+      def uplink_record():
+          coredns.update(server.succeed(
+              "kubectl -n kube-system get pods -l k8s-app=kube-dns -o jsonpath='{.items[*].status.podIPs[*].ip}'"
+          ).split())
+          now = int(server.succeed("date +%s"))
+          flows = []
+          for entry in parsed("nft -j list table ip pod-uplink")["nftables"]:
+              if found := entry.get("set"):
+                  elements = found.get("elem", [])
+                  assert len(elements) < found["size"], f"{found['name']} filled up"
+                  flows.extend(
+                      (found["name"], tuple(e["elem"]["val"]["concat"]),
+                       now - found["timeout"] + e["elem"]["expires"])
+                      for e in elements
+                  )
+          return flows
+
       server.wait_for_unit("k3s.service")
       try:
           with subtest("The server's alerts reach the phone"):
@@ -1312,9 +1395,22 @@ runTest {
                   f"kubectl create namespace uplink && echo {shlex.quote(json.dumps(cut_probe))} | kubectl create -f -"
                   " && kubectl -n uplink wait pod probe --for=condition=Ready --timeout=300s"
               )
+              # The record excuses only what the probe tries from here, flow by flow, as its addresses go to other pods
+              # once it is gone; and it sees the probe try, or it sees nothing.
+              cut_from = server.succeed("kubectl -n uplink get pod probe -o jsonpath='{.status.podIPs[*].ip}'").split()
+              cut_before = {(kind, key) for kind, key, _ in uplink_record()}
+              cut_start = int(server.succeed("date +%s"))
               for registry in registries:
                   code = server.execute(f"kubectl -n uplink exec probe -- curl -sS -m 10 -o /dev/null {registry}/v2/")[0]
                   assert code == 7, (registry, code)
+              cut_end = int(server.succeed("date +%s"))
+              cut_tried = {
+                  (kind, key) for kind, key, _ in uplink_record() if kind == "tried" and key[0] in cut_from
+              } - cut_before
+              assert cut_tried, f"the record holds no flow of the probe's, at {cut_from}"
+              excused.update(cut_tried)
+              # So are its lookups of their names, while it tried them.
+              probed.update((urlsplit(r).hostname, (cut_start, cut_end)) for r in registries)
               server.succeed("kubectl delete namespace uplink --timeout=300s")
               # source-controller keeps what it builds in its pod alone, so a new one fetches the release from the forge
               # again and builds each chart anew from it, as soon as it starts.
@@ -1813,6 +1909,15 @@ runTest {
                   for backend in backends(other):
                       blocked(f"{inside} {url(*backend)}")
               blocked(f"{inside} http://traefik.gateway.svc/")
+              # The host's firewall lets pods reach the API server, the node's resolver and SSH, so what refuses the
+              # pod there is its own policies, which hold its way to its own node too.
+              for target in [
+                  "-k https://kubernetes.default.svc/version",
+                  "telnet://${nodes.server.suveraen.cluster.nodeServices.resolver}:53",
+                  "telnet://${server}:22",
+              ]:
+                  status, out = server.execute(f"{inside} {target} 2>&1")
+                  assert status == 7, (target, status, out)
               outside = "kubectl -n probe exec probe -- curl -fsS -m 5 -o /dev/null"
               server.succeed(f"{outside} http://traefik.gateway.svc/")
               for tenant in tenants:
@@ -2777,9 +2882,6 @@ runTest {
               assert server.succeed(
                   f"{nb_db} \"select pg_encoding_to_char(encoding) from pg_database where datname = 'netbird'\""
               ).strip() == "UTF8"
-              # Management asked no resolver for its makers' names: they lead nowhere in its pod.
-              queries = shown("journalctl -u unbound -o cat --no-pager").splitlines()
-              assert not [line for line in queries if re.search(r"\b(netbird\.io|api\.github\.com)\. ", line)]
 
           with subtest("A member's device asks for a fresh sign-in and waits for approval, then joins its person's own group"):
               # Kanidm applies the group's minimum as a person enrols: their reset offers no password.
@@ -2958,7 +3060,7 @@ runTest {
                   " > /tmp/paced 2>&1; echo $? > /tmp/paced.status) < /dev/null > /dev/null 2>&1 &"
               )
 
-          with subtest("The mesh keeps no member's address, names its peers under its own suffix, routes nothing but the camera, and calls nowhere"):
+          with subtest("The mesh keeps no member's address, names its peers under its own suffix, and routes nothing but the camera"):
               with open("${kubernetes}/apps/netbird/ks.yaml") as template:
                   suffix = re.search(r"NETBIRD_DNS_DOMAIN:=([^}]+)\}", template.read())
               assert suffix, "the template has no default suffix"
@@ -2989,11 +3091,6 @@ runTest {
               assert not leaked, [line for line in logs.splitlines() if any(a in line for a in leaked)][:20]
               relayed = shown(f"kubectl -n {nb_ns} logs deploy/netbird -c relay")
               assert "connected from" not in relayed, relayed
-              # Nor has management asked a resolver for its makers' names since it was upgraded.
-              queries = shown("journalctl -u unbound -o cat --no-pager").splitlines()
-              assert any(re.search(r"info: \S+ \S+\. A IN", line) for line in queries), "Unbound logged no query"
-              asked = [line for line in queries if re.search(r"\b(netbird\.io|api\.github\.com)\. ", line)]
-              assert not asked, asked
 
           with subtest("A token from another tenant's Kanidm, for a client of the same name, gets nowhere in this tenant's mesh"):
               as_idm_admin(second)
@@ -4650,6 +4747,7 @@ runTest {
                   "kubectl -n rook-ceph get ds unmap-barrier -o jsonpath='{.spec.template.spec.terminationGracePeriodSeconds}'"
               )
               assert int(grace) == groups[1]["shutdownGracePeriodSeconds"], (grace, groups)
+              uplink_seen.extend(uplink_record())
               asked = int(server.succeed("date +%s"))
               start = time.monotonic()
               server.shutdown()
@@ -4749,6 +4847,93 @@ runTest {
               nb_refused("laptop", f"{nb_home['ip']}:5900")
               nb_reaches("laptop", f"{nb_camera}:8080", "camera:8080")
               nb_scrubbed()
+
+          with subtest("No pod tried the internet by the server's uplink but the probe cut off from it, nor asked the node's resolver for a name beyond the test's own, and only the CSI node plugin's pods run on the host's network"):
+              # The record knows pods by their own addresses, so it can't see a pod on the host's network, which no
+              # network policy holds and the host's firewall lets out unfiltered: those are each CSI driver's node
+              # plugin's alone.
+              plugins = {
+                  (d["metadata"]["namespace"], "DaemonSet", f"{d['metadata']['name']}-nodeplugin")
+                  for d in items("drivers.csi.ceph.io")
+              }
+              on_host = {
+                  (p["metadata"]["namespace"], o["kind"], o["name"])
+                  for p in items("pods") if p["spec"].get("hostNetwork")
+                  for o in p["metadata"].get("ownerReferences") or [{"kind": "Pod", "name": p["metadata"]["name"]}]
+              }
+              assert plugins and on_host == plugins, (on_host, plugins)
+              strays = sorted(
+                  (first, kind, key) for kind, key, first in uplink_seen + uplink_record() if (kind, key) not in excused
+              )
+              if strays:
+                  print(shown("kubectl get pods -A -o wide"))
+                  for seen_at, stray_kind, stray_key in strays:
+                      print(stray_kind, *stray_key, "first at", seen_at, shown(
+                          f"journalctl -u unbound -o cat --no-pager --since @{seen_at - 10} --until @{seen_at + 1}"
+                      ))
+              assert not strays, strays
+
+              # Every name a pod asks the node's resolver for comes through CoreDNS, or from the host's network from the
+              # resolver's own address. Beyond the test's own zone, the probe asked for the registries while it tried
+              # them, CoreDNS asks for its loop probe and, of an upstream that failed it, the root's nameservers, and it
+              # passes on what it doesn't know of the cluster's own: the reverse names of its addresses, a Service's name
+              # under svc. that a pod's resolver tries last, past its search domains, as it does where a Service has no
+              # address of the family asked for, and the SRV name a Ceph client finds the monitors by when it starts
+              # without them.
+              pod_ranges = [ipaddress.ip_network(c) for c in ${builtins.toJSON nodes.server.suveraen.cluster.podCIDRs}]
+              own_ranges = [
+                  ipaddress.ip_network(setting(f"{kind}_CIDR_V{v}"))
+                  for kind in ["POD", "SERVICE", "NODE"] for v in [4, 6]
+              ]
+
+              def reverse_within(name, ranges):
+                  labels = name.removesuffix(".").split(".")
+                  if len(labels) == 6 and labels[4:] == ["in-addr", "arpa"]:
+                      text = ".".join(labels[3::-1])
+                  elif len(labels) == 34 and labels[32:] == ["ip6", "arpa"] and all(
+                      re.fullmatch("[0-9a-f]", n) for n in labels[:32]
+                  ):
+                      nibbles = "".join(labels[31::-1])
+                      text = ":".join(nibbles[i:i + 4] for i in range(0, 32, 4))
+                  else:
+                      return False
+                  try:
+                      address = ipaddress.ip_address(text)
+                  except ValueError:
+                      return False
+                  return any(address in r for r in ranges)
+
+              logged = [
+                  re.match(r"([0-9]+)\.[0-9]+ .*\binfo: (\S+) (\S+) (\S+) IN$", line)
+                  for line in shown("journalctl -u unbound -o short-unix --no-pager").splitlines()
+              ]
+              pod_names = [
+                  (int(q[1]), q[2], q[3].lower(), q[4]) for q in logged
+                  if q and (q[2] == "${nodes.server.suveraen.cluster.nodeServices.resolver}"
+                            or any(ipaddress.ip_address(q[2]) in r for r in pod_ranges))
+              ]
+              assert pod_names, "Unbound logged no query of a pod's"
+
+              def expected(at, client, name, kind):
+                  window = probed.get(name.removesuffix("."))
+                  return (
+                      name == "test." or name.endswith(".test.") or window is not None and window[0] <= at <= window[1]
+                      or (kind == "HINFO" and re.fullmatch(r"[0-9]+\.[0-9]+\.", name))
+                      or reverse_within(name, own_ranges)
+                      or client in coredns and (
+                          (name, kind) in [(".", "NS"), ("_ceph-mon._tcp.", "SRV")] or name.endswith(".svc.")
+                      )
+                  )
+
+              odd_names = sorted({
+                  (client, name, kind) for at, client, name, kind in pod_names if not expected(at, client, name, kind)
+              })
+              assert not odd_names, odd_names
+              # Nor did journald drop any of Unbound's lines.
+              suppressed = shown(
+                  "journalctl -t systemd-journald -o cat --no-pager | grep -F ' messages from unbound.service'"
+              )
+              assert not suppressed.strip(), suppressed
           memory()
       except Exception:
           diagnose()
