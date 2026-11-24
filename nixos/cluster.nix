@@ -674,6 +674,9 @@ in
         # Pods that don't name a seccomp profile get the runtime's default filter.
         seccompDefault = true;
         shutdownGracePeriodByPodPriority = shutdownGroups;
+        # k3s starts its network policy controller, which no pod is held to any policy before, once the node reports
+        # itself Ready after that controller's own start; an unchanged status is otherwise reported every 5 minutes.
+        nodeStatusReportFrequency = "10s";
       };
       manifests = {
         # When the nodes run short, the platform's pods (priorityClassName platform) are scheduled ahead of tenants',

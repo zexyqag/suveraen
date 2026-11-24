@@ -1,6 +1,7 @@
-# Boots a watcher and a server in VMs. The server comes up dual-stack with Flux installed and pointed at the repository,
-# out of reach of namespace admins and reading nothing but the release's one GitRepository and HelmCharts built from
-# it in flux-system, pods held to the restricted Pod Security Standard, secrets encrypted at rest with
+# Boots a watcher and a server in VMs. The server comes up dual-stack, holding pods to network policies within a minute
+# of being Ready, with Flux installed and pointed at the repository, out of reach of namespace admins and reading
+# nothing but the release's one GitRepository and HelmCharts built from it in flux-system, pods held to the restricted
+# Pod Security Standard, secrets encrypted at rest with
 # secretbox and only SSH, web and STUN ports open. Ceph's disks have stable names, their DB volumes lie on an array over
 # both system disks, the kernel maps and decrypts Ceph's volumes without loading modules, and k3s keeps no volumes of
 # its own. An app's charts reach only its own namespace and can neither widen who may act there nor publish ports, no
@@ -383,10 +384,13 @@ pkgs.testers.runNixOSTest {
       watcher.wait_until_succeeds("curl -fsS http://127.0.0.1:2586/v1/health")
       server.wait_for_unit("k3s.service")
 
-      with subtest("The node is Ready and dual-stack"):
+      with subtest("The node is Ready and dual-stack, and holds pods to network policies within a minute of it"):
           server.wait_until_succeeds(
               "kubectl get node server -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' | grep True",
               timeout=600,
+          )
+          server.wait_until_succeeds(
+              "journalctl -b -u k3s --no-pager | grep -qF 'Starting network policy controller'", timeout=60
           )
           server.wait_until_succeeds("kubectl get node server -o jsonpath='{.spec.podCIDRs}' | grep fd42", timeout=120)
 
