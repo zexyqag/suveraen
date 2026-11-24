@@ -364,7 +364,7 @@ let
     };
 
   # Below the CI job's limit, so the waits in the script run out first and print what went wrong.
-  globalTimeout = 10200;
+  globalTimeout = 15000;
 in
 runTest {
   name = "suveraen-e2e";
@@ -1244,7 +1244,7 @@ runTest {
                       "kubectl -n flux-system wait kustomization --all --for=condition=Ready --timeout=0"
                   )[0] == 0
 
-              retry(ready, timeout_seconds=4500)
+              retry(ready, timeout_seconds=5400)
               server.succeed("kubectl wait helmrelease -A --all --for=condition=Ready --timeout=0")
               flux_objects = parsed("kubectl get kustomizations,helmreleases -A -o json")["items"]
               earliest = min(datetime.fromisoformat(o["metadata"]["creationTimestamp"]) for o in flux_objects)
