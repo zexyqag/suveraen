@@ -2497,19 +2497,44 @@ runTest {
                       "netbird-oidc": ["NetBird, changed" if changed else "NetBird"] if netbird else None,
                   }
 
+              # Whether each tenant's Kanidm runs its StatefulSet's latest revision, started since a moment and is ready,
+              # which it is only once it ran its migrations: far cheaper to ask than suveraen-idm check.
+              def kanidm_restarted(since):
+                  for t in tenants:
+                      got = parsed(f"kubectl -n {t}-kanidm get statefulset/kanidm pod/kanidm-0 -o json")["items"]
+                      sts, pod = (next(o for o in got if o["kind"] == kind) for kind in ["StatefulSet", "Pod"])
+                      s = sts["status"]
+                      app = [c for c in pod["status"].get("containerStatuses", []) if c["name"] == "app"]
+                      if not (
+                          s.get("observedGeneration") == sts["metadata"]["generation"]
+                          and s.get("readyReplicas") == sts["spec"]["replicas"]
+                          and s.get("currentRevision") == s.get("updateRevision")
+                          == pod["metadata"]["labels"].get("controller-revision-hash")
+                          and app and app[0]["ready"]
+                          and app[0]["state"].get("running", {}).get("startedAt", "") > since
+                      ):
+                          return False
+                  return True
+
               # Waits until each tenant's Kanidm has restarted since a moment and rolled out, ran its migrations without
-              # a fault, and holds what is wanted, and leaves idm_admin disabled. Reloader may restart Kanidm for each
-              # of its ConfigMaps a release changes, and Flux applies a file whose keys the tenant's Secret lacks only
-              # on a later try, once it holds them.
+              # a fault, and holds what is wanted, hello's client with it, and leaves idm_admin disabled. Reloader may
+              # restart Kanidm for each of its ConfigMaps a release changes, and Flux applies a file whose keys the
+              # tenant's Secret lacks only on a later try, once it holds them.
               def applied(since, want):
                   def done(last):
                       try:
+                          # The last try asks for the rollout after the check, so a failed wait shows what it found.
+                          if not (last or kanidm_restarted(since)):
+                              return False
                           found = {c["tenant"]: c for c in parsed("suveraen-idm check")["tenants"]}
                           for t in tenants:
-                              server.succeed(f"kubectl -n {t}-kanidm rollout status statefulset kanidm --timeout=10s")
                               runs = found[t]["migrations"]
                               assert (found[t]["started"] or "") > since and runs, found[t]
                               assert (runs["failed"], runs["denied"], found[t]["ids"]) == ([], 0, []), found[t]
+                              hello = [c for c in found[t]["clients"] if c["client"] == "hello-oidc"]
+                              assert [(c["secret"], c["flags"]) for c in hello] == [("right", True)], found[t]
+                          if last:
+                              assert kanidm_restarted(since), "a tenant's Kanidm did not roll out"
                           for t in tenants:
                               try:
                                   as_idm_admin(t)
@@ -2611,10 +2636,6 @@ runTest {
               applied(since, with_change)
               for t in tenants:
                   assert probe_token(t, sso_secret(t)) == "400", t
-              found = hello_client()
-              assert {t: [(c["secret"], c["flags"]) for c in found[t]] for t in tenants} == {
-                  t: [("right", True)] for t in tenants
-              }, found
 
               # A restart with nothing changed applies no file again.
               since = server.succeed("date -u +%Y-%m-%dT%H:%M:%SZ").strip()
@@ -2652,10 +2673,6 @@ runTest {
               applied(since, {t: drifted[t] | stated(t, drifted[t]["netbird-oidc"] is not None) for t in tenants})
               for t in tenants:
                   assert probe_token(t, sso_secret(t)) == "400", t
-              found = hello_client()
-              assert {t: [(c["secret"], c["flags"]) for c in found[t]] for t in tenants} == {
-                  t: [("right", True)] for t in tenants
-              }, found
 
           # The tenant's PostgreSQL primary, which holds every app's database, and psql there as PostgreSQL's own user.
           pg_primary = f"$(kubectl -n {first}-postgres get pod -l cnpg.io/instanceRole=primary -o name)"
