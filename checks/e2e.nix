@@ -690,6 +690,14 @@ runTest {
       # There's no release to upgrade to here.
       system.autoUpgrade.enable = lib.mkForce false;
 
+      # The test copies the journal to the serial console, which takes a line in about 20 ms, and etcd logs every
+      # request that takes over 100 ms; on a slow runner that is most of them, and k3s then waits on its own log.
+      services.k3s.extraFlags = [
+        "--etcd-arg=log-level=warn"
+        "--etcd-arg=warning-apply-duration=1s"
+        "--etcd-arg=warning-unary-request-duration=1s"
+      ];
+
       # No name of the tenants' hosts resolves here, so suveraen-idm proves it reaches each identity host at the
       # server's own gateway, and the server's checks each edge, under certificates from the test CA, whose root the
       # test puts where both look for it.
