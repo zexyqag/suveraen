@@ -4753,6 +4753,10 @@ runTest {
                   return status == 0 and state == "True" and moment(beat).timestamp() >= restored
 
               retry(reported, timeout_seconds=600)
+              # The kubelet takes back the pods it runs only at its sync loop's first pass, which waits for the runtime
+              # with a backoff of up to 5 seconds and so can come after that report; until then it answers an exec with
+              # "pod does not exist". That pass takes every pod at once.
+              server.wait_until_succeeds("kubectl -n rook-ceph exec deploy/rook-ceph-operator -- true", timeout=120)
               server.succeed("kubectl get configmap before")
               server.fail("kubectl get configmap after")
 
