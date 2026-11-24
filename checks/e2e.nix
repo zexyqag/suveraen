@@ -692,10 +692,11 @@ runTest {
 
       # The test copies the journal to the serial console, which takes a line in about 20 ms, and etcd logs every
       # request that takes over 100 ms; on a slow runner that is most of them, and k3s then waits on its own log.
+      # In nanoseconds: k3s writes a duration into etcd's config as text, which etcd can't read.
       services.k3s.extraFlags = [
         "--etcd-arg=log-level=warn"
-        "--etcd-arg=warning-apply-duration=1s"
-        "--etcd-arg=warning-unary-request-duration=1s"
+        "--etcd-arg=warning-apply-duration=1000000000"
+        "--etcd-arg=warning-unary-request-duration=1000000000"
       ];
 
       # No name of the tenants' hosts resolves here, so suveraen-idm proves it reaches each identity host at the
