@@ -806,11 +806,14 @@ in
 
       # The kubelet's metrics tell only of containers that run, which one that exits at once never is, nor one the
       # kernel killed for memory, whose own count goes with its cgroup; the runtime's records tell of each, of which
-      # this keeps only the names the pod gives it, its latest attempt and whether it was last killed for memory.
+      # this keeps only the names the pod gives it, its latest attempt and whether it was last killed for memory. That
+      # last comes from systemd, as the runtime's cgroups are its scopes: it reads a scope's count of kills before it
+      # removes the cgroup, which the runtime may read only after, find gone, and then record the kill as an error.
       textfiles.containers = {
         path = [
           cfg.crictl
           pkgs.jq
+          config.systemd.package
         ];
         needsCluster = true;
         after = [ "k3s.service" ];
@@ -822,17 +825,19 @@ in
           "container"
         ];
         script = ''
-          # Read whole first, so a runtime that can't be asked fails the writer, and its file goes stale.
+          # Read whole first, so a runtime or a journal that can't be asked fails the writer, and its file goes stale.
           listed=$(crictl ps -a -o json)
+          # The scopes in which systemd itself found the kernel killed for memory since boot
+          # (SD_MESSAGE_UNIT_OUT_OF_MEMORY), each named after its container's ID.
+          ids=$(journalctl -b -q -o json --output-fields=UNIT _PID=1 MESSAGE_ID=fe6faa94e7774663a0da52717891d8ef \
+            | jq -r '.UNIT | strings | capture("^cri-containerd-(?<id>[0-9a-f]{64})\\.scope$").id')
+          declare -A oomed=()
+          for id in $ids; do oomed[$id]=1; done
           attempts=() killed=()
           while IFS=$'\t' read -r namespace pod container attempt exited; do
             labels="namespace=\"$namespace\",pod=\"$pod\",container=\"$container\""
-            reason=
-            if [ -n "$exited" ]; then
-              reason=$(crictl inspect -o go-template --template '{{.status.reason}}' "$exited")
-            fi
             oom=0
-            if [ "$reason" = OOMKilled ]; then oom=1; fi
+            if [ -n "$exited" ] && [ -n "''${oomed[$exited]:-}" ]; then oom=1; fi
             attempts+=("container_attempt{$labels} $attempt")
             killed+=("container_oom_killed{$labels} $oom")
           done < <(jq -r '

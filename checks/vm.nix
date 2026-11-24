@@ -2013,11 +2013,16 @@ pkgs.testers.runNixOSTest {
 
       with subtest("A container the kernel kills for memory reaches the phone once, and so does its end"):
           create(tenant_pod("oom", ["dd", "if=/dev/zero", "of=/dev/null", "bs=64M", "count=1"], "Never", "32Mi"))
+          # Killed, whatever the runtime records: it may find the cgroup gone that would tell it why.
           server.wait_until_succeeds(
-              "kubectl -n alpha-hello get pod oom -o jsonpath='{.status.containerStatuses[0].state.terminated.reason}'"
-              " | grep -x OOMKilled",
+              "kubectl -n alpha-hello get pod oom -o jsonpath='{.status.containerStatuses[0].state.terminated.exitCode}'"
+              " | grep -x 137",
               timeout=120,
           )
+          # What the runtime gave as its reason, for a run that fails below.
+          print(server.succeed(
+              "kubectl -n alpha-hello get pod oom -o jsonpath='{.status.containerStatuses[0].state.terminated}'"
+          ))
           retry(lambda _: fires("OOM kills", "alpha-hello/oom/oom"), timeout_seconds=300)
           server.succeed("systemctl start host-checks")
           [killed] = sent("OOM kills")
