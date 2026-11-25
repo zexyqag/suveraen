@@ -2192,7 +2192,7 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
     | grep -vxF ConfigMap/kube-system/coredns-custom || true)
   [ -z "$bad" ] || fail "$cluster: a cluster directory adds Kustomizations, ConfigMaps and Secrets to flux-system" \
     "alone, and the cluster DNS's names for its tenants' Kanidm (coredns-custom in kube-system): $bad"
-  # pinned-images and Pod Security leave kube-system to k3s's own pods.
+  # pinned-images and Pod Security leave kube-system to k3s's own pods, and the servers give it its network policies.
   bad=$(yq ea '[select(.kind != null) | select(.metadata.namespace == "kube-system" or .kind == "HelmRelease"
     and ((.spec.targetNamespace // "") == "kube-system" or (.spec.storageNamespace // "") == "kube-system"))
     | .kind + "/" + (.metadata.namespace // "") + "/" + .metadata.name] | .[]' "$rendered"/*.yaml \

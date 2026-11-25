@@ -135,14 +135,39 @@ let
     in
     if explicit != null then lib.toInt (lib.head explicit) else schemePorts.${lib.toLower (lib.head repository)};
 
-  fluxPolicy = name: spec: {
+  networkPolicy = namespace: name: spec: {
     apiVersion = "networking.k8s.io/v1";
     kind = "NetworkPolicy";
-    metadata = {
-      inherit name;
-      namespace = "flux-system";
-    };
+    metadata = { inherit name namespace; };
     inherit spec;
+  };
+  fluxPolicy = networkPolicy "flux-system";
+  systemPolicy = networkPolicy "kube-system";
+
+  # The labels k3s gives CoreDNS, the cluster's DNS.
+  clusterDNS.k8s-app = "kube-dns";
+  dnsPorts = [
+    {
+      protocol = "UDP";
+      port = 53;
+    }
+    {
+      protocol = "TCP";
+      port = 53;
+    }
+  ];
+  # This server's own addresses at the API server's port. Policies add up, so each server opens its own, under a name
+  # of its own: a pod's policies hold its way to the API server on its own node too.
+  apiServer = {
+    to = map (address: {
+      ipBlock.cidr = "${address}/${if lib.hasInfix ":" address then "128" else "32"}";
+    }) cfg.nodeIP;
+    ports = [
+      {
+        protocol = "TCP";
+        port = apiPort;
+      }
+    ];
   };
 
   # Flux's pods reach one another, the cluster's DNS and the API server, and source-controller also the repository's
@@ -176,19 +201,10 @@ let
             to = [
               {
                 namespaceSelector.matchLabels."kubernetes.io/metadata.name" = "kube-system";
-                podSelector.matchLabels.k8s-app = "kube-dns";
+                podSelector.matchLabels = clusterDNS;
               }
             ];
-            ports = [
-              {
-                protocol = "UDP";
-                port = 53;
-              }
-              {
-                protocol = "TCP";
-                port = 53;
-              }
-            ];
+            ports = dnsPorts;
           }
         ];
       })
@@ -613,7 +629,7 @@ in
       }
       {
         assertion = builtins.match "[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?" hostName != null;
-        message = "networking.hostName must be a lowercase DNS label, as it names this server's own network policy for Flux's pods.";
+        message = "networking.hostName must be a lowercase DNS label, as it names this server's own network policies for Flux's pods and CoreDNS.";
       }
     ];
 
@@ -760,25 +776,38 @@ in
             };
           };
         };
-        # Policies add up, so each server opens its own addresses, under a name of its own: a pod's policies hold its
-        # way to the API server on its own node too. k3s applies its manifests in the order of their names, so this
-        # one comes after flux-components, which makes the namespace.
+        # k3s applies its manifests in the order of their names, so this one comes after flux-components, which makes
+        # the namespace.
         "flux-node-${hostName}".content = fluxPolicy "api-server-${hostName}" {
           podSelector = { };
           policyTypes = [ "Egress" ];
-          egress = [
-            {
-              to = map (address: {
-                ipBlock.cidr = "${address}/${if lib.hasInfix ":" address then "128" else "32"}";
-              }) cfg.nodeIP;
-              ports = [
-                {
-                  protocol = "TCP";
-                  port = apiPort;
-                }
-              ];
-            }
-          ];
+          egress = [ apiServer ];
+        };
+        # k3s's own pods may reach out to what CoreDNS needs alone: the API server, and the node's resolver, which it
+        # hands every name it doesn't answer itself. ServiceLB's pods need nothing: kube-proxy takes the packets for the
+        # addresses they publish ahead of their host ports, and what they would hand on under the local traffic policy,
+        # to the node's NodePort, finds nothing there, as NodePorts answer on loopback alone. The way in stays open, as
+        # every pod asks CoreDNS.
+        kube-system-policies.content = [
+          (systemPolicy "default-deny-egress" {
+            podSelector = { };
+            policyTypes = [ "Egress" ];
+          })
+          (systemPolicy "coredns" {
+            podSelector.matchLabels = clusterDNS;
+            policyTypes = [ "Egress" ];
+            egress = [
+              {
+                to = [ { ipBlock.cidr = "${resolver}/32"; } ];
+                ports = dnsPorts;
+              }
+            ];
+          })
+        ];
+        "kube-system-node-${hostName}".content = systemPolicy "coredns-api-server-${hostName}" {
+          podSelector.matchLabels = clusterDNS;
+          policyTypes = [ "Egress" ];
+          egress = [ apiServer ];
         };
       };
     };

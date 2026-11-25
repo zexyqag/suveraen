@@ -34,7 +34,8 @@
 # What a pod or the host sends to the Services' ranges that kube-proxy doesn't translate is refused at once and goes
 # nowhere.
 # Flux's namespace holds the server's network policies alone, under which its pods reach the cluster's DNS and, of
-# the host, the API server alone. No network policy takes an egress rule that names no peer, in any namespace.
+# the host, the API server alone; so does k3s's, under which CoreDNS reaches the API server and the node's resolver,
+# and its other pods nothing. No network policy takes an egress rule that names no peer, in any namespace.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
 # One address, or one IPv6 /64, opens only so many web connections and sends only so many STUN requests a second, each
 # counted, in memory alone; the operator can block one there for a while, and the firewall keeps no record of the
@@ -911,51 +912,102 @@ pkgs.testers.runNixOSTest {
           assert counted == ["0"] * 4, counted
           server.succeed("nft delete table inet unrouted && kubectl -n probe delete pod/unrouted service/unserved")
 
+      # The policies a namespace holds, by name, once k3s, which applies its manifests one by one, has put in those it
+      # should.
+      def policies_in(namespace, want):
+          server.wait_until_succeeds(f"kubectl -n {namespace} get networkpolicy {' '.join(want)}", timeout=120)
+          names = f"kubectl -n {namespace} get networkpolicy -o jsonpath='{{.items[*].metadata.name}}'"
+          return sorted(server.succeed(names).split())
+
+      server_ip = "${nodes.server.networking.primaryIPAddress}"
+      node_resolver = "${nodes.server.suveraen.cluster.nodeServices.resolver}"
+
+      # A pod that ends when told to.
+      def sleeping(namespace):
+          obj = pod(namespace)
+          obj["spec"]["containers"][0]["command"] = ["sh", "-c", "trap exit TERM; sleep 3600 & wait"]
+          return obj
+
+      # busybox's nc tells a refused connection only at -vv.
+      def try_port(namespace, target, name="probe"):
+          return server.execute(
+              f"kubectl -n {namespace} exec {name} -- sh -c 'timeout 10 nc -vv -w 3 {target} </dev/null' 2>&1"
+          )
+
+      # k3s's policy controller puts in a new pod's own rules a moment after the pod starts: each refusal is waited for,
+      # and what the pod still reaches is tried once its rules hold it.
+      def kept_out(namespace, target, name="probe"):
+          def check(last):
+              status, out = try_port(namespace, target, name)
+              ok = status != 0 and "Connection refused" in out
+              assert ok or not last, (namespace, name, target, status, out)
+              return ok
+
+          return check
+
       with subtest("Flux's namespace holds the server's network policies alone, under which its pods reach the cluster's DNS and, of the host, the API server alone"):
-          names = "kubectl -n flux-system get networkpolicy -o jsonpath='{.items[*].metadata.name}'"
           api = "api-server-${nodes.server.networking.hostName}"
           want = sorted([api, "default-deny", "dns", "repository", "same-namespace"])
-          # k3s applies its manifests one by one.
-          server.wait_until_succeeds(f"kubectl -n flux-system get networkpolicy {' '.join(want)}", timeout=120)
-          policies = sorted(server.succeed(names).split())
+          policies = policies_in("flux-system", want)
           assert policies == want, policies
           # The repository's URL is https:// and names no port.
           ports = server.succeed(
               "kubectl -n flux-system get networkpolicy repository -o jsonpath='{.spec.egress[*].ports[*].port}'"
           ).split()
           assert ports == ["443"], ports
-          # A pod in Flux's namespace, which ends when told to. Of what a pod in the probe namespace, which no policy
-          # holds, reaches on the host above, it reaches the API server alone.
-          sleeping = pod("flux-system")
-          sleeping["spec"]["containers"][0]["command"] = ["sh", "-c", "trap exit TERM; sleep 3600 & wait"]
-          server.succeed(f"echo {shlex.quote(json.dumps(sleeping))} | kubectl create -f -")
+          # Of what a pod in the probe namespace, which no policy holds, reaches on the host above, a pod in Flux's
+          # namespace reaches the API server alone.
+          server.succeed(f"echo {shlex.quote(json.dumps(sleeping('flux-system')))} | kubectl create -f -")
           server.succeed("kubectl -n flux-system wait pod probe --for=condition=Ready --timeout=120s")
-
-          # busybox's nc tells a refused connection only at -vv.
-          def try_port(target):
-              return server.execute(
-                  f"kubectl -n flux-system exec probe -- sh -c 'timeout 10 nc -vv -w 3 {target} </dev/null' 2>&1"
-              )
-
-          # k3s's policy controller puts in a new pod's own rules a moment after the pod starts: each refusal is
-          # waited for, and what the pod still reaches is tried once its rules hold it.
-          def kept_out(target):
-              def check(last):
-                  status, out = try_port(target)
-                  ok = status != 0 and "Connection refused" in out
-                  assert ok or not last, (target, status, out)
-                  return ok
-
-              return check
-
           # The host opens both to pods, SSH as it does to every source, so only the namespace's policies refuse them.
-          server_ip = "${nodes.server.networking.primaryIPAddress}"
-          for target in [f"{server_ip} 22", "${nodes.server.suveraen.cluster.nodeServices.resolver} 53"]:
-              retry(kept_out(target), timeout_seconds=120)
-          status, out = try_port(f"{server_ip} 6443")
+          for target in [f"{server_ip} 22", f"{node_resolver} 53"]:
+              retry(kept_out("flux-system", target), timeout_seconds=120)
+          status, out = try_port("flux-system", f"{server_ip} 6443")
           assert status == 0, (status, out)
           server.succeed("kubectl -n flux-system exec probe -- nslookup probe.test. | grep -F 192.0.2.53")
           server.succeed("kubectl -n flux-system delete pod probe")
+
+      with subtest("k3s's namespace holds the server's network policies alone, under which CoreDNS reaches the API server and the node's resolver, and its other pods nothing"):
+          api = "coredns-api-server-${nodes.server.networking.hostName}"
+          want = sorted([api, "coredns", "default-deny-egress"])
+          policies = policies_in("kube-system", want)
+          assert policies == want, policies
+          # Both of CoreDNS's policies select its pods, by the same labels.
+          selected = [
+              json.loads(server.succeed(
+                  f"kubectl -n kube-system get networkpolicy {name} -o jsonpath='{{.spec.podSelector.matchLabels}}'"
+              ))
+              for name in ["coredns", api]
+          ]
+          ours = json.loads(server.succeed(
+              "kubectl -n kube-system get deployment coredns -o jsonpath='{.spec.template.metadata.labels}'"
+          ))
+          assert selected[0] == selected[1] and selected[0].items() <= ours.items(), (selected, ours)
+          # A pod in k3s's namespace, and one held to CoreDNS's policies that never becomes ready, so that the cluster's
+          # DNS hands it no query. Of what a pod in the probe namespace, which no policy holds, reaches on the host
+          # above, the first reaches nothing, and the second, once refused SSH, the API server, also at the Service's
+          # address CoreDNS takes to it, and the resolver.
+          like_coredns = sleeping("kube-system")
+          like_coredns["metadata"].update(name="coredns-probe", labels=selected[0])
+          like_coredns["spec"]["containers"][0]["readinessProbe"] = {"exec": {"command": ["false"]}}
+          for obj in [sleeping("kube-system"), like_coredns]:
+              server.succeed(f"echo {shlex.quote(json.dumps(obj))} | kubectl create -f -")
+          server.succeed("kubectl -n kube-system wait pod probe --for=condition=Ready --timeout=120s")
+          server.succeed(
+              "kubectl -n kube-system wait pod coredns-probe --for=jsonpath='{.status.phase}'=Running --timeout=120s"
+          )
+          api_ports = [f"{address} 6443" for address in ${builtins.toJSON nodes.server.suveraen.cluster.nodeIP}]
+          for target in [f"{server_ip} 22", f"{node_resolver} 53", *api_ports]:
+              retry(kept_out("kube-system", target), timeout_seconds=120)
+          retry(kept_out("kube-system", f"{server_ip} 22", "coredns-probe"), timeout_seconds=120)
+          api_service = server.succeed("kubectl get service kubernetes -o jsonpath='{.spec.clusterIP}'").strip()
+          for target in [f"{api_service} 443", f"{node_resolver} 53", *api_ports]:
+              status, out = try_port("kube-system", target, "coredns-probe")
+              assert status == 0, (target, status, out)
+          server.succeed(
+              f"kubectl -n kube-system exec coredns-probe -- nslookup probe.test. {node_resolver} | grep -F 192.0.2.53"
+          )
+          server.succeed("kubectl -n kube-system delete pod probe coredns-probe")
 
       with subtest("No network policy has an egress rule that names no peer, in any namespace"):
           server.succeed("kubectl apply -f ${../kubernetes/platform/policies/app/network-policies.yaml}")
