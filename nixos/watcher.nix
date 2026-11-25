@@ -46,6 +46,16 @@ in
       description = "ntfy accounts (phones) that may read alerts. Everything not granted here is denied.";
     };
 
+    ntfyUpstream = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "https://ntfy.sh";
+      description = ''
+        ntfy server that wakes iPhones, which get alerts at once only through it: it learns when each alert is sent,
+        its ID and a hash of its topic, never what it says, which the phone then fetches from here. `null` where no
+        reader uses an iPhone.
+      '';
+    };
+
     ntfyEnvironmentFile = lib.mkOption {
       type = lib.types.str;
       description = ''
@@ -145,9 +155,7 @@ in
             "publisher"
             "gatus"
           ];
-        # iPhones only get instant notifications through ntfy.sh's push relay. It receives the message ID and a
-        # hash of the topic URL, never the content; the phone then fetches the message from here.
-        upstream-base-url = "https://ntfy.sh";
+        upstream-base-url = lib.mkIf (cfg.ntfyUpstream != null) cfg.ntfyUpstream;
         # Phones fetch and catch up from this cache; the default 12 hours is too short for a phone left off over a weekend.
         cache-duration = "72h";
         # SQLite otherwise leaves what the cache expires in the file's free pages, readable until they are reused.

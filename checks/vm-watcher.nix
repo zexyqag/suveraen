@@ -97,6 +97,8 @@ rec {
           ntfyHost = "alerts.test";
           statusHost = "status.test";
           readers = [ "phone" ];
+          # The test's phone is no iPhone, and nothing here reaches ntfy.sh.
+          ntfyUpstream = null;
           ntfyEnvironmentFile = "${secrets}/ntfy.env";
           gatusEnvironmentFile = "${secrets}/gatus.env";
         };

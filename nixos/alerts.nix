@@ -76,8 +76,9 @@ in
     urlFile = lib.mkOption {
       type = lib.types.str;
       description = ''
-        File holding the ntfy topic URL alerts are posted to. The topic name is a secret:
-        iPhones are woken through ntfy.sh on a hash of it, so anyone who knows it could send them fake alerts.
+        File holding the ntfy topic URL alerts are posted to. The topic name is a secret: iPhones are woken through
+        the watcher's ntfy upstream (suveraen.watcher.ntfyUpstream, ntfy.sh by default) on a hash of it, so anyone
+        who knows it could send them fake alerts.
       '';
     };
 
