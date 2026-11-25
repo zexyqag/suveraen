@@ -740,6 +740,19 @@ refuses np-empty-peer "a network policy rule without peers reaches everything: x
   "np '  egress:\n    - to:\n        - {}\n'"
 refuses np-edge-ports-only "a network policy rule without peers reaches everything: from-gateway-" \
   "yq -i 'del(.spec.ingress[0].from)' edge/base/networkpolicy.yaml"
+refuses platform-namespace-open "a platform namespace is closed in both directions by default" \
+  "sed -i '0,/policyTypes: \[Ingress, Egress\]/s//policyTypes: [Ingress]/' components/platform/networkpolicies.yaml"
+refuses platform-egress-all "test/gateway: a network policy rule without peers reaches everything: x" \
+  "append platform/gateway/app/networkpolicy.yaml '---\napiVersion: networking.k8s.io/v1\nkind: NetworkPolicy
+metadata:\n  name: x\n  namespace: gateway\nspec:\n  podSelector: {}\n  policyTypes: [Egress]\n  egress:\n    - {}\n'"
+ranged="of the platform's network policies only api-server and internet reach addresses by range"
+refuses platform-ipblock-other "test/cert-manager: $ranged" \
+  "sed -i 's|169.254.53.54/32|169.254.53.0/24|' platform/cert-manager/app/networkpolicy.yaml"
+refuses platform-ipblock-port "test/cert-manager: $ranged" \
+  "sed -i 's/port: 53/port: 443/' platform/cert-manager/app/networkpolicy.yaml"
+refuses platform-api-server-other-port \
+  "the network policy api-server opens the API server on the nodes to every pod of a platform namespace" \
+  "sed -i 's/port: 6443/port: 10250/' components/platform/networkpolicies.yaml"
 
 # Sources and charts.
 source="the release names no Flux source but the HelmCharts the platform builds from it:"
@@ -974,7 +987,7 @@ fluxsystem="test: flux-system's network policies are the servers' alone, so the 
 refuses networkpolicy-flux-system "$fluxsystem and installs no chart there: NetworkPolicy/flux-system/x" \
   "append platform/reloader/app/helmrelease.yaml '---\napiVersion: networking.k8s.io/v1\nkind: NetworkPolicy
 metadata:\n  name: x\n  namespace: flux-system\nspec:\n  podSelector: {}\n  policyTypes: [Egress]\n  egress:
-    - to:\n        - ipBlock:\n            cidr: 0.0.0.0/0\n'"
+    - to:\n        - namespaceSelector: {}\n'"
 refuses helmrelease-flux-system "$fluxsystem and installs no chart there: HelmRelease/flux-system/reloader" \
   "yq -i 'del(.spec.targetNamespace)' platform/reloader/app/helmrelease.yaml"
 
@@ -1033,8 +1046,6 @@ refuses internet-other-port "$internet" "sed -i 's/port: 443/port: 22/' componen
 refuses internet-link-local "$internet" "sed -i '/169.254.0.0/d' components/internet/internet.yaml"
 refuses internet-own-pods "$internet" "sed -i '/POD_CIDR_V6/d' components/internet/internet.yaml"
 refuses internet-for-all "$internet" "yq -i '.spec.podSelector = {}' components/internet/internet.yaml"
-renders internet-platform "sed -i 's|^    - ../../../components/platform\$|&\n    - ../../../components/internet|' \
-  platform/cert-manager/ks.yaml"
 refuses internet-platform-other "test/reloader: $internet" \
   "append platform/reloader/app/helmrelease.yaml '---\napiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:
   name: internet\n  namespace: reloader\nspec:\n  podSelector: {}\n  policyTypes: [Egress]\n  egress:\n    - to:

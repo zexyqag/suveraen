@@ -2,11 +2,13 @@
 # other Kustomizations create: the cluster's, each tenant's, then the tenant's apps and hosts. Each gets the values
 # its own sources hold, a stand-in for each encrypted one, and strict substitution. Then checks the rules Flux itself
 # wouldn't catch, on what was rendered rather than on what a file says.
-# Usage: CLUSTER_RANGES=<the servers' ranges> KANIDM_VERSION=<the Kanidm client's version> \
-#   NETBIRD_PINS=<checks/netbird.nix as JSON> NETBIRD_PEER_COLUMNS=<the servers' suveraen.mesh.peerColumns as JSON> \
+# Usage: CLUSTER_RANGES=<the servers' ranges> NODE_SERVICES=<the servers' node services> \
+#   KANIDM_VERSION=<the Kanidm client's version> NETBIRD_PINS=<checks/netbird.nix as JSON> \
+#   NETBIRD_PEER_COLUMNS=<the servers' suveraen.mesh.peerColumns as JSON> \
 #   render.sh <kubernetes directory> <output directory>
 set -euo pipefail
 : "${CLUSTER_RANGES:?the ranges the servers give k3s (nixos/cluster.nix), as <setting>=<range> words}"
+: "${NODE_SERVICES:?where pods reach the DNS services on their node (nixos/cluster.nix), as <name>=<address> words}"
 : "${KANIDM_VERSION:?the version of the Kanidm client the platform builds, which the Kanidm server must match}"
 : "${NETBIRD_PINS:?the NetBird release and images checks/netbird.nix pins, as JSON}"
 : "${NETBIRD_PEER_COLUMNS:?the columns of peers the scrub blanks and keeps, as nixos/mesh.nix names them, as JSON}"
@@ -1398,6 +1400,30 @@ for dir in kubernetes/clusters/*/; do
         [ -z "$bad" ] || fail "$cluster/$name: hosts come only from tenants' edges: $bad"
         bad=$(yq ea '[select(.kind == "Namespace") | .metadata.name] | .[]' "$file" | grep -E "$tenantlike" || true)
         [ -z "$bad" ] || fail "$cluster/$name: platform namespaces can't be named like a tenant's app: $bad"
+        bad=$(yq ea -o=json -I=0 '[select(.kind == "Namespace" or .kind == "NetworkPolicy")]' "$file" | jq -r '
+          [.[] | select(.kind == "NetworkPolicy" and .metadata.name == "default-deny" and .spec.podSelector == {}
+            and (.spec.policyTypes | sort) == ["Egress", "Ingress"] and (.spec | has("ingress") or has("egress") | not))
+            | .metadata.namespace] as $closed
+          | .[] | select(.kind == "Namespace" and (.metadata.name | IN($closed[]) | not)) | .metadata.name' | paste -sd' ')
+        [ -z "$bad" ] || fail "$cluster/$name: a platform namespace is closed in both directions by default: $bad"
+        # The way to the API server on the nodes, for every pod of a platform namespace (components/platform).
+        want='{"egress":[{"ports":[{"port":6443,"protocol":"TCP"}],"to":[{"ipBlock":{"cidr":"'$(v NODE_CIDR_V4)'"}},'
+        want+='{"ipBlock":{"cidr":"'$(v NODE_CIDR_V6)'"}}]}],"podSelector":{},"policyTypes":["Egress"]}'
+        bad=$(yq ea -o=json -I=0 '[select(.kind == "NetworkPolicy" and .metadata.name == "api-server")
+          | .spec | sort_keys(..)] | .[]' "$file" | grep -vxF "$want" || true)
+        [ -z "$bad" ] || fail "$cluster/$name: the network policy api-server opens the API server on the nodes to" \
+          "every pod of a platform namespace, and nothing else: $bad"
+        # Addresses by range are the API server's and the internet's, whose policies are held to their shapes; beyond
+        # them the platform's policies reach only a node's own DNS services, each at its one address, on port 53.
+        services=$(for service in $NODE_SERVICES; do echo "${service#*=}/32"; done | jq -Rsc 'split("\n")[:-1]')
+        bad=$(yq ea -o=json -I=0 '[select(.kind == "NetworkPolicy")]' "$file" | jq -r --argjson services "$services" '
+          .[] | select(.metadata.name | IN("internet", "api-server") | not)
+          | select(any(.spec.egress[]?; any(.to[]?; has("ipBlock")) and (any(.to[] | .ipBlock // empty;
+            (.except // []) != [] or (.cidr | IN($services[]) | not)) or (.ports // []) == []
+            or any(.ports[]; .port != 53 or has("endPort") or ((.protocol // "TCP") | IN("TCP", "UDP") | not)))))
+          | .metadata.namespace + "/" + .metadata.name' | paste -sd' ')
+        [ -z "$bad" ] || fail "$cluster/$name: of the platform's network policies only api-server and internet reach" \
+          "addresses by range, and others a node's own DNS service alone, at its address on port 53: $bad"
         ;;
       "./$dir/tenants/$t/apps")
         [ "$name" = "tenant-$t" ] || fail "$cluster/$name: a tenant's Kustomization is tenant-<id>"
@@ -1953,6 +1979,13 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
       [ -z "$bad" ] || fail "$cluster/$name: the network policy internet opens web ports to all but the cluster's own" \
         "pods, Services and nodes, for pods labelled suveraen/egress=internet: $bad"
     fi
+    # A rule without peers, or with an empty one, reaches every pod and address there is: out of any namespace, and
+    # into an app's. Into a platform namespace, it is how the gateway takes clients from anywhere.
+    rules='((.spec.egress // [])[] | (.to // []))'
+    [[ $path == ./kubernetes/platform/* ]] || rules+=', ((.spec.ingress // [])[] | (.from // []))'
+    bad=$(yq ea "[select(.kind == \"NetworkPolicy\")
+      | select([$rules] | any_c(length == 0 or any_c((keys | length) == 0))) | .metadata.name] | .[]" "$file")
+    [ -z "$bad" ] || fail "$cluster/$name: a network policy rule without peers reaches everything: $bad"
     case $path in
       ./kubernetes/apps/* | ./kubernetes/edge/*)
         # Backups say how old they may get, which the servers hold them to.
@@ -1962,11 +1995,6 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
           | .kind + "/" + .metadata.name] | .[]' "$file")
         [ -z "$bad" ] || fail "$cluster/$name: backups say how old they may get, in minutes, hours or days" \
           "(suveraen/max-age): $bad"
-        # A rule without peers, or with an empty one, reaches every pod and address there is, both ways.
-        bad=$(yq ea '[select(.kind == "NetworkPolicy")
-          | select([((.spec.ingress // [])[] | (.from // [])), ((.spec.egress // [])[] | (.to // []))]
-            | any_c(length == 0 or any_c((keys | length) == 0))) | .metadata.name] | .[]' "$file")
-        [ -z "$bad" ] || fail "$cluster/$name: a network policy rule without peers reaches everything: $bad"
         # The way to the API server on the nodes, for CloudNativePG's pods alone.
         want='{"egress":[{"ports":[{"port":6443,"protocol":"TCP"}],"to":[{"ipBlock":{"cidr":"'$(v NODE_CIDR_V4)'"}},'
         want+='{"ipBlock":{"cidr":"'$(v NODE_CIDR_V6)'"}}]}],"podSelector":{"matchExpressions":[{"key":"cnpg.io/cluster",'

@@ -35,7 +35,7 @@
 # a tenant's namespace is backed up or VolSync's.
 # No network policy has an egress rule that names no peer, nor can one be made: the CSI operator's chart's own keeps
 # its ingress alone, and the one the operator makes for each controller plugin is refused, which is all its latest
-# pass fails on.
+# pass fails on. Every namespace that runs a pod is closed on the way out by default, whatever made it.
 # Flux takes charts from the release alone: its one GitRepository, and a HelmChart per vendored chart at the version
 # its record gives, which every HelmRelease runs.
 # containerd pulled every image through the server's mirror alone, which holds images of every registry it lists, all
@@ -1558,13 +1558,22 @@ runTest {
                       if address["type"] == "InternalIP":
                           within(address["address"], "NODE")
 
-          with subtest("No network policy has an egress rule that names no peer, nor can one be made: the CSI operator's chart's own keeps only its ingress, which it denies, and the operator's own for each controller plugin is refused"):
+          with subtest("No network policy has an egress rule that names no peer, nor can one be made: the CSI operator's chart's own keeps only its ingress, which it denies, and the operator's own for each controller plugin is refused; and every namespace that runs a pod is closed on the way out by default"):
               network_policies = items("networkpolicies")
               open_egress = [
                   f"{n['metadata']['namespace']}/{n['metadata']['name']}" for n in network_policies
                   if any(not rule.get("to") for rule in n["spec"].get("egress", []))
               ]
               assert not open_egress, open_egress
+              # By the pods that run, not by labels: a piece that forgets its namespace's policies, or a chart that
+              # makes a namespace of its own, would carry none. The test's own probes come after.
+              closed_out = {
+                  n["metadata"]["namespace"] for n in network_policies
+                  if not n["spec"].get("podSelector") and "Egress" in n["spec"].get("policyTypes", [])
+                  and not n["spec"].get("egress")
+              }
+              running_in = {p["metadata"]["namespace"] for p in items("pods") if p["status"].get("phase") == "Running"}
+              assert running_in and not running_in - closed_out, sorted(running_in - closed_out)
               [csi_policy] = [n["spec"] for n in network_policies if n["metadata"]["name"] == "ceph-csi-ceph-csi-controller-manager"]
               assert csi_policy["policyTypes"] == ["Ingress"] and not {"ingress", "egress"} & csi_policy.keys(), csi_policy
               # The operator makes one of its own for each driver's controller plugin, whose one egress rule names no

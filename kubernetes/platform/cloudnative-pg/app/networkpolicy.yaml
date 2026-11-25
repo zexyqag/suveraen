@@ -1,0 +1,24 @@
+---
+# The operator manages each tenant's instances through their status port, the only one of theirs it connects to
+# (apps/postgres). It reaches the Barman plugin within the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: to-instances
+  namespace: cloudnative-pg
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cloudnative-pg
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              suveraen/app: postgres
+          podSelector:
+            matchLabels:
+              cnpg.io/cluster: postgres
+      ports:
+        - protocol: TCP
+          port: 8000

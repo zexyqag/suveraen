@@ -7,6 +7,8 @@ spec:
   path: ./kubernetes/platform/cert-manager/app
   components:
     - ../../../components/platform
+    # Its controller alone, labelled for it, reaches the CAs (helmrelease.yaml).
+    - ../../../components/internet
   postBuild:
     substitute:
       NAMESPACE: cert-manager

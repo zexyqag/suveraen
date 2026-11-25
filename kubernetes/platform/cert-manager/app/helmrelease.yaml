@@ -28,6 +28,9 @@ spec:
     # A challenge's record is checked through the cluster's DNS: asking each of the zone's nameservers itself would take
     # port 53 to any address.
     dns01RecursiveNameserversOnly: true
+    # The controller's pods alone talk to the CAs, by the namespace's way to the internet (components/internet).
+    podLabels:
+      suveraen/egress: internet
     global:
       priorityClassName: platform
       leaderElection:

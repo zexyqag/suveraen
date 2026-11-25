@@ -4,6 +4,7 @@
   pkgs,
   kubernetes,
   ranges,
+  nodeServices,
   kanidm,
   netbird,
   peerColumns,
@@ -18,7 +19,8 @@ pkgs.runCommand "render"
     ];
   }
   ''
-    export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges} KANIDM_VERSION=${kanidm.version} \
+    export HOME=$TMPDIR CLUSTER_RANGES=${pkgs.lib.escapeShellArg ranges} \
+      NODE_SERVICES=${pkgs.lib.escapeShellArg nodeServices} KANIDM_VERSION=${kanidm.version} \
       NETBIRD_PINS=${pkgs.lib.escapeShellArg (builtins.toJSON netbird)} \
       NETBIRD_PEER_COLUMNS=${pkgs.lib.escapeShellArg (builtins.toJSON peerColumns)}
     bash ${./render.sh} ${kubernetes} $out

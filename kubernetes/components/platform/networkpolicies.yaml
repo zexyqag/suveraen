@@ -1,13 +1,12 @@
 ---
-# Egress stays open until the phone-home inventory gives each piece its own list.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: default-deny-ingress
+  name: default-deny
   namespace: ${NAMESPACE}
 spec:
   podSelector: {}
-  policyTypes: [Ingress]
+  policyTypes: [Ingress, Egress]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -16,7 +15,51 @@ metadata:
   namespace: ${NAMESPACE}
 spec:
   podSelector: {}
-  policyTypes: [Ingress]
+  policyTypes: [Ingress, Egress]
   ingress:
     - from:
         - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dns
+  namespace: ${NAMESPACE}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# Every pod of a platform namespace reaches the API server on the nodes, those that never ask it too, Ceph's daemons
+# among them: one rule for the operators and controllers that do. A pod's policies hold its way there on its own node
+# too.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-server
+  namespace: ${NAMESPACE}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: ${NODE_CIDR_V4}
+        - ipBlock:
+            cidr: "${NODE_CIDR_V6}"
+      ports:
+        - protocol: TCP
+          port: 6443

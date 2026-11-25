@@ -1,5 +1,5 @@
 ---
-# The operator manages the instances through their status port and PostgreSQL itself.
+# The operator manages the instances through their status port, and connects to nothing else of theirs.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -19,7 +19,6 @@ spec:
               app.kubernetes.io/name: cloudnative-pg
       ports:
         - port: 8000
-        - port: 5432
 ---
 # The instances' Barman sidecar, and the jobs that copy the bucket, reach the object store.
 apiVersion: networking.k8s.io/v1
@@ -42,8 +41,8 @@ spec:
       ports:
         - port: 8080
 ---
-# CloudNativePG's instance managers, their Barman sidecars and its jobs talk to the API server on the nodes, which
-# the pods on other nodes reach through this.
+# CloudNativePG's instance managers, their Barman sidecars and its jobs talk to the API server on the nodes, which a
+# pod's policies hold its way to on its own node too.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

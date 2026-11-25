@@ -1,0 +1,21 @@
+---
+# The controller sends each challenge's record to the signer's Knot, over TCP as the issuers do (platform/issuer/acme),
+# where pods reach it on their node: suveraen.cluster.nodeServices.dnsUpdates.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: to-dns-updates
+  namespace: cert-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cert-manager
+      app.kubernetes.io/component: controller
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 169.254.53.54/32
+      ports:
+        - protocol: TCP
+          port: 53

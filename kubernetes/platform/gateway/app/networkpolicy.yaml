@@ -13,3 +13,18 @@ spec:
     - ports:
         - port: 8000
         - port: 8443
+---
+# To every app's namespace, where the policy of each of its hosts opens the routed port alone (kubernetes/edge).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: to-apps
+  namespace: gateway
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              suveraen/tier: app

@@ -6,3 +6,4 @@ kind: Kustomization
 resources:
   - ./helmchart.yaml
   - ./helmrelease.yaml
+  - ./networkpolicy.yaml

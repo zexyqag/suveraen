@@ -115,6 +115,11 @@
         pkgs.lib.concatStringsSep " " (
           named "POD" cluster.podCIDRs ++ named "SERVICE" cluster.serviceCIDRs
         );
+      # And where pods reach a node's own DNS services, the only addresses a platform pod's policies name but the API
+      # server's and the internet's.
+      nodeServices = pkgs.lib.concatStringsSep " " (
+        pkgs.lib.mapAttrsToList (name: address: "${name}=${address}") server.suveraen.cluster.nodeServices
+      );
     in
     {
       nixosModules.default = {
@@ -170,6 +175,7 @@
           inherit
             pkgs
             ranges
+            nodeServices
             kanidm
             netbird
             peerColumns
@@ -242,6 +248,7 @@
         inherit
           pkgs
           ranges
+          nodeServices
           kanidm
           netbird
           peerColumns
