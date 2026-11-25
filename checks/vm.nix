@@ -31,6 +31,8 @@
 # token file alone; another token leaves a running server's own database in place.
 # Flux's controllers run the digests the release pins for their images' tags, which they can't pull here, out of reach
 # of their registry, and the rules on the server's metrics find those pulls failing.
+# What a pod or the host sends to the Services' ranges that kube-proxy doesn't translate is refused at once and goes
+# nowhere.
 # Flux's namespace holds the server's network policies alone, under which its pods reach the cluster's DNS and, of
 # the host, the API server alone. No network policy takes an egress rule that names no peer, in any namespace.
 # A LoadBalancer Service with the local traffic policy, as the gateway's is, hands its pods each client's own address.
@@ -362,6 +364,29 @@ pkgs.testers.runNixOSTest {
           "open ${resolver} 53"
           "closed ${resolver} ${mirror}"
         ];
+      # Each packet to the Services' ranges that is forwarded or leaves the host, where the e2e records what pods try
+      # out of the uplink: past kube-proxy's translation, before any firewall.
+      unrouted =
+        let
+          inherit (nodes.server.suveraen.cluster) serviceCIDRs;
+          counted = family: cidrs: "${family} daddr { ${pkgs.lib.concatStringsSep ", " cidrs} } counter";
+          rules = ''
+            ${counted "ip" (pkgs.lib.filter (cidr: !pkgs.lib.hasInfix ":" cidr) serviceCIDRs)}
+            ${counted "ip6" (pkgs.lib.filter (pkgs.lib.hasInfix ":") serviceCIDRs)}
+          '';
+        in
+        pkgs.writeText "unrouted.nft" ''
+          table inet unrouted {
+            chain forward {
+              type filter hook forward priority filter - 10; policy accept;
+              ${rules}
+            }
+            chain output {
+              type filter hook output priority filter - 10; policy accept;
+              ${rules}
+            }
+          }
+        '';
     in
     ''
       import ipaddress
@@ -841,6 +866,48 @@ pkgs.testers.runNixOSTest {
           )
           ports = server.succeed("kubectl -n probe logs host-ports").splitlines()
           assert not [line for line in host_ports if line not in ports], ports
+
+      with subtest("What a pod or the host sends to the Services' ranges that kube-proxy doesn't translate is refused at once and goes nowhere"):
+          # A Service without endpoints, a port the cluster's DNS doesn't serve and, as for a Service kube-proxy hasn't
+          # put in yet, of each range an address no Service holds: the API server hands out a range's first 256 only
+          # once the rest are taken.
+          server.succeed(
+              "kubectl -n probe create service clusterip unserved --tcp=80 --dry-run=client -o json"
+              """ | jq '.spec.ipFamilyPolicy = "RequireDualStack"' | kubectl create -f -"""
+          )
+          addresses = "-o jsonpath='{.spec.clusterIPs[*]}'"
+          unserved = server.succeed(f"kubectl -n probe get service unserved {addresses}").split()
+          dns = server.succeed(f"kubectl -n kube-system get service kube-dns {addresses}").split()
+          allocated = server.succeed("kubectl get services -A -o jsonpath='{.items[*].spec.clusterIPs[*]}'").split()
+          service_ranges = ${builtins.toJSON nodes.server.suveraen.cluster.serviceCIDRs}
+          unheld = [str(ipaddress.ip_network(r)[200]) for r in service_ranges]
+          assert not set(unheld) & set(allocated), allocated
+          targets = unserved + dns + unheld
+          server.succeed("nft -f ${unrouted}")
+          # busybox's nc tells a refused connection only at -vv.
+          server.succeed(
+              f"kubectl -n probe run unrouted --image={busybox} --image-pull-policy=Never --restart=Never --command -- sh -c"
+              f" 'for address in {' '.join(targets)}; do echo try $address; start=$(date +%s);"
+              " timeout 10 nc -vv -w 5 $address 80 </dev/null 2>&1; echo took $(($(date +%s) - start));"
+              " echo x | timeout 5 nc -u -w 1 $address 53 >/dev/null 2>&1; done'"
+          )
+          server.wait_until_succeeds(
+              "kubectl -n probe get pod unrouted -o jsonpath='{.status.phase}' | grep -xE 'Succeeded|Failed'", timeout=120
+          )
+          out = server.succeed("kubectl -n probe logs unrouted")
+          tries = {t.split()[0]: t for t in re.split(r"^try ", out, flags=re.M)[1:]}
+          assert sorted(tries) == sorted(targets), out
+          for said in tries.values():
+              took = re.search(r"^took ([0-9]+)$", said, re.M)
+              assert "Connection refused" in said and took and int(took[1]) <= 1, out
+          for address in targets:
+              status, said = server.execute(f"timeout 10 nc -v -w 5 {address} 80 </dev/null 2>&1")
+              assert status == 1 and "Connection refused" in said, (address, status, said)
+              server.execute(f"echo x | timeout 5 nc -u -w 1 {address} 53 >/dev/null 2>&1")
+          # The UDP datagrams above show only here: what is refused never reaches these counters.
+          counted = re.findall(r"packets ([0-9]+)", server.succeed("nft list table inet unrouted"))
+          assert counted == ["0"] * 4, counted
+          server.succeed("nft delete table inet unrouted && kubectl -n probe delete pod/unrouted service/unserved")
 
       with subtest("Flux's namespace holds the server's network policies alone, under which its pods reach the cluster's DNS and, of the host, the API server alone"):
           names = "kubectl -n flux-system get networkpolicy -o jsonpath='{.items[*].metadata.name}'"

@@ -121,6 +121,7 @@ let
   kubeletPort = 10250;
   v4 = lib.filter (cidr: !lib.hasInfix ":" cidr);
   v6 = lib.filter (lib.hasInfix ":");
+  set = cidrs: "{ ${lib.concatStringsSep ", " cidrs} }";
 
   # The repository's URL as its scheme and authority, and the port source-controller fetches it at.
   repository = builtins.match "([A-Za-z][A-Za-z0-9+.-]*)://([^/?#]*).*" (toString source.repository);
@@ -1150,15 +1151,11 @@ in
 
     # Pods may reach the API server, the kubelet and the node's resolver on the host, and on the DNS signer its Knot
     # (dns.nix); nothing else there.
-    networking.firewall.extraInputRules =
-      let
-        set = cidrs: "{ ${lib.concatStringsSep ", " cidrs} }";
-      in
-      ''
-        ip saddr ${set (v4 podCIDRs)} tcp dport { ${toString apiPort}, ${toString kubeletPort} } accept
-        ip6 saddr ${set (v6 podCIDRs)} tcp dport { ${toString apiPort}, ${toString kubeletPort} } accept
-        ip saddr ${set (v4 podCIDRs)} ip daddr ${resolver} meta l4proto { tcp, udp } th dport 53 accept
-      '';
+    networking.firewall.extraInputRules = ''
+      ip saddr ${set (v4 podCIDRs)} tcp dport { ${toString apiPort}, ${toString kubeletPort} } accept
+      ip6 saddr ${set (v6 podCIDRs)} tcp dport { ${toString apiPort}, ${toString kubeletPort} } accept
+      ip saddr ${set (v4 podCIDRs)} ip daddr ${resolver} meta l4proto { tcp, udp } th dport 53 accept
+    '';
     networking.firewall.allowedTCPPorts = webPorts;
     networking.firewall.allowedUDPPorts = lib.optional (stun.port != null) stun.port;
 
@@ -1175,6 +1172,37 @@ in
         log-file=stdout
       '';
     };
+
+    # Just past kube-proxy's translation. A packet still bound for the Services' ranges here would take the default
+    # route out of the uplink: one for a Service kube-proxy hasn't put in yet or a port none has, and one for a Service
+    # without endpoints too, as kube-router accepts what a pod's policies allow ahead of kube-proxy's refusal. A packet
+    # conntrack finds invalid isn't translated either, even within a translated connection: it is dropped, as
+    # kube-proxy drops it, since a reset would end that connection.
+    networking.nftables.tables.services =
+      let
+        services = ''
+          ip daddr ${set (v4 serviceCIDRs)} jump refuse
+          ip6 daddr ${set (v6 serviceCIDRs)} jump refuse
+        '';
+      in
+      {
+        family = "inet";
+        content = ''
+          chain refuse {
+            ct state invalid drop
+            meta l4proto tcp reject with tcp reset
+            reject
+          }
+          chain prerouting {
+            type filter hook prerouting priority dstnat + 1; policy accept;
+            ${services}
+          }
+          chain output {
+            type filter hook output priority dstnat + 1; policy accept;
+            ${services}
+          }
+        '';
+      };
 
     # Ahead of kube-proxy's rules, while packets still carry the node's own address and port. Each STUN request is
     # counted, not a flow's first alone: each is answered, and a flood from one port is one flow.
