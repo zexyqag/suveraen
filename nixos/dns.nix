@@ -160,12 +160,14 @@ let
       }}
       ${render (records name zone)}'';
 
+  # cert-manager checks a challenge through the cluster's resolvers, which remember for the negative TTL that its
+  # record didn't exist yet: 5 seconds is less than cert-manager waits between checks.
   acmeZoneFile = pkgs.writeText "${cfg.acme.zone}.zone" ''
     $ORIGIN ${cfg.acme.zone}.
     $TTL 60
     ${soa {
       expire = cfg.expireDays * 86400;
-      negative = 60;
+      negative = 5;
     }}
     ${lib.concatMapStrings (ns: "@ NS ${ns}\n") cfg.signed.${cfg.acme.zone}.nameservers}'';
 

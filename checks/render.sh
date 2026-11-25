@@ -170,6 +170,24 @@ if not held:
     bad.append("vaultwarden/app")
 print(" ".join(bad))
 '
+# Prints what would have cert-manager check a challenge's record elsewhere than at the resolvers its pod's resolv.conf
+# names, from its release's values (JSON on stdin): at each of the zone's nameservers itself, or at resolvers of its
+# own, by a value, its config file, an argument or its pod's DNS settings.
+certmanagerdns='
+import json, sys
+values = json.load(sys.stdin) or {}
+held = {
+    "dns01RecursiveNameserversOnly": values.get("dns01RecursiveNameserversOnly") is True,
+    "dns01RecursiveNameservers": not values.get("dns01RecursiveNameservers"),
+    "podDnsPolicy": values.get("podDnsPolicy", "ClusterFirst") == "ClusterFirst",
+    "podDnsConfig.nameservers": not (values.get("podDnsConfig") or {}).get("nameservers"),
+}
+bad = [k for k, ok in held.items() if not ok]
+config = (values.get("config") or {}).get("acmeDNS01Config") or {}
+bad += ["config.acmeDNS01Config." + k for k in config if k.startswith("recursiveNameservers")]
+bad += [str(a) for a in values.get("extraArgs") or [] if "dns01-recursive-nameservers" in str(a)]
+print(" ".join(bad))
+'
 # Prints what the pods of an app's charts, all app-template's, and of its own Deployments (components/egress) need at
 # their most beyond its namespace's quota, from the rendered app (a JSON list on stdin): each controller's and
 # Deployment's pods, with the one more a rolling update starts, at their requests and limits, the LimitRange's
@@ -2128,6 +2146,15 @@ postgres s3://$t-postgres/ http://rook-ceph-rgw-objects.rook-ceph.svc bucket buc
   [ "$(yq ea "$traefik | .deployment.podAnnotations.\"suveraen/pseudonym\" // \"\"" "$rendered"/*.yaml)" = "$hash" ] \
     || fail "$cluster: the gateway's pods are annotated suveraen/pseudonym: \"$hash\", the sha256 of the plugin's" \
       ".traefik.yml and pseudonym.go, so a changed plugin restarts them"
+  # cert-manager checks a challenge's record at the resolvers its pod's resolv.conf names alone, which the cluster's
+  # DNS policy makes the cluster's DNS: at each of the zone's nameservers it would take port 53 to any address, and
+  # resolvers of its own, over HTTPS too, would hear of every name it gets a certificate for.
+  certmanager='[select(.kind == "HelmRelease" and .metadata.name == "cert-manager")]'
+  [ "$(yq ea "$certmanager | length" "$rendered"/*.yaml)" = 1 ] \
+    || fail "$cluster: certificates come from one HelmRelease, cert-manager"
+  bad=$(yq ea -o=json -I=0 "$certmanager | .[0].spec.values" "$rendered"/*.yaml | python3 -I -c "$certmanagerdns")
+  [ -z "$bad" ] || fail "$cluster: cert-manager checks a challenge through the cluster's DNS alone, never at the" \
+    "zone's nameservers itself nor at resolvers of its own: $bad"
   # The hostnames policy refuses every host without the map; where it is readable, its owners must match too.
   yq ea -e '[select(.kind == "ConfigMap" and .metadata.name == "hostnames" and .metadata.namespace == "flux-system")]
     | length == 1' "$rendered/cluster.yaml" >/dev/null \

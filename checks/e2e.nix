@@ -2,9 +2,9 @@
 # kubernetes/clusters/test from a signed commit on a git server inside the test, with two test ACME CAs and a nameserver
 # standing in for the internet's. Every Kustomization and HelmRelease becomes Ready, every Secret is stored encrypted
 # with secretbox, every pod outside kube-system runs images named by digest, no pod is refused and no job fails; both
-# CAs know our accounts, and every host's certificate comes
-# over DNS-01, its challenge answered in our ACME zone through the node's Knot and removed again, also where an
-# organisation's own DNS points the challenge there; the standby CA, which requires our external account, issues too;
+# CAs know our accounts, and every host's certificate comes over DNS-01, its challenge answered in our ACME zone, whose
+# misses resolvers keep 5 seconds, through the node's Knot and removed again, also where an organisation's own DNS
+# points the challenge there; the standby CA, which requires our external account, issues too;
 # every route answers through the host firewall, kube-proxy, the gateway and the app's network policy with a certificate
 # from the CA, and port 80 redirects there; the platform's pods run ahead of tenants', and Ceph's monitors, OSDs and CSI
 # node plugin at the node's priority, above every pod with a volume. Each tenant runs in exactly the
@@ -1341,6 +1341,9 @@ runTest {
                   "kdig @${server} AXFR ${acmeZone} > /tmp/acme.zone && grep -qw SOA /tmp/acme.zone && ! grep -qw TXT /tmp/acme.zone",
                   timeout=120,
               )
+              # Whose misses resolvers keep 5 seconds, less than cert-manager waits between checks.
+              minimum = server.succeed("awk '$4 == \"SOA\" { print $NF }' /tmp/acme.zone | sort -u").split()
+              assert minimum == ["5"], minimum
 
           with subtest("Every Secret, Flux's and the tenants' included, is stored encrypted with secretbox"):
               prefixes = server.succeed("secret-prefixes").split()

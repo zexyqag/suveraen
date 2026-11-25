@@ -25,6 +25,9 @@ spec:
       enabled: false
     # A certificate's key goes with it: removing a host leaves no key behind in the gateway namespace.
     enableCertificateOwnerRef: true
+    # A challenge's record is checked through the cluster's DNS: asking each of the zone's nameservers itself would take
+    # port 53 to any address.
+    dns01RecursiveNameserversOnly: true
     global:
       priorityClassName: platform
       leaderElection:

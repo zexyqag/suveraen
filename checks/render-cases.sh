@@ -369,6 +369,22 @@ refuses gateway-pseudonym-64 "and its period whole hours: GATEWAY_PSEUDONYM_V6" 
 refuses passthrough-label "only an app that terminates TLS itself holds a public certificate of its own" \
   "yq -i '.metadata.labels.\"suveraen/passthrough\" = \"true\"' components/app/namespace.yaml"
 
+# Certificates.
+CM=platform/cert-manager/app/helmrelease.yaml
+selfcheck="cert-manager checks a challenge through the cluster's DNS alone, never at the zone's nameservers itself nor at"
+selfcheck+=" resolvers of its own:"
+doh='https://dns.example/dns-query'
+refuses cert-manager-authoritative "$selfcheck dns01RecursiveNameserversOnly" \
+  "yq -i '.spec.values.dns01RecursiveNameserversOnly = false' $CM"
+refuses cert-manager-nameservers "$selfcheck dns01RecursiveNameservers" \
+  "yq -i '.spec.values.dns01RecursiveNameservers = \"$doh\"' $CM"
+refuses cert-manager-config-nameservers "$selfcheck config.acmeDNS01Config.recursiveNameservers" \
+  "yq -i '.spec.values.config.acmeDNS01Config.recursiveNameservers = [\"$doh\"]' $CM"
+refuses cert-manager-argument "$selfcheck --dns01-recursive-nameservers=$doh" \
+  "yq -i '.spec.values.extraArgs = [\"--dns01-recursive-nameservers=$doh\"]' $CM"
+refuses cert-manager-pod-dns "$selfcheck podDnsPolicy podDnsConfig.nameservers" \
+  "yq -i '.spec.values.podDnsPolicy = \"None\" | .spec.values.podDnsConfig.nameservers = [\"192.0.2.53\"]' $CM"
+
 # Hosts passed through to an app that terminates TLS itself.
 E=edge/passthrough
 alone="a host passed through has one listener, for TLS to idm.one.test alone"
