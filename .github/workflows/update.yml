@@ -13,6 +13,9 @@ on:
 permissions:
   contents: read
 
+# Only the checks' fetches job uses the Actions cache.
+cache-mode: none
+
 # Updates are new changes like any other: they go to the branch the watcher runs first, never to the release
 # branch.
 env:
@@ -79,6 +82,7 @@ jobs:
     needs: update
     if: needs.update.outputs.patch != ''
     uses: ./.github/workflows/checks.yml
+    cache-mode: write
     with:
       ref: ${{ needs.update.outputs.base }}
       changes: ${{ needs.update.outputs.patch }}

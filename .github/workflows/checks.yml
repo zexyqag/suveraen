@@ -10,9 +10,16 @@ on:
         description: The ID of the calling run's artifact holding changes.patch, which is applied to the commit before it's checked.
         type: string
         default: ""
+    outputs:
+      fetches:
+        description: The ID of this run's artifact holding, as a Nix binary cache, what the checks and apps fetch themselves.
+        value: ${{ jobs.fetches.outputs.artifact }}
 
 permissions:
   contents: read
+
+# Only the fetches job below restores or saves the Actions cache.
+cache-mode: none
 
 jobs:
   list:
@@ -44,9 +51,110 @@ jobs:
       - id: names
         run: echo "names=$(nix eval --json .#checks.x86_64-linux --apply builtins.attrNames)" >> "$GITHUB_OUTPUT"
 
+  # What the checks and apps would fetch from upstream themselves, as cache.nixos.org holds none of it: fetched once,
+  # then kept in the Actions cache from run to run, since every fetch is one more chance for upstream to fail a run.
+  # Restoring an entry can write any file this user can, so this job alone restores one, and it decides no check: the
+  # others take these paths from its artifact, and Nix takes such a path unsigned only when its bytes hash to the path
+  # the flake fixes. Never give this job secrets, or write access beyond the cache.
+  fetches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    cache-mode: write
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      # One ID alone: given several, the download puts each artifact under its own name, which may be "..".
+      - if: inputs.changes != ''
+        env:
+          ID: ${{ inputs.changes }}
+        run: '[[ $ID =~ ^[0-9]+$ ]]'
+      - if: inputs.changes != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ inputs.changes }}
+          path: ${{ runner.temp }}
+      - if: inputs.changes != ''
+        run: |
+          git apply --index "$RUNNER_TEMP/changes.patch"
+          if git status --porcelain --untracked-files=all | grep '^??'; then exit 1; fi
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+      # Every check and what every app runs; of what Nix would build for them rather than fetch, what has a fixed output.
+      - id: plan
+        run: |
+          set -o pipefail
+          t=$RUNNER_TEMP
+          nix eval --json .#checks.x86_64-linux --apply 'cs: map (c: c.drvPath) (builtins.attrValues cs)' > "$t/checks.json"
+          nix eval --json .#apps.x86_64-linux --apply \
+            'as: builtins.concatMap (a: builtins.attrNames (builtins.getContext a.program)) (builtins.attrValues as)' \
+            > "$t/apps.json"
+          jq -r '.[] | select(endswith(".drv")) + "^*"' "$t/checks.json" "$t/apps.json" > "$t/wanted"
+          xargs nix build --dry-run < "$t/wanted" 2> "$t/plan" >/dev/null || { cat "$t/plan" >&2; exit 1; }
+          sed -n 's|^  \(/nix/store/[^ ]*\.drv\)$|\1|p' "$t/plan" > "$t/built"
+          # The checks themselves are always built, so an empty plan means Nix printed it in another way.
+          test -s "$t/built"
+          xargs nix derivation show < "$t/built" |
+            jq -sr '.[].derivations | to_entries[] | select(.value.outputs | any(has("hash"))) | .key' |
+            sed 's|^|/nix/store/|' > "$t/fetches.drv"
+          xargs -r nix-store --query --outputs < "$t/fetches.drv" | sort -u | tee "$t/fetches.out"
+          echo "key=fetches-$(sha256sum < "$t/fetches.out" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - id: exact
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/fetches
+          key: ${{ steps.plan.outputs.key }}
+      # Another set's entry still holds what didn't change. A branch's own older entries come before the default
+      # branch's exact one, so they are asked only after it.
+      - if: steps.exact.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/fetches
+          key: ${{ steps.plan.outputs.key }}
+          restore-keys: fetches-
+      - if: steps.exact.outputs.cache-hit != 'true'
+        run: |
+          t=$RUNNER_TEMP
+          # Made by this user, as Nix's daemon opening it first would make it root's.
+          nix store info --store "file://$t/fetches"
+          sed 's/$/^*/' "$t/fetches.drv" |
+            xargs -r nix build -L --no-link --extra-substituters "file://$t/fetches?priority=50"
+          # Just this set, so the entry saved holds nothing else.
+          nix store info --store "file://$t/next?compression=zstd"
+          xargs -r nix copy --to "file://$t/next?compression=zstd" < "$t/fetches.out"
+          rm -rf "$t/fetches"
+          mv "$t/next" "$t/fetches"
+      # Every path of the set, with its content address and its NAR: the other jobs would fetch one that is missing, or
+      # that has no content address and so counts as unsigned, again themselves, with no more than a warning.
+      - run: |
+          cd "$RUNNER_TEMP/fetches"
+          while read -r p; do
+            n=$(basename "$p" | cut -d - -f 1).narinfo
+            if ! grep -q '^CA: ' "$n" || ! test -f "$(sed -n 's/^URL: //p' "$n")"; then
+              echo "$p is missing, or has no content address or NAR." >&2
+              exit 1
+            fi
+          done < "$RUNNER_TEMP/fetches.out"
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fetches
+          path: ${{ runner.temp }}/fetches
+          if-no-files-found: error
+          retention-days: 7
+          # Its NARs and tarballs are compressed already.
+          compression-level: 0
+      - if: steps.exact.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/fetches
+          key: ${{ steps.plan.outputs.key }}
+
   # One runner per check: VM tests sharing a runner's cores and disk slow each other past their timeouts.
   build:
-    needs: list
+    needs: [list, fetches]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -72,12 +180,22 @@ jobs:
         run: |
           git apply --index "$RUNNER_TEMP/changes.patch"
           if git status --porcelain --untracked-files=all | grep '^??'; then exit 1; fi
+      # One ID alone: given several, the download puts each artifact under its own name, which may be "..".
+      - env:
+          ID: ${{ needs.fetches.outputs.artifact }}
+        run: '[[ $ID =~ ^[0-9]+$ ]]'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.fetches.outputs.artifact }}
+          path: ${{ runner.temp }}/fetches
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       # The unlock check's disk image is made by systemd-repart under unshare --map-root-user, which Ubuntu's
       # AppArmor refuses to an unprivileged process unless this is off.
       - run: |
           sysctl kernel.apparmor_restrict_unprivileged_userns
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Nix asks the fetches job's artifact after cache.nixos.org, and takes a path from it unsigned only when its bytes
+      # hash to the path asked for.
       - env:
           CHECK: ${{ matrix.name }}
-        run: nix build -L --no-link ".#checks.x86_64-linux.$CHECK"
+        run: nix build -L --no-link --extra-substituters "file://$RUNNER_TEMP/fetches?priority=50" ".#checks.x86_64-linux.$CHECK"

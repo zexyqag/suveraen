@@ -8,12 +8,16 @@ on:
 permissions:
   contents: read
 
+# Only the checks' fetches job uses the Actions cache.
+cache-mode: none
+
 env:
   RELEASE_BRANCH: main
 
 jobs:
   check:
     uses: ./.github/workflows/checks.yml
+    cache-mode: write
 
   # Each vendored chart whose record, tree or key changed since this branch left the release branch comes again from its
   # upstream pin, its signer checked, and must give the same tree. That takes the internet, and upstream's bytes: never
@@ -51,6 +55,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # One ID alone: given several, the download puts each artifact under its own name, which may be "..".
+      - env:
+          ID: ${{ needs.check.outputs.fetches }}
+        run: '[[ $ID =~ ^[0-9]+$ ]]'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.check.outputs.fetches }}
+          path: ${{ runner.temp }}/fetches
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
       # The test driver runs as the runner's user, which can't open /dev/kvm by default.
       - run: |
@@ -58,5 +70,6 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       # The test driver keeps the VMs' disks in XDG_RUNTIME_DIR when it's set, a tmpfs of a tenth of the runner's
-      # memory; without it they go to TMPDIR on the runner's disk.
-      - run: env -u XDG_RUNTIME_DIR nix run -L .#e2e
+      # memory; without it they go to TMPDIR on the runner's disk. Nix asks the checks' fetches artifact after
+      # cache.nixos.org, and takes a path from it unsigned only when its bytes hash to the path asked for.
+      - run: env -u XDG_RUNTIME_DIR nix run -L --extra-substituters "file://$RUNNER_TEMP/fetches?priority=50" .#e2e
