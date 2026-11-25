@@ -36,3 +36,9 @@ spec:
     # Here: the operator takes no strategy from the defaults for a Driver with a controllerPlugin of its own.
     deploymentStrategy:
       type: Recreate
+    # One snapshot call at a time, up to the sidecar's timeout: both providers' copies snapshot the same image, and
+    # librbd 20.2 can assert on two snapshot calls of one image in one process, which hangs cephcsi as PID 1
+    # (ceph-csi#6676).
+    containerExtraArgs:
+      csi-snapshotter:
+        - --worker-threads=1

@@ -1099,6 +1099,16 @@ runTest {
       def diagnose_ceph():
           operator = "kubectl -n rook-ceph logs deploy/rook-ceph-operator --tail=-1"
           errors = "grep -E ' (E|W) \\| |op-osd|failed to provision|exec timeout' | tail -n 200"
+          plugin = "kubectl -n rook-ceph logs deploy/rook-ceph.rbd.csi.ceph.com-ctrlplugin"
+          # Namespace and claim of each snapshot not ready.
+          unready = (
+              "kubectl get volumesnapshots -A -o json | ${pkgs.jq}/bin/jq -r '.items[] | select(.status.readyToUse != true)"
+              " | \"\\(.metadata.namespace) \\(.spec.source.persistentVolumeClaimName // empty)\"'"
+          )
+          rbd_cli = (
+              "kubectl -n rook-ceph exec deploy/rook-ceph-operator -- timeout 30 rbd"
+              " --conf=/var/lib/rook/rook-ceph/rook-ceph.config"
+          )
           for cmd in [
               "kubectl get cephclusters,cephblockpools,cephobjectstores -A -o wide",
               "kubectl -n rook-ceph get cephcluster rook-ceph -o jsonpath='{.status.ceph}{\"\\n\"}{.status.conditions}'",
@@ -1136,8 +1146,20 @@ runTest {
               "for log in /var/log/pods/rook-ceph_rook-ceph-osd-[0-9]*/activate/*.log; do"
               " echo \"==> $log\"; tail -n 100 $log; done",
               "kubectl get volumeattachments -o wide",
-              "kubectl -n rook-ceph logs deploy/rook-ceph.rbd.csi.ceph.com-ctrlplugin --all-containers --prefix --tail=50",
-              "kubectl -n rook-ceph logs deploy/rook-ceph.rbd.csi.ceph.com-ctrlplugin --all-containers --prefix --previous --tail=50",
+              f"{plugin} --all-containers --prefix --timestamps --tail=50",
+              # Each container's last run on its own: with --all-containers, one that never restarted ends the list.
+              "for c in $(kubectl -n rook-ceph get deploy rook-ceph.rbd.csi.ceph.com-ctrlplugin"
+              " -o jsonpath='{.spec.template.spec.containers[*].name}'); do"
+              f" {plugin} -c $c --prefix --timestamps --previous --tail=50; done",
+              # An assert names its function in lines a tail can cut.
+              f"for run in --tail=-1 --previous; do {plugin} -c csi-rbdplugin --timestamps $run"
+              " | grep -B 3 -A 30 -E 'ceph_assert|In function'; done",
+              # The image of each snapshot not ready: its watchers, locks, snapshots and clones.
+              f"{unready} | sort -u | while read -r ns claim; do"
+              " image=$(kubectl get pv \"$(kubectl -n $ns get pvc $claim -o jsonpath='{.spec.volumeName}')\""
+              " -o jsonpath='{.spec.csi.volumeAttributes.pool}/{.spec.csi.volumeAttributes.imageName}');"
+              " echo \"== $ns/$claim: $image\"; for verb in status 'lock ls' 'snap ls --all' 'children --all --descendants';"
+              f" do {rbd_cli} $verb $image; done; done",
               "lsblk -o NAME,KNAME,TYPE,SIZE,ROTA,PARTLABEL,PARTUUID,FSTYPE,MOUNTPOINTS",
               "ls -l /dev/disk/by-osd/",
               "for link in /dev/disk/by-osd/*; do echo $link; udevadm info --query=property $(readlink -f $link)"
@@ -4015,6 +4037,12 @@ runTest {
                   server.succeed(f"kubectl -n {namespace} delete pod reader && kubectl -n {namespace} delete pvc restored")
                   return out
 
+              # Both of an app's copies snapshot its one image at once, which the plugin's snapshotter takes in turn.
+              [snapshotter] = [
+                  c for c in parsed("kubectl -n rook-ceph get deploy rook-ceph.rbd.csi.ceph.com-ctrlplugin -o json")
+                  ["spec"]["template"]["spec"]["containers"] if c["name"] == "csi-snapshotter"
+              ]
+              assert "--worker-threads=1" in snapshotter["args"], snapshotter["args"]
               copy_volumes("first")
               for n in providers:
                   for app, secret in [("hello", "kept"), ("kanidm", "e2eops"), ("vaultwarden", vw_words["note"])]:
