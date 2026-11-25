@@ -33,6 +33,8 @@
 # of their registry, and the rules on the server's metrics find those pulls failing.
 # What a pod or the host sends to the Services' ranges that kube-proxy doesn't translate is refused at once and goes
 # nowhere.
+# A pod's echo requests reach the node and other pods, and one to the watcher is refused at once and goes nowhere, as is
+# a neighbour solicitation sent it from a pod, while the host still pings the watcher.
 # Flux's namespace holds the server's network policies alone, under which its pods reach the cluster's DNS and, of
 # the host, the API server alone; so does k3s's, under which CoreDNS reaches the API server and the node's resolver,
 # and its other pods nothing. No network policy takes an egress rule that names no peer, in any namespace.
@@ -388,6 +390,42 @@ pkgs.testers.runNixOSTest {
             }
           }
         '';
+      # The node's refusals as administratively prohibited, which only the cluster's table for echo requests sends, and
+      # each echo request and neighbour solicitation it forwards to the watcher.
+      echoes =
+        let
+          inherit (nodes.watcher.networking) primaryIPAddress primaryIPv6Address;
+        in
+        pkgs.writeText "echoes.nft" ''
+          table inet echoes {
+            counter refused4 {}
+            counter refused6 {}
+            counter forwarded4 {}
+            counter forwarded6 {}
+            counter solicited6 {}
+            chain output {
+              type filter hook output priority filter - 10; policy accept;
+              icmp type destination-unreachable icmp code admin-prohibited counter name refused4
+              icmpv6 type destination-unreachable icmpv6 code admin-prohibited counter name refused6
+            }
+            chain forward {
+              type filter hook forward priority filter - 10; policy accept;
+              ip daddr ${primaryIPAddress} icmp type echo-request counter name forwarded4
+              ip6 daddr ${primaryIPv6Address} icmpv6 type echo-request counter name forwarded6
+              ip6 daddr ${primaryIPv6Address} icmpv6 type nd-neighbor-solicit counter name solicited6
+            }
+          }
+        '';
+      # A neighbour solicitation for an address, sent to it, which busybox can't make.
+      solicit = pkgs.writers.writePython3 "solicit" { flakeIgnore = [ "E501" ]; } ''
+        import socket
+        import sys
+
+        address = sys.argv[1]
+        icmp = socket.socket(socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_ICMPV6)
+        # Its type, its code, the checksum the kernel fills in, four reserved bytes, and the address asked after.
+        icmp.sendto(bytes([135, 0, 0, 0, 0, 0, 0, 0]) + socket.inet_pton(socket.AF_INET6, address), (address, 0))
+      '';
     in
     ''
       import ipaddress
@@ -911,6 +949,54 @@ pkgs.testers.runNixOSTest {
           counted = re.findall(r"packets ([0-9]+)", server.succeed("nft list table inet unrouted"))
           assert counted == ["0"] * 4, counted
           server.succeed("nft delete table inet unrouted && kubectl -n probe delete pod/unrouted service/unserved")
+
+      with subtest("A pod's echo requests reach the node and other pods, and one to the watcher is refused at once and goes nowhere, as is a neighbour solicitation sent it from a pod, while the host still pings the watcher"):
+          # Root, with the runtime's default capabilities: busybox pings from a raw socket alone. A tenant's pod pings
+          # without them, through the ping sockets containerd opens to every pod's users.
+          for name in ["pinger", "pinged"]:
+              server.succeed(
+                  f"kubectl -n probe run {name} --image={busybox} --image-pull-policy=Never --restart=Never --command --"
+                  " sh -c 'trap exit TERM; sleep 3600 & wait'"
+              )
+          server.succeed("kubectl -n probe wait pod pinger pinged --for=condition=Ready --timeout=120s")
+          pinged = server.succeed("kubectl -n probe get pod pinged -o jsonpath='{.status.podIPs[*].ip}'").split()
+          assert len(pinged) == 2, pinged
+
+          def pings(addresses, wait):
+              return server.succeed(
+                  f"kubectl -n probe exec pinger -- sh -c 'for address in {' '.join(addresses)}; do"
+                  f" ping -c 1 -W {wait} $address >/dev/null && echo reached $address || echo missed $address; done'"
+              ).splitlines()
+
+          server.succeed("nft -f ${echoes}")
+          # The node's own addresses, the resolver's among them, and the other pod's.
+          reached = [
+              *${builtins.toJSON nodes.server.suveraen.cluster.nodeIP},
+              "${nodes.server.suveraen.cluster.nodeServices.resolver}",
+              *pinged,
+          ]
+          said = pings(reached, 5)
+          assert said == [f"reached {address}" for address in reached], said
+          # kube-router lets a neighbour solicitation through as well, which a pod that may send raw packets can
+          # address anywhere: one for the watcher, sent from the pinger's network.
+          server.succeed(
+              "nsenter -n -t $(k3s crictl inspect -o go-template --template '{{.info.pid}}'"
+              " $(k3s crictl ps -q --name '^pinger$' --label io.kubernetes.pod.namespace=probe))"
+              " ${solicit} ${nodes.watcher.networking.primaryIPv6Address}"
+          )
+          # busybox takes no error for an answer, so it waits out its time.
+          watcher_addresses = [
+              "${nodes.watcher.networking.primaryIPAddress}",
+              "${nodes.watcher.networking.primaryIPv6Address}",
+          ]
+          said = pings(watcher_addresses, 1)
+          assert said == [f"missed {address}" for address in watcher_addresses], said
+          counters = server.succeed("nft list counters table inet echoes")
+          counted = dict(re.findall(r"counter (\S+) \{\s*packets ([0-9]+)", counters))
+          assert counted == {"refused4": "1", "refused6": "2", "forwarded4": "0", "forwarded6": "0", "solicited6": "0"}, counters
+          for address in watcher_addresses:
+              server.succeed(f"ping -c 1 -W 5 {address}")
+          server.succeed("nft delete table inet echoes && kubectl -n probe delete pod pinger pinged")
 
       # The policies a namespace holds, by name, once k3s, which applies its manifests one by one, has put in those it
       # should.

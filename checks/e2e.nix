@@ -605,8 +605,10 @@ runTest {
     let
       # Each flow a pod tries out of the uplink, before any policy or firewall refuses it, and each it sends there,
       # before the masquerade takes its address: once, by its addresses, protocol and port, or for neither TCP nor UDP
-      # its protocol alone. A flow is kept as long as the run can last, so the time it has left says when it was first
-      # seen. The uplink carries IPv4 alone here: an attempt over IPv6 shows only by its name.
+      # its protocol alone. What the server refuses as it comes in never gets here: echo requests out of the cluster,
+      # and what kube-proxy leaves bound for the Services' ranges. A flow is kept as long as the run can last, so the
+      # time it has left says when it was first seen. The uplink carries IPv4 alone here: an attempt over IPv6 shows
+      # only by its name.
       podUplink =
         let
           ports = "ip saddr . ip daddr . meta l4proto . th dport";

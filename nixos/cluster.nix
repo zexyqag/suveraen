@@ -1236,6 +1236,22 @@ in
         '';
       };
 
+    # kube-router accepts, whatever a pod's network policies say, every echo request it sends, which containerd lets
+    # any pod's users send, and every neighbour solicitation and advertisement, which conntrack leaves untracked and a
+    # pod that may send raw packets can address anywhere. Those for other pods, the node's own addresses and the link
+    # go on, and those for the Services' ranges to the table above; the rest are refused at once, as policies refuse,
+    # another server's addresses among them, as a server knows only its own.
+    networking.nftables.tables.echo = {
+      family = "inet";
+      content = ''
+        chain prerouting {
+          type filter hook prerouting priority filter; policy accept;
+          ip saddr ${set (v4 podCIDRs)} icmp type echo-request ip daddr != ${set (v4 (podCIDRs ++ serviceCIDRs))} fib daddr type != local reject with icmpx admin-prohibited
+          ip6 saddr ${set (v6 podCIDRs)} icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert } ip6 daddr != ${set (v6 (podCIDRs ++ serviceCIDRs) ++ [ "fe80::/10" "ff00::/8" ])} fib daddr type != local reject with icmpx admin-prohibited
+        }
+      '';
+    };
+
     # Ahead of kube-proxy's rules, while packets still carry the node's own address and port. Each STUN request is
     # counted, not a flow's first alone: each is answered, and a flood from one port is one flow.
     networking.nftables.tables.edge = {
