@@ -24,8 +24,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       base: ${{ steps.changes.outputs.base }}
-      changed: ${{ steps.changes.outputs.changed }}
       message: ${{ steps.changes.outputs.message }}
+      # The checks and the push take the patch by this ID, which names its bytes alone: any job of the run could put
+      # other bytes under its name.
+      patch: ${{ steps.patch.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,7 +66,8 @@ jobs:
           if [ -s "$RUNNER_TEMP/changes.patch" ]; then
             echo changed=true >> "$GITHUB_OUTPUT"
           fi
-      - if: steps.changes.outputs.changed == 'true'
+      - id: patch
+        if: steps.changes.outputs.changed == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: changes
@@ -74,15 +77,15 @@ jobs:
 
   check:
     needs: update
-    if: needs.update.outputs.changed == 'true'
+    if: needs.update.outputs.patch != ''
     uses: ./.github/workflows/checks.yml
     with:
       ref: ${{ needs.update.outputs.base }}
-      changes: true
+      changes: ${{ needs.update.outputs.patch }}
 
   push:
     needs: [update, check]
-    if: needs.update.outputs.changed == 'true'
+    if: needs.update.outputs.patch != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -91,9 +94,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.BRANCH }}
+      # One ID alone: given several, the download puts each artifact under its own name, which may be "..".
+      - env:
+          ID: ${{ needs.update.outputs.patch }}
+        run: '[[ $ID =~ ^[0-9]+$ ]]'
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: changes
+          artifact-ids: ${{ needs.update.outputs.patch }}
           path: ${{ runner.temp }}
       - env:
           BASE: ${{ needs.update.outputs.base }}

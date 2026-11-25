@@ -7,9 +7,9 @@ on:
         type: string
         default: ""
       changes:
-        description: Check the commit with the patch in the calling run's artifact "changes" applied.
-        type: boolean
-        default: false
+        description: The ID of the calling run's artifact holding changes.patch, which is applied to the commit before it's checked.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -24,13 +24,18 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
-      - if: inputs.changes
+      # One ID alone: given several, the download puts each artifact under its own name, which may be "..".
+      - if: inputs.changes != ''
+        env:
+          ID: ${{ inputs.changes }}
+        run: '[[ $ID =~ ^[0-9]+$ ]]'
+      - if: inputs.changes != ''
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: changes
+          artifact-ids: ${{ inputs.changes }}
           path: ${{ runner.temp }}
       # A flake holds only the files git tracks.
-      - if: inputs.changes
+      - if: inputs.changes != ''
         run: |
           git apply --index "$RUNNER_TEMP/changes.patch"
           if git status --porcelain --untracked-files=all | grep '^??'; then exit 1; fi
@@ -52,13 +57,18 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
-      - if: inputs.changes
+      # One ID alone: given several, the download puts each artifact under its own name, which may be "..".
+      - if: inputs.changes != ''
+        env:
+          ID: ${{ inputs.changes }}
+        run: '[[ $ID =~ ^[0-9]+$ ]]'
+      - if: inputs.changes != ''
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: changes
+          artifact-ids: ${{ inputs.changes }}
           path: ${{ runner.temp }}
       # A flake holds only the files git tracks.
-      - if: inputs.changes
+      - if: inputs.changes != ''
         run: |
           git apply --index "$RUNNER_TEMP/changes.patch"
           if git status --porcelain --untracked-files=all | grep '^??'; then exit 1; fi
