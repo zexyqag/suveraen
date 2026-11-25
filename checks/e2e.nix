@@ -1540,6 +1540,18 @@ runTest {
                       continue
                   assert p["spec"].get("priorityClassName") == want, (p["metadata"]["name"], ns, p["spec"].get("priorityClassName"))
 
+          with subtest("CloudNativePG's operator holds the one lease in its namespace, for 45 s, and the Barman plugin none"):
+              # An operator that stops cleanly leaves its lease at 1 s until the next one takes it.
+              def leased(last):
+                  durations = [
+                      lease["spec"].get("leaseDurationSeconds")
+                      for lease in parsed("kubectl -n cloudnative-pg get leases -o json")["items"]
+                  ]
+                  assert not last or durations == [45], durations
+                  return durations == [45]
+
+              retry(leased, timeout_seconds=120)
+
           with subtest("The cluster's own ranges in its settings, which the way to the internet leaves out, hold its pods, Services and nodes"):
               def within(address, kind):
                   address = ipaddress.ip_address(address)

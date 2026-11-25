@@ -23,6 +23,10 @@ spec:
     # Only the platform makes databases: the built-in admin and edit roles get no CloudNativePG rights.
     rbac:
       aggregateClusterRoles: false
+    # In seconds: losing its lease stops the operator, so the lease outlasts the API's stalls on a busy server.
+    additionalArgs:
+      - --leader-lease-duration=45
+      - --leader-renew-deadline=30
     resources:
       requests:
         cpu: 50m
@@ -51,6 +55,10 @@ spec:
     crds: CreateReplace
   values:
     priorityClassName: platform
+    # One copy runs, so it needs no leader, whose lease lost while the API stalls would stop it. This follows the
+    # chart's --leader-elect, and the last one counts.
+    additionalArgs:
+      - --leader-elect=false
     resources:
       requests:
         cpu: 20m
