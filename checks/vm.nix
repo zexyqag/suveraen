@@ -351,7 +351,7 @@ pkgs.testers.runNixOSTest {
         in
         [
           "open ${node} 6443"
-          "open ${node} 10250"
+          "closed ${node} 10250"
           "open ${node} 22"
           # etcd answers on the node's address, but only to the API server.
           "closed ${node} 2379"
@@ -640,7 +640,6 @@ pkgs.testers.runNixOSTest {
               (["apps"], ["deployments", "statefulsets"], [], every),
               (["apps"], ["replicasets", "controllerrevisions"], [], ["get", "list", "watch"]),
               (["batch"], ["jobs", "cronjobs"], [], every),
-              (["autoscaling"], ["horizontalpodautoscalers"], [], every),
               (["policy"], ["poddisruptionbudgets"], [], every),
               (["coordination.k8s.io"], ["leases"], [], every),
               (["rbac.authorization.k8s.io"], ["roles", "rolebindings"], [], every),
@@ -852,7 +851,10 @@ pkgs.testers.runNixOSTest {
           )
           server.succeed("kubectl -n probe logs dns-probe-host | grep -F 192.0.2.53")
 
-      with subtest("On the host, pods reach the API server, the kubelet, the resolver and what is open to every source, SSH among it"):
+      with subtest("On the host, pods reach the API server, the resolver and what is open to every source, SSH among it"):
+          # k3s runs no metrics server, the one pod that would read the kubelet.
+          apis = server.succeed("kubectl get apiservices -o name").split()
+          assert not [api for api in apis if "metrics.k8s.io" in api], apis
           host_ports = ${builtins.toJSON hostPorts}
           probes = " ".join(",".join(line.split()[1:]) for line in host_ports)
           server.succeed(
@@ -946,8 +948,9 @@ pkgs.testers.runNixOSTest {
 
               return check
 
+          # The host opens both to pods, SSH as it does to every source, so only the namespace's policies refuse them.
           server_ip = "${nodes.server.networking.primaryIPAddress}"
-          for target in [f"{server_ip} 10250", "${nodes.server.suveraen.cluster.nodeServices.resolver} 53"]:
+          for target in [f"{server_ip} 22", "${nodes.server.suveraen.cluster.nodeServices.resolver} 53"]:
               retry(kept_out(target), timeout_seconds=120)
           status, out = try_port(f"{server_ip} 6443")
           assert status == 0, (status, out)

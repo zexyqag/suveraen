@@ -629,9 +629,12 @@ in
       clusterInit = true;
       nodeIP = lib.concatStringsSep "," cfg.nodeIP;
       # Ingress is managed through Flux like everything else, and volumes come from Ceph, which keeps three copies.
+      # The metrics server is the one pod that reads the kubelet, and nothing reads what it serves, no autoscaler and
+      # no `kubectl top`; the server's own metrics read the kubelet on loopback.
       disable = [
         "traefik"
         "local-storage"
+        "metrics-server"
       ];
       extraFlags = [
         # These must match on every server and can't change once the cluster exists.
@@ -1149,11 +1152,11 @@ in
     ];
     environment.variables.KUBECONFIG = "/etc/rancher/k3s/k3s.yaml";
 
-    # Pods may reach the API server, the kubelet and the node's resolver on the host, and on the DNS signer its Knot
-    # (dns.nix); nothing else there.
+    # Pods may reach the API server and the node's resolver on the host, and on the DNS signer its Knot (dns.nix);
+    # nothing else there but what is open to every source.
     networking.firewall.extraInputRules = ''
-      ip saddr ${set (v4 podCIDRs)} tcp dport { ${toString apiPort}, ${toString kubeletPort} } accept
-      ip6 saddr ${set (v6 podCIDRs)} tcp dport { ${toString apiPort}, ${toString kubeletPort} } accept
+      ip saddr ${set (v4 podCIDRs)} tcp dport ${toString apiPort} accept
+      ip6 saddr ${set (v6 podCIDRs)} tcp dport ${toString apiPort} accept
       ip saddr ${set (v4 podCIDRs)} ip daddr ${resolver} meta l4proto { tcp, udp } th dport 53 accept
     '';
     networking.firewall.allowedTCPPorts = webPorts;
